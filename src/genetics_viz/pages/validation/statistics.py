@@ -26,11 +26,16 @@ def validation_statistics_page() -> None:
 
             # Load validation data
             validations_data = []
+            ignored_count = 0
             if validation_file.exists():
                 with open(validation_file, "r") as f:
                     reader = csv.DictReader(f, delimiter="\t")
                     for row in reader:
-                        validations_data.append(row)
+                        # Separate ignored validations
+                        if row.get("Ignore", "0") == "1":
+                            ignored_count += 1
+                        else:
+                            validations_data.append(row)
 
             if not validations_data:
                 ui.label("No validation data available").classes(
@@ -78,6 +83,14 @@ def validation_statistics_page() -> None:
                                 "text-3xl font-bold text-orange-700"
                             )
 
+                        # Show ignored count if any
+                        if ignored_count > 0:
+                            with ui.column().classes("gap-1"):
+                                ui.label("Ignored").classes("text-sm text-gray-600")
+                                ui.label(str(ignored_count)).classes(
+                                    "text-3xl font-bold text-gray-400"
+                                )
+
                 # Charts in a grid
                 with ui.row().classes("w-full gap-4 flex-wrap"):
                     # Validation Status Chart
@@ -102,8 +115,10 @@ def validation_statistics_page() -> None:
                                                 "itemStyle": {
                                                     "color": {
                                                         "present": "#22c55e",
+                                                        "in phase MNV": "#16a34a",
                                                         "absent": "#ef4444",
                                                         "uncertain": "#f59e0b",
+                                                        "different": "#fb923c",
                                                         "conflicting": "#fbbf24",
                                                     }.get(status, "#6b7280")
                                                 },

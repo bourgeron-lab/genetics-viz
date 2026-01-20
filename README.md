@@ -16,10 +16,14 @@ A web-based visualization tool for genetics cohort data, providing interactive a
 
 ### Validation Features
 
-- Save validation status (present/absent/uncertain/different)
-- Track inheritance patterns (de novo/paternal/maternal/either)
-- View validation history with timestamps
+- Save validation status (present/absent/uncertain/different/in phase MNV)
+- Track inheritance patterns (de novo/paternal/maternal/not paternal/not maternal/either/homozygous)
+- Add optional comments to validations
+- Mark validations as ignored (excluded from statistics and conflict detection)
+- View validation history with timestamps and ignore status
+- Interactive validation guide accessible via info button
 - Filter variants by validation status
+- Automatic conflict detection (ignoring validations marked as ignored)
 - Export validation data
 
 ## Installation
@@ -274,12 +278,20 @@ Then access via: `http://YOUR_MACHINE_IP:8000`
 1. Navigate to a variant table (DNM or WOMBAT tabs, or Validation pages)
 2. Click "View in IGV" button for a variant
 3. In the dialog:
-   - Review variant details
+   - Review variant details with collapsible sections
    - Add additional samples (parents, siblings, or by barcode)
    - Examine CRAM tracks in IGV viewer
-   - Set validation status and inheritance pattern
+   - Click the info button (ℹ️) to view validation guidelines
+   - Set validation status (default: present) and inheritance pattern
+   - Add an optional comment
    - Click "Save Validation"
 4. The validation is saved to `validations/snvs.tsv`
+5. View validation history below the form
+   - Toggle the "Ignore" switch to exclude validations from statistics
+   - Ignored validations appear with reduced opacity
+6. Validation/all page aggregates multiple validations per variant/sample
+   - Shows unique list of users who validated each variant
+   - Computes final status from non-ignored validations
 
 ### WAVES Validation
 
@@ -321,10 +333,36 @@ uv run genetics-viz --reload /path/to/data
 
 ### SNV Validations (`validations/snvs.tsv`)
 
+**Version 0.2.0+ format:**
+
 ```
-FID Variant Sample User Inheritance Validation Timestamp
-FAM001 chr1:12345:A:T SAMPLE001 username de novo present 2026-01-18T10:30:00
+FID Variant Sample User Inheritance Validation Comment Ignore Timestamp
+FAM001 chr1:12345:A:T SAMPLE001 username de novo present Initial validation 0 2026-01-18T10:30:00
+FAM001 chr1:12345:A:T SAMPLE001 reviewer homozygous present Confirmed 0 2026-01-19T14:20:00
+FAM002 chr2:67890:G:C SAMPLE002 username unknown uncertain Low coverage 1 2026-01-18T11:00:00
 ```
+
+**Columns:**
+
+- **FID**: Family ID
+- **Variant**: chr:pos:ref:alt format
+- **Sample**: Sample ID
+- **User**: Username who performed validation
+- **Inheritance**: de novo, paternal, maternal, not paternal, not maternal, either, homozygous, or unknown
+- **Validation**: present, absent, uncertain, different, or "in phase MNV"
+- **Comment**: Optional free-text comment
+- **Ignore**: 0 (included) or 1 (excluded from statistics and conflict detection)
+- **Timestamp**: ISO format timestamp
+
+**Migration from v0.1.1:**
+
+If upgrading from v0.1.1, use the provided migration script:
+
+```bash
+./utils/snvs_validations_migration_0.1.1_to_0.2.0.sh /path/to/data/validations/snvs.tsv
+```
+
+This adds the `Comment` and `Ignore` columns with default values.
 
 ### WAVES Validations (`validations/waves.tsv`)
 
@@ -356,6 +394,8 @@ cohort1 FAM001 SAMPLE001 username present 2026-01-18T10:30:00
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+For detailed changes between versions, see [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

@@ -5,11 +5,88 @@ import fcntl
 import getpass
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store
+
+# Path to the validation guide markdown file
+VALIDATION_GUIDE_PATH = (
+    Path(__file__).parent.parent.parent.parent
+    / "documentation"
+    / "snvs_validation_guide.md"
+)
+
+
+def _load_validation_guide() -> str:
+    """Load the validation guide markdown content."""
+    if VALIDATION_GUIDE_PATH.exists():
+        return VALIDATION_GUIDE_PATH.read_text()
+    return "Validation guide not found."
+
+
+def _update_ignore_status(
+    validation_file: Path,
+    family_id: str,
+    variant_key: str,
+    sample: str,
+    timestamp: str,
+    ignore_value: str,
+) -> bool:
+    """Update the Ignore status for a specific validation row.
+
+    Args:
+        validation_file: Path to the snvs.tsv file
+        family_id: Family ID to match
+        variant_key: Variant key to match
+        sample: Sample ID to match
+        timestamp: Timestamp to match (unique identifier)
+        ignore_value: New ignore value ("0" or "1")
+
+    Returns:
+        True if update was successful, False otherwise
+    """
+    if not validation_file.exists():
+        return False
+
+    # Read all rows
+    rows = []
+    fieldnames = []
+    with open(validation_file, "r") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        fieldnames = reader.fieldnames or []
+        for row in reader:
+            rows.append(row)
+
+    # Find and update the matching row
+    updated = False
+    for row in rows:
+        if (
+            row.get("FID") == family_id
+            and row.get("Variant") == variant_key
+            and row.get("Sample") == sample
+            and row.get("Timestamp") == timestamp
+        ):
+            row["Ignore"] = ignore_value
+            updated = True
+            break
+
+    if not updated:
+        return False
+
+    # Write back with file locking
+    with open(validation_file, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+            writer.writeheader()
+            writer.writerows(rows)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    return True
 
 
 def show_variant_dialog(
@@ -404,7 +481,29 @@ def show_variant_dialog(
             validation_file = store.data_dir / "validations" / "snvs.tsv"
 
             # Validation form - positioned first
-            ui.label("Variant Validation").classes("text-xl font-semibold mb-2 mt-4")
+            with ui.row().classes("items-center gap-2 mt-4 mb-2"):
+                ui.label("Variant Validation").classes("text-xl font-semibold")
+
+                # Info button for validation guide
+                def show_validation_guide():
+                    with (
+                        ui.dialog() as guide_dialog,
+                        ui.card().classes("w-full max-w-3xl"),
+                    ):
+                        with ui.row().classes(
+                            "items-center justify-between w-full mb-4"
+                        ):
+                            ui.label("Validation Guide").classes("text-xl font-bold")
+                            ui.button(
+                                icon="close", on_click=lambda: guide_dialog.close()
+                            ).props("flat round")
+                        with ui.scroll_area().classes("w-full h-96"):
+                            ui.markdown(_load_validation_guide())
+                    guide_dialog.open()
+
+                ui.button(icon="info", on_click=show_validation_guide).props(
+                    "flat round color=blue"
+                ).tooltip("Validation instructions")
 
             with ui.card().classes("w-full p-4 mb-4"):
                 with ui.column().classes("gap-4"):
@@ -425,7 +524,10 @@ def show_variant_dialog(
                                     "de novo",
                                     "paternal",
                                     "maternal",
+                                    "not paternal",
+                                    "not maternal",
                                     "either",
+                                    "homozygous",
                                 ],
                                 value="unknown",
                             )
@@ -436,24 +538,41 @@ def show_variant_dialog(
                         ui.label("Validation:").classes("font-semibold ml-4")
                         validation_select = (
                             ui.select(
-                                ["uncertain", "present", "absent", "different"],
-                                value="uncertain",
+                                [
+                                    "present",
+                                    "absent",
+                                    "uncertain",
+                                    "different",
+                                    "in phase MNV",
+                                ],
+                                value="present",
                             )
                             .props("outlined dense")
                             .classes("w-40")
+                        )
+
+                    with ui.row().classes("items-center gap-4 w-full"):
+                        ui.label("Comment:").classes("font-semibold")
+                        comment_input = (
+                            ui.input("Optional comment")
+                            .props("outlined dense")
+                            .classes("flex-grow")
                         )
 
                         ui.button(
                             "Save Validation",
                             icon="save",
                             on_click=lambda: save_validation(),
-                        ).props("color=blue").classes("ml-4")
+                        ).props("color=blue")
 
                     def save_validation():
                         """Save a validation."""
                         user = user_input.value.strip()
                         validation_status = validation_select.value
                         inheritance = inheritance_select.value or ""
+                        comment = (
+                            comment_input.value.strip() if comment_input.value else ""
+                        )
 
                         if not user:
                             ui.notify("Please enter a username", type="warning")
@@ -475,10 +594,10 @@ def show_variant_dialog(
                                     # Only write header if file is new
                                     if not file_exists:
                                         f.write(
-                                            "FID\tVariant\tSample\tUser\tInheritance\tValidation\tTimestamp\n"
+                                            "FID\tVariant\tSample\tUser\tInheritance\tValidation\tComment\tIgnore\tTimestamp\n"
                                         )
                                     f.write(
-                                        f"{family_id}\t{variant_key}\t{sample}\t{user}\t{inheritance}\t{validation_status}\t{timestamp}\n"
+                                        f"{family_id}\t{variant_key}\t{sample}\t{user}\t{inheritance}\t{validation_status}\t{comment}\t0\t{timestamp}\n"
                                     )
                                 finally:
                                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -530,12 +649,14 @@ def show_variant_dialog(
                         )
                     else:
                         with ui.card().classes("w-full p-2"):
-                            with ui.column().classes("gap-1"):
+                            with ui.column().classes("gap-2"):
                                 for validation in validations:
                                     val_status = validation.get("Validation", "")
                                     inheritance = validation.get("Inheritance", "")
                                     user = validation.get("User", "")
                                     timestamp = validation.get("Timestamp", "")
+                                    comment = validation.get("Comment", "")
+                                    is_ignored = validation.get("Ignore", "0") == "1"
 
                                     # Format timestamp
                                     try:
@@ -547,7 +668,10 @@ def show_variant_dialog(
                                         formatted_time = timestamp
 
                                     # Color based on status
-                                    if val_status == "present":
+                                    if (
+                                        val_status == "present"
+                                        or val_status == "in phase MNV"
+                                    ):
                                         color = "green"
                                         icon = "check_circle"
                                     elif val_status == "absent":
@@ -557,7 +681,12 @@ def show_variant_dialog(
                                         color = "orange"
                                         icon = "help"
 
-                                    with ui.row().classes("items-center gap-2"):
+                                    # Apply styling for ignored rows
+                                    row_classes = "items-center gap-2 w-full"
+                                    if is_ignored:
+                                        row_classes += " opacity-50"
+
+                                    with ui.row().classes(row_classes):
                                         ui.icon(icon, color=color).classes("text-sm")
                                         label_text = val_status
                                         if inheritance:
@@ -569,6 +698,65 @@ def show_variant_dialog(
                                         ui.label(formatted_time).classes(
                                             "text-xs text-gray-500"
                                         )
+
+                                        # Show comment if present
+                                        if comment:
+                                            ui.label(f'"{comment}"').classes(
+                                                "text-xs text-gray-500 italic"
+                                            )
+
+                                        # Spacer to push switch to the right
+                                        ui.space()
+
+                                        # Ignore switch
+                                        def make_ignore_handler(
+                                            ts: str, current_ignored: bool
+                                        ):
+                                            def handler(e):
+                                                new_value = "1" if e.value else "0"
+                                                success = _update_ignore_status(
+                                                    validation_file,
+                                                    family_id,
+                                                    variant_key,
+                                                    sample,
+                                                    ts,
+                                                    new_value,
+                                                )
+                                                if success:
+                                                    action = (
+                                                        "ignored"
+                                                        if e.value
+                                                        else "restored"
+                                                    )
+                                                    ui.notify(
+                                                        f"Validation {action}",
+                                                        type="info",
+                                                    )
+                                                    load_validation_history()
+                                                    # Trigger refresh callback to update table
+                                                    if on_save_callback:
+                                                        on_save_callback(
+                                                            "ignored"
+                                                            if e.value
+                                                            else "restored"
+                                                        )
+                                                else:
+                                                    ui.notify(
+                                                        "Failed to update ignore status",
+                                                        type="negative",
+                                                    )
+
+                                            return handler
+
+                                        ignore_switch = ui.switch(
+                                            "Ignore",
+                                            value=is_ignored,
+                                            on_change=make_ignore_handler(
+                                                timestamp, is_ignored
+                                            ),
+                                        ).classes("text-xs")
+                                        if is_ignored:
+                                            ignore_switch.props("color=grey")
 
             # Display validation history below the form
             load_validation_history()

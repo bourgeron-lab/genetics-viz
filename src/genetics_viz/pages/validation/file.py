@@ -17,7 +17,7 @@ def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
     """Load validation data from snvs.tsv into a lookup map.
 
     Returns:
-        Dictionary mapping (fid, variant_key, sample_id) to list of (validation_status, inheritance)
+        Dictionary mapping (fid, variant_key, sample_id) to list of (validation_status, inheritance, comment, ignore)
     """
     validation_map: Dict[tuple, List[tuple]] = {}
 
@@ -30,11 +30,17 @@ def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
                 sample_id = vrow.get("Sample")
                 validation_status = vrow.get("Validation")
                 inheritance = vrow.get("Inheritance")
-                if fid and variant_key and sample_id:
+                comment = vrow.get("Comment", "")
+                ignore = vrow.get("Ignore", "0")
+
+                # Only include non-ignored validations
+                if fid and variant_key and sample_id and ignore != "1":
                     map_key = (fid, variant_key, sample_id)
                     if map_key not in validation_map:
                         validation_map[map_key] = []
-                    validation_map[map_key].append((validation_status, inheritance))
+                    validation_map[map_key].append(
+                        (validation_status, inheritance, comment, ignore)
+                    )
 
     return validation_map
 
@@ -56,17 +62,38 @@ def _add_validation_status_to_rows(
         if map_key in validation_map:
             validations = validation_map[map_key]
             validation_statuses = [v[0] for v in validations]
-            unique_validations = set(validation_statuses)
+            # Normalize "in phase MNV" to "present" for conflict detection
+            normalized_statuses = [
+                "present" if s == "in phase MNV" else s for s in validation_statuses
+            ]
+            unique_validations = set(normalized_statuses)
 
             if len(unique_validations) > 1:
                 row["Validation"] = "conflicting"
                 row["ValidationInheritance"] = ""
             elif "present" in unique_validations:
-                row["Validation"] = "present"
+                # Check if any is specifically "in phase MNV"
+                if "in phase MNV" in validation_statuses:
+                    row["Validation"] = "in phase MNV"
+                else:
+                    row["Validation"] = "present"
+                # Check inheritance - prioritize de novo, then homozygous
                 is_de_novo = any(
-                    v[1] == "de novo" for v in validations if v[0] == "present"
+                    v[1] == "de novo"
+                    for v in validations
+                    if v[0] in ("present", "in phase MNV")
                 )
-                row["ValidationInheritance"] = "de novo" if is_de_novo else ""
+                is_homozygous = any(
+                    v[1] == "homozygous"
+                    for v in validations
+                    if v[0] in ("present", "in phase MNV")
+                )
+                if is_de_novo:
+                    row["ValidationInheritance"] = "de novo"
+                elif is_homozygous:
+                    row["ValidationInheritance"] = "homozygous"
+                else:
+                    row["ValidationInheritance"] = ""
             elif "absent" in unique_validations:
                 row["Validation"] = "absent"
                 row["ValidationInheritance"] = ""
@@ -176,6 +203,11 @@ def validation_file_page(filename: str) -> None:
             # Table container
             table_container = ui.column().classes("w-full")
 
+            # Capture the client context for use in callbacks
+            from nicegui import context
+
+            page_client = context.client
+
             @ui.refreshable
             def refresh_table():
                 """Refresh the table with current filters."""
@@ -235,7 +267,7 @@ def validation_file_page(filename: str) -> None:
                         ui.table(
                             columns=columns,
                             rows=filtered_data,
-                            row_key=variant_col if has_variant else None,
+                            row_key=variant_col if has_variant else "Variant",
                             pagination={"rowsPerPage": 50},
                         )
                         .classes("w-full")
@@ -288,8 +320,9 @@ def validation_file_page(filename: str) -> None:
                                         variant_col,
                                         sample_col,
                                     )
-                                    # Refresh the table display
-                                    refresh_table()
+                                    # Refresh the table display using the captured client context
+                                    with page_client:
+                                        ui.timer(0.1, refresh_table, once=True)
 
                                 # Show dialog
                                 show_variant_dialog(

@@ -41,12 +41,118 @@ def validation_all_page() -> None:
                 ui.label("No validations found").classes("text-gray-500 text-lg italic")
                 return
 
-            # Read validation file
-            validations_data: List[Dict[str, Any]] = []
-            with open(validation_file, "r") as f:
-                reader = csv.DictReader(f, delimiter="\t")
-                for row in reader:
-                    validations_data.append(dict(row))
+            # Function to load and aggregate validation data
+            def load_and_aggregate_validations() -> List[Dict[str, Any]]:
+                """Load raw validations and aggregate by (FID, Variant, Sample)."""
+                raw_validations: List[Dict[str, Any]] = []
+                with open(validation_file, "r") as f:
+                    reader = csv.DictReader(f, delimiter="\t")
+                    for row in reader:
+                        raw_validations.append(dict(row))
+
+                if not raw_validations:
+                    return []
+
+                # Aggregate validations by (FID, Variant, Sample)
+                aggregated: Dict[tuple, Dict[str, Any]] = {}
+
+                for row in raw_validations:
+                    key = (
+                        row.get("FID", ""),
+                        row.get("Variant", ""),
+                        row.get("Sample", ""),
+                    )
+
+                    if key not in aggregated:
+                        aggregated[key] = {
+                            "FID": row.get("FID", ""),
+                            "Variant": row.get("Variant", ""),
+                            "Sample": row.get("Sample", ""),
+                            "users": set(),
+                            "validations": [],
+                            "inheritances": [],
+                            "timestamps": [],
+                            "ignored": [],
+                        }
+
+                    # Collect data
+                    aggregated[key]["users"].add(row.get("User", ""))
+                    aggregated[key]["validations"].append(row.get("Validation", ""))
+                    aggregated[key]["inheritances"].append(row.get("Inheritance", ""))
+                    aggregated[key]["timestamps"].append(row.get("Timestamp", ""))
+                    aggregated[key]["ignored"].append(row.get("Ignore", "0"))
+
+                # Convert to list with aggregated values
+                validations_data: List[Dict[str, Any]] = []
+                for key, data in aggregated.items():
+                    # Filter non-ignored validations for status computation
+                    non_ignored_vals = [
+                        (v, i)
+                        for v, i, ig in zip(
+                            data["validations"], data["inheritances"], data["ignored"]
+                        )
+                        if ig != "1"
+                    ]
+
+                    if not non_ignored_vals:
+                        # All are ignored, skip
+                        continue
+
+                    validation_statuses = [v[0] for v in non_ignored_vals]
+                    # Normalize "in phase MNV" to "present" for conflict detection
+                    normalized_statuses = [
+                        "present" if s == "in phase MNV" else s
+                        for s in validation_statuses
+                    ]
+                    unique_validations = set(normalized_statuses)
+
+                    # Determine final validation status
+                    if len(unique_validations) > 1:
+                        final_validation = "conflicting"
+                        final_inheritance = ""
+                    elif "present" in unique_validations:
+                        # Check if any is specifically "in phase MNV"
+                        if "in phase MNV" in validation_statuses:
+                            final_validation = "in phase MNV"
+                        else:
+                            final_validation = "present"
+                        # Check inheritance - prioritize de novo, then homozygous
+                        inheritances = [
+                            v[1]
+                            for v in non_ignored_vals
+                            if v[0] in ("present", "in phase MNV")
+                        ]
+                        if "de novo" in inheritances:
+                            final_inheritance = "de novo"
+                        elif "homozygous" in inheritances:
+                            final_inheritance = "homozygous"
+                        else:
+                            final_inheritance = ""
+                    elif "absent" in unique_validations:
+                        final_validation = "absent"
+                        final_inheritance = ""
+                    else:
+                        final_validation = "uncertain"
+                        final_inheritance = ""
+
+                    validations_data.append(
+                        {
+                            "FID": data["FID"],
+                            "Variant": data["Variant"],
+                            "Sample": data["Sample"],
+                            "User": ", ".join(sorted(data["users"])),
+                            "Inheritance": final_inheritance,
+                            "Validation": final_validation,
+                            "Timestamp": max(
+                                data["timestamps"]
+                            ),  # Most recent timestamp
+                        }
+                    )
+
+                return validations_data
+
+            # Load initial data
+            validations_data = load_and_aggregate_validations()
 
             if not validations_data:
                 ui.label("No validations found").classes("text-gray-500 text-lg italic")
@@ -67,6 +173,11 @@ def validation_all_page() -> None:
 
             # Table container
             table_container = ui.column().classes("w-full")
+
+            # Capture the client context for use in callbacks
+            from nicegui import context
+
+            page_client = context.client
 
             @ui.refreshable
             def refresh_table():
@@ -193,14 +304,12 @@ def validation_all_page() -> None:
 
                                 # Callback to update the Validation column in the table
                                 def on_save(validation_status: str):
-                                    # Reload validation data from file
-                                    validations_data.clear()
-                                    with open(validation_file, "r") as f:
-                                        reader = csv.DictReader(f, delimiter="\t")
-                                        for row in reader:
-                                            validations_data.append(dict(row))
-                                    # Refresh the table display
-                                    refresh_table()
+                                    # Reload and re-aggregate validation data from file
+                                    nonlocal validations_data
+                                    validations_data = load_and_aggregate_validations()
+                                    # Refresh the table display using the captured client context
+                                    with page_client:
+                                        ui.timer(0.1, refresh_table, once=True)
 
                                 # Show dialog
                                 show_variant_dialog(

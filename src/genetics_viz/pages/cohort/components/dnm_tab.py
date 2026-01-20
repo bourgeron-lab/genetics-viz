@@ -30,16 +30,18 @@ DNM_TABLE_SLOT = r"""
         </q-td>
         <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
             <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present'" style="display: flex; align-items: center; gap: 4px;">
+                <span v-if="col.value === 'present' || col.value === 'in phase MNV'" style="display: flex; align-items: center; gap: 4px;">
                     <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as present</q-tooltip>
+                        <q-tooltip>Validated as {{ col.value }}</q-tooltip>
                     </q-icon>
                     <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
+                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
+                    <span v-if="col.value === 'in phase MNV'" style="font-size: 0.75em; color: #666;">MNV</span>
                 </span>
                 <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
                     <q-tooltip>Validated as absent</q-tooltip>
                 </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain'" name="help" color="orange" size="sm">
+                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
                     <q-tooltip>Validation uncertain or different</q-tooltip>
                 </q-icon>
                 <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
@@ -371,6 +373,11 @@ def render_dnm_tab(
                                         i=impact: handle_impact_change(i, e.value),
                                     ).classes("text-sm")
 
+            # Capture the client context for use in callbacks
+            from nicegui import context
+
+            page_client = context.client
+
             @ui.refreshable
             def render_dnm_table():
                 # Filter rows by selected members
@@ -506,8 +513,9 @@ def render_dnm_tab(
                                     add_validation_status_to_row(
                                         row, validation_map, variant_key, sample_id
                                     )
-                                # Refresh the table
-                                render_dnm_table.refresh()
+                                # Refresh the table using the captured client context
+                                with page_client:
+                                    ui.timer(0.1, render_dnm_table.refresh, once=True)
 
                             # Show dialog
                             show_variant_dialog(
