@@ -18,7 +18,7 @@ spark_sfari1:
 eagle_definitive_strong:
   description: "Definitive and strong genes from the Simon's EAGLE resource"
   color: "#6600cc" # purple
-  score: 3
+  score: 1
 
 syngo:
   description: "Genes from the SYNGO database"

@@ -1,8 +1,10 @@
 """Validation file page - displays a specific to_validate file."""
 
 import csv
+from pathlib import Path
 from typing import Any, Dict, List
 
+import yaml
 from nicegui import app as nicegui_app
 from nicegui import ui
 
@@ -12,6 +14,31 @@ from genetics_viz.components.tables import VALIDATION_TABLE_SLOT
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+
+
+def _load_vep_consequences() -> Dict[str, tuple]:
+    """Load VEP consequences from YAML config file."""
+    config_path = (
+        Path(__file__).parent.parent.parent / "config" / "vep_consequences.yaml"
+    )
+    with open(config_path, "r") as f:
+        data = yaml.safe_load(f)
+    # Convert to dict with (impact, color) tuples
+    return {term: (info["impact"], info["color"]) for term, info in data.items()}
+
+
+VEP_CONSEQUENCES = _load_vep_consequences()
+
+
+def get_consequence_color(consequence: str) -> str:
+    """Get color for a consequence term."""
+    return VEP_CONSEQUENCES.get(consequence, ("MODIFIER", "#636363"))[1]
+
+
+def format_consequence_display(consequence: str) -> str:
+    """Format consequence for display: remove _variant suffix and replace _ with space."""
+    display = consequence.replace("_variant", "").replace("_", " ")
+    return display
 
 
 def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
@@ -210,6 +237,31 @@ def validation_file_page(filename: str) -> None:
                             row[f"{col_name}_badges"] = gene_badges
                         else:
                             row[f"{col_name}_badges"] = []
+
+                # Process Impact columns - create badges with colors from vep_consequences.yaml
+                if "impact" in col_name.lower():
+                    impact_str = row.get(col_name, "")
+                    if impact_str:
+                        # Split by '&' to handle multiple impacts
+                        impacts = [i.strip() for i in str(impact_str).split("&")]
+                        impact_badges = []
+                        seen_badges = set()  # Track unique (label, color) pairs
+                        for impact in impacts:
+                            if impact:
+                                label = format_consequence_display(impact)
+                                color = get_consequence_color(impact)
+                                badge_key = (label, color)
+                                if badge_key not in seen_badges:
+                                    seen_badges.add(badge_key)
+                                    impact_badges.append(
+                                        {
+                                            "label": label,
+                                            "color": color,
+                                        }
+                                    )
+                        row[f"{col_name}_badges"] = impact_badges
+                    else:
+                        row[f"{col_name}_badges"] = []
 
             # Filter state - all statuses selected by default
             all_validation_statuses = [

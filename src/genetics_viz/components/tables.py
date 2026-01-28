@@ -68,6 +68,22 @@ VALIDATION_TABLE_SLOT = r"""
                 <span>{{ col.value || '-' }}</span>
             </template>
         </template>
+        <template v-else-if="col.name.toLowerCase().includes('impact')">
+            <template v-if="props.row[col.name + '_badges'] && props.row[col.name + '_badges'].length > 0">
+                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                    <q-badge 
+                        v-for="(badge, idx) in props.row[col.name + '_badges']" 
+                        :key="idx"
+                        :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'"
+                    >
+                        {{ badge.label }}
+                    </q-badge>
+                </div>
+            </template>
+            <template v-else>
+                <span>{{ col.value || '-' }}</span>
+            </template>
+        </template>
         <template v-else>
             {{ col.value }}
         </template>
