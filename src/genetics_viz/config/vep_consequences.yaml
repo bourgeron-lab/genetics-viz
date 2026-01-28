@@ -1,0 +1,167 @@
+# VEP Consequence Terms with Impact Levels and Colors
+# Source: Ensembl VEP documentation
+# https://www.ensembl.org/info/genome/variation/prediction/predicted_data.html
+
+transcript_ablation:
+  impact: HIGH
+  color: "#ff0000"
+
+splice_acceptor_variant:
+  impact: HIGH
+  color: "#ff581a"
+
+splice_donor_variant:
+  impact: HIGH
+  color: "#ff581a"
+
+stop_gained:
+  impact: HIGH
+  color: "#ff0000"
+
+frameshift_variant:
+  impact: HIGH
+  color: "#9400d3"
+
+stop_lost:
+  impact: HIGH
+  color: "#ff0000"
+
+start_lost:
+  impact: HIGH
+  color: "#ffd700"
+
+transcript_amplification:
+  impact: HIGH
+  color: "#ff69b4"
+
+feature_elongation:
+  impact: HIGH
+  color: "#7f00ff"
+
+feature_truncation:
+  impact: HIGH
+  color: "#7f00ff"
+
+inframe_insertion:
+  impact: MODERATE
+  color: "#ff69b4"
+
+inframe_deletion:
+  impact: MODERATE
+  color: "#ff69b4"
+
+missense_variant:
+  impact: MODERATE
+  color: "#ffd700"
+
+protein_altering_variant:
+  impact: MODERATE
+  color: "#ff69b4"
+
+splice_donor_5th_base_variant:
+  impact: LOW
+  color: "#76ee00"
+
+splice_region_variant:
+  impact: LOW
+  color: "#ff7f50"
+
+splice_donor_region_variant:
+  impact: LOW
+  color: "#ff7f50"
+
+splice_polypyrimidine_tract_variant:
+  impact: LOW
+  color: "#76ee00"
+
+incomplete_terminal_codon_variant:
+  impact: LOW
+  color: "#ff00ff"
+
+start_retained_variant:
+  impact: LOW
+  color: "#76ee00"
+
+stop_retained_variant:
+  impact: LOW
+  color: "#76ee00"
+
+synonymous_variant:
+  impact: LOW
+  color: "#76ee00"
+
+coding_sequence_variant:
+  impact: MODIFIER
+  color: "#458b00"
+
+mature_miRNA_variant:
+  impact: MODIFIER
+  color: "#458b00"
+
+5_prime_UTR_variant:
+  impact: MODIFIER
+  color: "#7ac5cd"
+
+3_prime_UTR_variant:
+  impact: MODIFIER
+  color: "#7ac5cd"
+
+non_coding_transcript_exon_variant:
+  impact: MODIFIER
+  color: "#32cd32"
+
+intron_variant:
+  impact: MODIFIER
+  color: "#02599c"
+
+NMD_transcript_variant:
+  impact: MODIFIER
+  color: "#ff4500"
+
+non_coding_transcript_variant:
+  impact: MODIFIER
+  color: "#32cd32"
+
+coding_transcript_variant:
+  impact: MODIFIER
+  color: "#458b00"
+
+upstream_gene_variant:
+  impact: MODIFIER
+  color: "#a2b5cd"
+
+downstream_gene_variant:
+  impact: MODIFIER
+  color: "#a2b5cd"
+
+TFBS_ablation:
+  impact: MODIFIER
+  color: "#a52a2a"
+
+TFBS_amplification:
+  impact: MODIFIER
+  color: "#a52a2a"
+
+TF_binding_site_variant:
+  impact: MODIFIER
+  color: "#a52a2a"
+
+regulatory_region_ablation:
+  impact: MODIFIER
+  color: "#a52a2a"
+
+regulatory_region_amplification:
+  impact: MODIFIER
+  color: "#a52a2a"
+
+regulatory_region_variant:
+  impact: MODIFIER
+  color: "#a52a2a"
+
+intergenic_variant:
+  impact: MODIFIER
+  color: "#636363"
+
+sequence_variant:
+  impact: MODIFIER
+  color: "#636363"

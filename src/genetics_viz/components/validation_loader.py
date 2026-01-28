@@ -7,18 +7,20 @@ from typing import Any, Dict, List, Tuple
 
 def load_validation_map(
     validation_file_path: Path, family_id: str | None = None
-) -> Dict[Tuple[str, str], List[Tuple[str, str, str, str]]]:
-    """Load validation data from snvs.tsv into a lookup map.
+) -> Dict[Tuple[str, str], List[Tuple[str, str, str, str, str, str, str]]]:
+    """Load validation data from snvs.tsv or svs.tsv into a lookup map.
 
     Args:
-        validation_file_path: Path to the validations/snvs.tsv file
+        validation_file_path: Path to the validations file (snvs.tsv or svs.tsv)
         family_id: Optional family ID to filter by
 
     Returns:
         Dictionary mapping (variant_key, sample_id) to list of
-        (validation_status, inheritance, comment, ignore)
+        (validation_status, inheritance, comment, ignore, curated_start, curated_end, timestamp)
     """
-    validation_map: Dict[Tuple[str, str], List[Tuple[str, str, str, str]]] = {}
+    validation_map: Dict[
+        Tuple[str, str], List[Tuple[str, str, str, str, str, str, str]]
+    ] = {}
 
     if not validation_file_path.exists():
         return validation_map
@@ -33,6 +35,9 @@ def load_validation_map(
             inheritance = row.get("Inheritance")
             comment = row.get("Comment", "")
             ignore = row.get("Ignore", "0")
+            curated_start = row.get("CuratedStart", "")
+            curated_end = row.get("CuratedEnd", "")
+            timestamp = row.get("Timestamp", "")
 
             # Filter by family_id if provided
             if family_id is not None and fid != family_id:
@@ -48,6 +53,9 @@ def load_validation_map(
                         inheritance or "",
                         comment or "",
                         ignore or "0",
+                        curated_start or "",
+                        curated_end or "",
+                        timestamp or "",
                     )
                 )
 
@@ -56,7 +64,9 @@ def load_validation_map(
 
 def add_validation_status_to_row(
     row: Dict[str, Any],
-    validation_map: Dict[Tuple[str, str], List[Tuple[str, str, str, str]]],
+    validation_map: Dict[
+        Tuple[str, str], List[Tuple[str, str, str, str, str, str, str]]
+    ],
     variant_key: str,
     sample_id: str,
 ) -> None:
@@ -65,7 +75,7 @@ def add_validation_status_to_row(
     Args:
         row: The row dict to modify
         validation_map: Mapping from (variant_key, sample_id) to validations
-        variant_key: The variant key (e.g. chr:pos:ref:alt)
+        variant_key: The variant key (e.g. chr:pos:ref:alt or chr:start-end:type)
         sample_id: The sample ID
     """
     map_key = (variant_key, sample_id)

@@ -1,0 +1,25 @@
+# WisecondorX CNV call thresholds and colors
+
+robust_loss:
+  ratio_threshold: -0.4 # log2 ratio threshold
+  zscore_threshold: -3 # Z-score threshold
+  color: "#b71c1c" # red-9 (darker red for higher contrast)
+  label: "Robust LOSS"
+
+permissive_loss:
+  ratio_threshold: -0.25
+  zscore_threshold: -2.5
+  color: "#ef5350" # red-4 (lighter red for higher contrast)
+  label: "Permissive LOSS"
+
+robust_gain:
+  ratio_threshold: 0.3
+  zscore_threshold: 3
+  color: "#1b5e20" # green-9 (darker green for higher contrast)
+  label: "Robust GAIN"
+
+permissive_gain:
+  ratio_threshold: 0.2
+  zscore_threshold: 2.5
+  color: "#66bb6a" # green-4 (lighter green for higher contrast)
+  label: "Permissive GAIN"

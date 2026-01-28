@@ -8,3 +8,4 @@ wheels/
 
 # Virtual environments
 .venv
+src/genetics_viz/.DS_Store

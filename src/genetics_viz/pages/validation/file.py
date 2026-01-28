@@ -11,6 +11,7 @@ from genetics_viz.components.header import create_header
 from genetics_viz.components.tables import VALIDATION_TABLE_SLOT
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.gene_scoring import get_gene_scorer
 
 
 def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
@@ -180,6 +181,35 @@ def validation_file_page(filename: str) -> None:
             _add_validation_status_to_rows(
                 file_data, validation_map, fid_col, variant_col, sample_col
             )
+
+            # Add gene badge information for columns containing "symbol" or "gene"
+            gene_scorer = get_gene_scorer()
+            for row in file_data:
+                # Check all columns for gene/symbol data
+                for col_name in headers:
+                    if "symbol" in col_name.lower() or (
+                        col_name.lower() == "gene" or "gene" in col_name.lower()
+                    ):
+                        value = row.get(col_name, "")
+                        if value and value != "-":
+                            gene_badges = []
+                            # Split by comma for multiple genes
+                            genes = [
+                                g.strip() for g in str(value).split(",") if g.strip()
+                            ]
+                            for gene in genes:
+                                color = gene_scorer.get_gene_color(gene)
+                                tooltip = gene_scorer.get_gene_tooltip(gene)
+                                gene_badges.append(
+                                    {
+                                        "label": gene,
+                                        "color": color,
+                                        "tooltip": tooltip,
+                                    }
+                                )
+                            row[f"{col_name}_badges"] = gene_badges
+                        else:
+                            row[f"{col_name}_badges"] = []
 
             # Filter state - all statuses selected by default
             all_validation_statuses = [

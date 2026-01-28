@@ -7,6 +7,7 @@ from nicegui import ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.pages.cohort.components.dnm_tab import render_dnm_tab
+from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
 from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
 from genetics_viz.utils.data import get_data_store
 
@@ -205,6 +206,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
             with ui.tabs().classes("w-full") as tabs:
                 wombat_tab = ui.tab("Wombat")
                 snvs_tab = ui.tab("SNVs dnm")
+                svs_tab = ui.tab("SVs")
 
             with ui.tab_panels(tabs, value=wombat_tab).classes("w-full"):
                 # Wombat tab panel
@@ -224,6 +226,18 @@ def family_page(cohort_name: str, family_id: str) -> None:
                     "border border-gray-300 rounded-lg p-4"
                 ):
                     render_dnm_tab(
+                        store=store,
+                        family_id=family_id,
+                        cohort_name=cohort_name,
+                        selected_members=selected_members,
+                        data_table_refreshers=data_table_refreshers,
+                    )
+
+                # SVs tab panel
+                with ui.tab_panel(svs_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+                    render_svs_tab(
                         store=store,
                         family_id=family_id,
                         cohort_name=cohort_name,

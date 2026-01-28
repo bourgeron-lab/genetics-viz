@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.gene_scoring import get_gene_scorer
 
 # Path to the validation guide markdown file
 VALIDATION_GUIDE_PATH = (
@@ -312,6 +313,25 @@ def show_variant_dialog(
 
             refresh_additional_samples()
 
+            # Helper function to render gene badges
+            gene_scorer = get_gene_scorer()
+
+            def render_gene_badges(gene_list_str: str):
+                """Render gene badges with color coding."""
+                if not gene_list_str or gene_list_str == "-":
+                    return ui.label("-").classes("text-base text-gray-900 font-medium")
+
+                genes = [g.strip() for g in str(gene_list_str).split(",") if g.strip()]
+                with ui.row().classes("gap-1 flex-wrap"):
+                    for gene in genes:
+                        color = gene_scorer.get_gene_color(gene)
+                        text_color = "black" if color == "#ffffff" else "white"
+                        tooltip_text = gene_scorer.get_gene_tooltip(gene)
+                        ui.html(
+                            f'<span class="q-badge" style="background-color: {color}; color: {text_color}; padding: 2px 6px; border-radius: 4px; font-size: 12px;" title="{tooltip_text}">{gene}</span>',
+                            sanitize=False,
+                        )
+
             # Variant details card (collapsible, above IGV)
             ui.label("Variant Details").classes("text-xl font-semibold mb-2")
 
@@ -321,6 +341,7 @@ def show_variant_dialog(
                         "VEP_CANONICAL",
                         "VEP_Consequence",
                         "VEP_SYMBOL",
+                        "VEP_Gene",
                         "VEP_HGVSp",
                         "VEP_LoF",
                         "fafmax_faf95_max_genomes",
@@ -335,11 +356,23 @@ def show_variant_dialog(
                                     ui.label(field).classes(
                                         "text-xs font-semibold text-gray-500"
                                     )
-                                    ui.label(
-                                        str(variant_data[field])
-                                        if variant_data[field] is not None
-                                        else "-"
-                                    ).classes("text-base text-gray-900 font-medium")
+                                    # Use gene badges for gene-related fields
+                                    if field in [
+                                        "VEP_SYMBOL",
+                                        "VEP_Gene",
+                                        "SpliceAI_symbol",
+                                    ]:
+                                        render_gene_badges(
+                                            str(variant_data[field])
+                                            if variant_data[field] is not None
+                                            else "-"
+                                        )
+                                    else:
+                                        ui.label(
+                                            str(variant_data[field])
+                                            if variant_data[field] is not None
+                                            else "-"
+                                        ).classes("text-base text-gray-900 font-medium")
 
                     other_fields = {
                         k: v
@@ -372,9 +405,21 @@ def show_variant_dialog(
                                         ui.label(key).classes(
                                             "text-xs font-semibold text-gray-500"
                                         )
-                                        ui.label(
-                                            str(value) if value is not None else "-"
-                                        ).classes("text-sm text-gray-800 break-all")
+                                        # Use gene badges for gene/symbol fields
+                                        if (
+                                            any(
+                                                term in key.lower()
+                                                for term in ["symbol", "gene"]
+                                            )
+                                            and "vep" in key.lower()
+                                        ):
+                                            render_gene_badges(
+                                                str(value) if value is not None else "-"
+                                            )
+                                        else:
+                                            ui.label(
+                                                str(value) if value is not None else "-"
+                                            ).classes("text-sm text-gray-800 break-all")
 
                         details_container.set_visibility(False)
 
@@ -599,13 +644,98 @@ def show_variant_dialog(
                                     f.write(
                                         f"{family_id}\t{variant_key}\t{sample}\t{user}\t{inheritance}\t{validation_status}\t{comment}\t0\t{timestamp}\n"
                                     )
+
+                                    # If validation is "present" with maternal/paternal/either/homozygous inheritance,
+                                    # also save validations for the parent(s)
+                                    parent_samples_added = []
+                                    if (
+                                        validation_status == "present"
+                                        and inheritance
+                                        in [
+                                            "maternal",
+                                            "paternal",
+                                            "either",
+                                            "homozygous",
+                                        ]
+                                    ):
+                                        # Load existing validations to check if parents already have validations
+                                        existing_validations = set()
+                                        if file_exists:
+                                            # Re-read the file to get existing validations
+                                            with open(validation_file, "r") as check_f:
+                                                reader = csv.DictReader(
+                                                    check_f, delimiter="\t"
+                                                )
+                                                for row in reader:
+                                                    if (
+                                                        row.get("FID") == family_id
+                                                        and row.get("Variant")
+                                                        == variant_key
+                                                    ):
+                                                        existing_validations.add(
+                                                            row.get("Sample")
+                                                        )
+
+                                        # Determine which parent(s) to add validations for
+                                        parents_to_add = []
+                                        if (
+                                            inheritance == "maternal"
+                                            and sample_parents["mother"]
+                                        ):
+                                            if (
+                                                sample_parents["mother"]
+                                                not in existing_validations
+                                            ):
+                                                parents_to_add.append(
+                                                    ("mother", sample_parents["mother"])
+                                                )
+                                        elif (
+                                            inheritance == "paternal"
+                                            and sample_parents["father"]
+                                        ):
+                                            if (
+                                                sample_parents["father"]
+                                                not in existing_validations
+                                            ):
+                                                parents_to_add.append(
+                                                    ("father", sample_parents["father"])
+                                                )
+                                        elif inheritance in ["either", "homozygous"]:
+                                            if (
+                                                sample_parents["mother"]
+                                                and sample_parents["mother"]
+                                                not in existing_validations
+                                            ):
+                                                parents_to_add.append(
+                                                    ("mother", sample_parents["mother"])
+                                                )
+                                            if (
+                                                sample_parents["father"]
+                                                and sample_parents["father"]
+                                                not in existing_validations
+                                            ):
+                                                parents_to_add.append(
+                                                    ("father", sample_parents["father"])
+                                                )
+
+                                        # Write parent validations
+                                        for parent_type, parent_id in parents_to_add:
+                                            parent_comment = (
+                                                f"(inherited from {sample})"
+                                            )
+                                            f.write(
+                                                f"{family_id}\t{variant_key}\t{parent_id}\t{user}\tunknown\tpresent\t{parent_comment}\t0\t{timestamp}\n"
+                                            )
+                                            parent_samples_added.append(parent_id)
+
                                 finally:
                                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
-                            ui.notify(
-                                f"Validation saved: {validation_status}",
-                                type="positive",
-                            )
+                            # Notify user about saved validations
+                            notify_message = f"Validation saved: {validation_status}"
+                            if parent_samples_added:
+                                notify_message += f" (also saved for {', '.join(parent_samples_added)})"
+                            ui.notify(notify_message, type="positive")
 
                             # Reload validation history
                             load_validation_history()

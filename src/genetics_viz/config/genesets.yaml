@@ -1,0 +1,31 @@
+# defined the importance of each genesets used and the color code for them.
+
+constrained:
+  description: "Genes with a LOEUF score <= 0.6 in gnomAD v4.1"
+  color: "#ffcc00" # yellow
+  score: 2
+
+hcndd:
+  description: "High-confidence neurodevelopmental disorder genes from genetrek.pasteur.fr"
+  color: "#ff6600" # orange
+  score: 3
+
+spark_sfari1:
+  description: "SFARI genes with score 1 (high confidence) or return by the SPARK as diagnostic"
+  color: "#ff0000" # red
+  score: 3
+
+eagle_definitive_strong:
+  description: "Definitive and strong genes from the Simon's EAGLE resource"
+  color: "#6600cc" # purple
+  score: 3
+
+syngo:
+  description: "Genes from the SYNGO database"
+  color: "#0099cc" # blue
+  score: 1
+
+chromepitf:
+  description: "Genes associated with chromatin and transcription factor activity"
+  color: "#33cc33" # green
+  score: 1

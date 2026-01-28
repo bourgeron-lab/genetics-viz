@@ -1,6 +1,6 @@
 """Pages for genetics-viz."""
 
 # Import page modules to register routes when this module is imported
-from genetics_viz.pages import cohort, validation
+from genetics_viz.pages import cohort, search, validation
 
-__all__ = ["cohort", "validation"]
+__all__ = ["cohort", "search", "validation"]

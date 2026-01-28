@@ -17,6 +17,21 @@ def create_header() -> None:
                     "Home", on_click=lambda: ui.navigate.to("/"), icon="home"
                 ).props("flat color=white")
 
+                # Search dropdown menu
+                with ui.button("Search", icon="search").props("flat color=white"):
+                    with ui.menu():
+                        try:
+                            store = get_data_store()
+                            for cohort_name in sorted(store.cohorts.keys()):
+                                ui.menu_item(
+                                    cohort_name,
+                                    on_click=lambda n=cohort_name: ui.navigate.to(
+                                        f"/search/{n}"
+                                    ),
+                                )
+                        except RuntimeError:
+                            ui.menu_item("Loading...", auto_close=False)
+
                 # Cohorts dropdown menu
                 with ui.button("Cohorts", icon="folder").props("flat color=white"):
                     with ui.menu():
