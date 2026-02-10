@@ -201,6 +201,10 @@ def family_page(cohort_name: str, family_id: str) -> None:
                         }}
                     """)
 
+            # Track loading state for each tab
+            wombat_state = {"loaded": False}
+            svs_state = {"loaded": False}
+
             # Analysis tabs section
             with ui.tabs().classes("w-full") as tabs:
                 wombat_tab = ui.tab("Wombat")
@@ -211,25 +215,73 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 with ui.tab_panel(wombat_tab).classes(
                     "border border-gray-300 rounded-lg p-4"
                 ):
-                    render_wombat_tab(
-                        store=store,
-                        family_id=family_id,
-                        cohort_name=cohort_name,
-                        selected_members=selected_members,
-                        data_table_refreshers=data_table_refreshers,
-                    )
+
+                    @ui.refreshable
+                    def wombat_content():
+                        if wombat_state["loaded"]:
+                            render_wombat_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading variants...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    wombat_content()
 
                 # SVs tab panel
                 with ui.tab_panel(svs_tab).classes(
                     "border border-gray-300 rounded-lg p-4"
                 ):
-                    render_svs_tab(
-                        store=store,
-                        family_id=family_id,
-                        cohort_name=cohort_name,
-                        selected_members=selected_members,
-                        data_table_refreshers=data_table_refreshers,
-                    )
+
+                    @ui.refreshable
+                    def svs_content():
+                        if svs_state["loaded"]:
+                            render_svs_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading structural variants...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    svs_content()
+
+            # Load Wombat tab data asynchronously (it's the default active tab)
+            def load_wombat_async():
+                wombat_state["loaded"] = True
+                wombat_content.refresh()
+
+            ui.timer(0.1, load_wombat_async, once=True)
+
+            # Lazy load SVS tab when clicked
+            def on_tab_change(e):
+                tab_value = e.args
+                if tab_value == "SVs" and not svs_state["loaded"]:
+
+                    def load_svs_async():
+                        svs_state["loaded"] = True
+                        svs_content.refresh()
+
+                    ui.timer(0.1, load_svs_async, once=True)
+
+            tabs.on("update:model-value", on_tab_change)
 
     except Exception as e:
         import traceback

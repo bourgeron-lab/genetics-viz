@@ -611,6 +611,7 @@ def render_wisecondorx_subtab(
                             gene_type = ""
 
                         if symbol:
+                            score, _ = gene_scorer.get_gene_score_and_sets(symbol)
                             color = gene_scorer.get_gene_color(symbol)
                             tooltip = gene_scorer.get_gene_tooltip(symbol)
                             gene_badges.append(
@@ -619,8 +620,28 @@ def render_wisecondorx_subtab(
                                     "color": color,
                                     "tooltip": tooltip,
                                     "type": gene_type,
+                                    "score": score,
                                 }
                             )
+
+                    # Sort by score (descending)
+                    gene_badges.sort(key=lambda x: x["score"], reverse=True)
+
+                    # Limit to first 6 genes and add "+X genes" indicator if needed
+                    total_genes = len(gene_badges)
+                    if total_genes > 6:
+                        gene_badges = gene_badges[:6]
+                        # Add a "+X genes" badge
+                        remaining_count = total_genes - 6
+                        gene_badges.append(
+                            {
+                                "label": f"+{remaining_count} genes",
+                                "color": "#9e9e9e",  # grey color
+                                "tooltip": f"{remaining_count} more genes",
+                                "type": "",
+                            }
+                        )
+
                     row["GeneBadges"] = gene_badges
                 else:
                     row["GeneBadges"] = []
@@ -689,6 +710,21 @@ def render_wisecondorx_subtab(
             "value": [col for col in all_columns if col not in unchecked_columns]
         }
 
+        # Define all possible call values
+        all_call_values = [
+            "Robust LOSS",
+            "Robust GAIN",
+            "Permissive LOSS",
+            "Permissive Gain",
+            "Below threshold",
+        ]
+        # Default: all selected except "Below threshold"
+        selected_calls = {
+            "value": [
+                call for call in all_call_values if call != "Below threshold"
+            ]
+        }
+
         # Create a container for the data table
         data_container = ui.column().classes("w-full")
 
@@ -710,6 +746,14 @@ def render_wisecondorx_subtab(
                     ]
                 else:
                     rows = all_rows
+
+                # Filter rows by selected call values if 'call' column exists
+                if "call" in df.columns:
+                    rows = [
+                        r
+                        for r in rows
+                        if r.get("call") in selected_calls["value"]
+                    ]
 
                 def make_columns(visible_cols):
                     cols = [
@@ -776,6 +820,46 @@ def render_wisecondorx_subtab(
                                         col,
                                         value=col in selected_cols["value"],
                                         on_change=lambda e, c=col: handle_col_change(
+                                            c, e.value
+                                        ),
+                                    ).classes("text-sm")
+
+                    # Call filter
+                    with ui.button("Filter Call", icon="filter_list").props(
+                        "outline color=blue"
+                    ):
+                        with ui.menu():
+                            ui.label("Filter by Call:").classes(
+                                "px-4 py-2 font-semibold text-sm"
+                            )
+                            ui.separator()
+
+                            with ui.column().classes("p-2"):
+                                with ui.row().classes("gap-2 mb-2"):
+                                    call_checkboxes: Dict[str, Any] = {}
+
+                                    def select_all_calls():
+                                        selected_calls["value"] = list(all_call_values)
+                                        update_call_filter()
+
+                                    def select_none_calls():
+                                        selected_calls["value"] = []
+                                        update_call_filter()
+
+                                    ui.button("All", on_click=select_all_calls).props(
+                                        "size=sm flat dense"
+                                    ).classes("text-xs")
+                                    ui.button("None", on_click=select_none_calls).props(
+                                        "size=sm flat dense"
+                                    ).classes("text-xs")
+
+                                ui.separator()
+
+                                for call_value in all_call_values:
+                                    call_checkboxes[call_value] = ui.checkbox(
+                                        call_value,
+                                        value=call_value in selected_calls["value"],
+                                        on_change=lambda e, c=call_value: handle_call_change(
                                             c, e.value
                                         ),
                                     ).classes("text-sm")
@@ -861,6 +945,20 @@ def render_wisecondorx_subtab(
 
                     for col, checkbox in checkboxes.items():
                         checkbox.value = col in selected_cols["value"]
+
+                def handle_call_change(call_value, is_checked):
+                    if is_checked and call_value not in selected_calls["value"]:
+                        selected_calls["value"].append(call_value)
+                    elif not is_checked and call_value in selected_calls["value"]:
+                        selected_calls["value"].remove(call_value)
+                    update_call_filter()
+
+                def update_call_filter():
+                    # Refresh the entire data table to apply the call filter
+                    render_data_table.refresh()
+                    # Update checkbox states
+                    for call, checkbox in call_checkboxes.items():
+                        checkbox.value = call in selected_calls["value"]
 
             data_table_refreshers.append(render_data_table.refresh)
             render_data_table()

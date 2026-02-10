@@ -85,6 +85,34 @@ def _load_clinvar_colors() -> Dict[str, str]:
 CLINVAR_COLORS = _load_clinvar_colors()
 
 
+# Load view presets from YAML
+def _load_view_presets() -> List[Dict[str, Any]]:
+    """Load view presets from YAML config file."""
+    config_path = (
+        Path(__file__).parent.parent.parent.parent / "config" / "view_presets.yaml"
+    )
+    with open(config_path, "r") as f:
+        data = yaml.safe_load(f)
+    return data.get("presets", [])
+
+
+VIEW_PRESETS = _load_view_presets()
+
+
+def select_preset_for_config(config_name: str, presets: List[Dict]) -> Dict:
+    """Select the first preset whose keywords contain the config_name,
+    or return the first preset if none match."""
+    config_lower = config_name.lower()
+
+    for preset in presets:
+        keywords = preset.get("keywords", [])
+        if any(keyword.lower() in config_lower for keyword in keywords):
+            return preset
+
+    # Return first preset as default
+    return presets[0] if presets else {"name": "Default", "columns": []}
+
+
 def get_clinvar_color(significance: str) -> str:
     """Get color for a ClinVar significance term (case-insensitive)."""
     if not significance:
@@ -290,6 +318,7 @@ def render_wombat_tab(
                         wf["file_path"],
                         separator="\t",
                         infer_schema_length=100,
+                        null_values=[".", ""],
                     )
 
                     # Group by variant and sample, aggregating other columns
@@ -498,26 +527,17 @@ def render_wombat_tab(
 
                     wombat_data[config_name]["all_columns"] = all_columns
 
-                    # Default columns to display
-                    default_visible = [
-                        "Variant",
-                        "VEP_Consequence",
-                        "VEP_SYMBOL",
-                        "VEP_CLIN_SIG",
-                        "fafmax_faf95_max_genomes",
-                        "nhomalt_genomes",
-                        "sample",
-                        "sample_gt",
-                        "father_gt",
-                        "mother_gt",
-                        "Validation",
-                    ]
-                    initial_selected = [
-                        col for col in default_visible if col in all_columns
-                    ]
+                    # Auto-select preset based on keywords
+                    initial_preset = select_preset_for_config(config_name, VIEW_PRESETS)
+                    selected_preset = {"name": initial_preset["name"]}
+
+                    # Override initial_selected with preset columns (if available)
+                    preset_columns = initial_preset.get("columns", [])
+                    initial_selected = [col for col in preset_columns if col in all_columns]
 
                     selected_cols = {"value": initial_selected}
                     wombat_data[config_name]["selected_cols"] = selected_cols
+                    wombat_data[config_name]["selected_preset"] = selected_preset
 
                     # Create a container for the data table
                     data_container = ui.column().classes("w-full")
@@ -571,15 +591,24 @@ def render_wombat_tab(
                                     cols.append(col_def)
                                 return cols
 
-                            with ui.row().classes("items-center gap-4 mt-4 mb-2"):
+                            with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
                                 ui.label(f"Data ({len(rows)} rows)").classes(
                                     "text-lg font-semibold text-blue-700"
                                 )
 
-                                # Column selector
+                                # Preset selector dropdown
+                                preset_select = ui.select(
+                                    options={p["name"]: p["name"] for p in VIEW_PRESETS},
+                                    value=data["selected_preset"]["name"],
+                                    label="Preset"
+                                ).classes("w-48")
+
+                                ui.space()  # Push remaining items to the right
+
+                                # Compact column selector button
                                 with ui.button(
-                                    "Select Columns", icon="view_column"
-                                ).props("outline color=blue"):
+                                    "+ column", icon="view_column"
+                                ).props("outline color=blue size=sm"):
                                     with ui.menu():
                                         ui.label("Show/Hide Columns:").classes(
                                             "px-4 py-2 font-semibold text-sm"
@@ -696,6 +725,26 @@ def render_wombat_tab(
                                     )
 
                                 data_table.on("view_variant", on_view_variant)
+
+                            def on_preset_change(e):
+                                """Handle preset selection change."""
+                                preset_name = e.value
+
+                                # Find the selected preset
+                                preset = next((p for p in VIEW_PRESETS if p["name"] == preset_name), None)
+                                if not preset:
+                                    return
+
+                                # Filter columns to only those available in the data
+                                available = [col for col in preset.get("columns", [])
+                                             if col in all_columns_local]
+
+                                selected_cols_local["value"] = available
+                                data["selected_preset"]["name"] = preset_name
+                                update_table()
+
+                            # Connect preset change handler
+                            preset_select.on_value_change(on_preset_change)
 
                             def handle_col_change(col_name, is_checked):
                                 if (

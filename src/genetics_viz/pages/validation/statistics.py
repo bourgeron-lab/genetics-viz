@@ -327,6 +327,7 @@ def validation_statistics_page() -> None:
                                         "xAxis": {
                                             "type": "category",
                                             "data": list(user_counts.keys()),
+                                            "axisLabel": {"rotate": -45},
                                         },
                                         "yAxis": {"type": "value", "name": "Count"},
                                         "series": [
@@ -354,6 +355,7 @@ def validation_statistics_page() -> None:
                                         "xAxis": {
                                             "type": "category",
                                             "data": list(inheritance_counts.keys()),
+                                            "axisLabel": {"rotate": -45},
                                         },
                                         "yAxis": {"type": "value", "name": "Count"},
                                         "series": [

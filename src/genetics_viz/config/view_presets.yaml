@@ -1,0 +1,66 @@
+# View presets for variant dataframes
+# Each preset defines a name, keywords for auto-selection, and a list of columns to display
+
+presets:
+  - name: "Standard View"
+    keywords: ["default", "standard"]
+    columns:
+      - Variant
+      - VEP_Consequence
+      - VEP_SYMBOL
+      - VEP_CLIN_SIG
+      - fafmax_faf95_max_genomes
+      - sample
+      - sample_gt
+      - father_gt
+      - mother_gt
+      - Validation
+
+  - name: "Recessive View"
+    keywords: ["rare_homalt"]
+    columns:
+      - Variant
+      - VEP_Consequence
+      - VEP_SYMBOL
+      - VEP_CLIN_SIG
+      - fafmax_faf95_max_genomes
+      - nhomalt_genomes
+      - sample
+      - sex
+      - sample_gt
+      - father_gt
+      - mother_gt
+      - Validation
+
+  - name: "Missense View"
+    keywords: ["rare_missense_plp", "rare_missense"]
+    columns:
+      - Variant
+      - VEP_SYMBOL
+      - VEP_CLIN_SIG
+      - fafmax_faf95_max_genomes
+      - MPC
+      - REVEL
+      - popEVE
+      - am_pathogenicity
+      - sample
+      - sample_gt
+      - father_gt
+      - mother_gt
+      - Validation
+
+  - name: "SpliceAI View"
+    keywords: ["rare_spliceai", "spliceai"]
+    columns:
+      - Variant
+      - VEP_Consequence
+      - VEP_SYMBOL
+      - VEP_CLIN_SIG
+      - fafmax_faf95_max_genomes
+      - SpliceAI_maxDS
+      - SpliceAI_symbol
+      - sample
+      - sample_gt
+      - father_gt
+      - mother_gt
+      - Validation

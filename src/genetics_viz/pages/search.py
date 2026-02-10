@@ -777,6 +777,7 @@ def search_cohort_page(cohort_name: str) -> None:
                         selected_file["file_path"],
                         separator="\t",
                         infer_schema_length=100,
+                        schema_overrides={"sex": pl.Utf8},
                     )
 
                     # Apply locus filter if provided
