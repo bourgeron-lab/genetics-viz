@@ -1,5 +1,6 @@
 """Search page for cohort-wide variant search."""
 
+import asyncio
 import csv
 import re
 from pathlib import Path
@@ -10,28 +11,48 @@ import yaml
 from nicegui import app as nicegui_app
 from nicegui import context, ui
 
+from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
 )
 from genetics_viz.components.variant_dialog import show_variant_dialog
+from genetics_viz.pages.cohort.components.wombat_tab import (
+    VIEW_PRESETS,
+    select_preset_for_config,
+)
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.score_colors import get_score_color
 
 # Same table slot as wombat_tab
 SEARCH_TABLE_SLOT = r"""
     <q-tr :props="props">
         <q-td key="actions" :props="props">
-            <q-btn 
-                flat 
-                dense 
-                size="sm" 
-                icon="visibility" 
-                color="blue"
-                @click="$parent.$emit('view_variant', props.row)"
-            >
-                <q-tooltip>View in IGV</q-tooltip>
-            </q-btn>
+            <div style="display: flex; align-items: center; gap: 4px;">
+                <q-btn
+                    flat
+                    dense
+                    size="sm"
+                    icon="visibility"
+                    color="blue"
+                    @click="$parent.$emit('view_variant', props.row)"
+                >
+                    <q-tooltip>View in IGV</q-tooltip>
+                </q-btn>
+                <q-badge
+                    v-if="props.row.n_grouped && props.row.n_grouped > 1"
+                    :label="props.row.n_grouped.toString()"
+                    color="orange"
+                    style="font-size: 11px;"
+                >
+                    <q-tooltip>
+                        {{ props.row.n_grouped }} transcripts collapsed
+                        <span v-if="props.row.VEP_SYMBOL"> for genes: {{ props.row.VEP_SYMBOL }}</span>
+                    </q-tooltip>
+                </q-badge>
+            </div>
         </q-td>
         <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
             <template v-if="col.name === 'Validation'">
@@ -55,7 +76,7 @@ SEARCH_TABLE_SLOT = r"""
             </template>
             <template v-else-if="col.name === 'VEP_Consequence'">
                 <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ConsequenceBadges || [])" :key="idx" 
+                    <q-badge v-for="(badge, idx) in (props.row.ConsequenceBadges || [])" :key="idx"
                              :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
                         {{ badge.label }}
                     </q-badge>
@@ -63,14 +84,46 @@ SEARCH_TABLE_SLOT = r"""
             </template>
             <template v-else-if="col.name === 'VEP_CLIN_SIG'">
                 <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ClinVarBadges || [])" :key="idx" 
+                    <q-badge v-for="(badge, idx) in (props.row.ClinVarBadges || [])" :key="idx"
                              :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
                         {{ badge.label }}
                     </q-badge>
                 </div>
             </template>
+            <template v-else-if="col.name === 'VEP_SYMBOL'">
+                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                    <q-badge v-for="(badge, idx) in (props.row.GeneBadges || [])" :key="idx"
+                             :label="badge.label"
+                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
+                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
+                    </q-badge>
+                </div>
+            </template>
+            <template v-else-if="col.name === 'VEP_Gene'">
+                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+                    <q-badge v-for="(badge, idx) in (props.row.VEP_Gene_badges || [])" :key="idx"
+                             :label="badge.label"
+                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
+                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
+                    </q-badge>
+                </div>
+            </template>
+            <template v-else-if="col.name === 'FID'">
+                <a v-if="col.value" :href="'/cohort/' + props.row._cohort_name + '/family/' + col.value" style="color: #2563eb; text-decoration: underline; cursor: pointer;">
+                    {{ col.value }}
+                </a>
+                <span v-else>{{ col.value }}</span>
+            </template>
             <template v-else>
-                {{ col.value }}
+                <!-- Check for score badges dynamically -->
+                <div v-if="props.row[col.name + '_badge']" style="display: inline-block;">
+                    <q-badge
+                        :label="props.row[col.name + '_badge'].value"
+                        :style="'background-color: ' + props.row[col.name + '_badge'].color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
+                        <q-tooltip>{{ props.row[col.name + '_badge'].tooltip }}</q-tooltip>
+                    </q-badge>
+                </div>
+                <span v-else>{{ col.value }}</span>
             </template>
         </q-td>
     </q-tr>
@@ -301,6 +354,62 @@ def load_sample_to_family_map(pedigree_file: Path) -> Dict[str, str]:
     return sample_to_family
 
 
+def load_pedigree_data(pedigree_file: Path) -> Dict[str, Dict[str, str]]:
+    """Load full pedigree data from pedigree file.
+
+    Returns dict mapping sample ID to pedigree info (FID, Phenotype, etc.)
+    """
+    pedigree_data = {}
+
+    if not pedigree_file.exists():
+        return pedigree_data
+
+    with open(pedigree_file, "r") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        # Handle case where there's no header
+        if reader.fieldnames and not reader.fieldnames[0].lower().startswith("fid"):
+            f.seek(0)
+            lines = f.readlines()
+            for line in lines:
+                parts = line.strip().split("\t")
+                if len(parts) >= 6:
+                    fid, iid, phenotype = parts[0], parts[1], parts[5]
+                    pedigree_data[iid] = {
+                        "FID": fid,
+                        "Phenotype": phenotype,
+                    }
+        elif reader.fieldnames:
+            # Map column names (case-insensitive)
+            fieldnames_lower = {fn.lower(): fn for fn in reader.fieldnames}
+            fid_col = None
+            iid_col = None
+            phenotype_col = None
+
+            for possible in ["fid", "family_id", "familyid", "family"]:
+                if possible in fieldnames_lower:
+                    fid_col = fieldnames_lower[possible]
+                    break
+
+            for possible in ["iid", "individual_id", "sample_id", "sample"]:
+                if possible in fieldnames_lower:
+                    iid_col = fieldnames_lower[possible]
+                    break
+
+            for possible in ["phenotype", "pheno", "status", "affected"]:
+                if possible in fieldnames_lower:
+                    phenotype_col = fieldnames_lower[possible]
+                    break
+
+            if fid_col and iid_col:
+                for row in reader:
+                    pedigree_data[row[iid_col]] = {
+                        "FID": row[fid_col],
+                        "Phenotype": row.get(phenotype_col, "") if phenotype_col else "",
+                    }
+
+    return pedigree_data
+
+
 @ui.page("/search/{cohort_name}")
 def search_cohort_page(cohort_name: str) -> None:
     """Search page for cohort-wide variant search."""
@@ -358,11 +467,12 @@ def search_cohort_page(cohort_name: str) -> None:
                 ).classes("text-gray-500 text-lg italic")
                 return
 
-            # Load pedigree for sample->family mapping
+            # Load pedigree data for family and phenotype info
             pedigree_file = (
                 store.data_dir / "cohorts" / cohort_name / f"{cohort_name}.pedigree.tsv"
             )
             sample_to_family = load_sample_to_family_map(pedigree_file)
+            pedigree_data = load_pedigree_data(pedigree_file)
 
             # Load genesets from params/genesets
             genesets_dir = store.data_dir / "params" / "genesets"
@@ -384,6 +494,16 @@ def search_cohort_page(cohort_name: str) -> None:
             # State for selected genesets and impacts
             selected_genesets: Dict[str, List[str]] = {"value": []}
             selected_impacts_search: Dict[str, List[str]] = {"value": []}
+
+            # Validation filter state (all statuses selected by default)
+            selected_validations: Dict[str, List[str]] = {
+                "value": ["present", "absent", "uncertain", "conflicting", "TODO"]
+            }
+
+            # Exclude filters state
+            filter_exclude_lcr: Dict[str, bool] = {"value": True}
+            filter_exclude_gnomad: Dict[str, bool] = {"value": True}
+            filter_exclude_gnomad_wgs: Dict[str, bool] = {"value": False}
 
             # Button references for visual indicators
             geneset_button_ref: Dict[str, Any] = {"button": None}
@@ -407,7 +527,7 @@ def search_cohort_page(cohort_name: str) -> None:
                         .classes("w-64")
                     )
 
-                    # Locus input
+                    # Locus input (Enter key handler set later after function definition)
                     locus_input = (
                         ui.input(
                             label="Locus (optional)",
@@ -417,8 +537,6 @@ def search_cohort_page(cohort_name: str) -> None:
                         .props("outlined")
                         .classes("flex-grow")
                     )
-                    # Add Enter key handler
-                    locus_input.on("keydown.enter", lambda: perform_search())
 
                     # Geneset filter menu
                     if available_genesets:
@@ -711,12 +829,45 @@ def search_cohort_page(cohort_name: str) -> None:
                                         VEP_CONSEQUENCES.keys()
                                     )
 
-                    # Search button
-                    ui.button(
+                    # Validation filter
+                    create_validation_filter_menu(
+                        all_statuses=["present", "absent", "uncertain", "conflicting", "TODO"],
+                        filter_state=selected_validations,
+                        on_change=lambda: None,  # No action needed during search parameter setup
+                        label="Validation",
+                        button_classes="",
+                        button_size="h-14",
+                    )
+
+                    # Search button (handler set later after function definition)
+                    search_button = ui.button(
                         "Search",
                         icon="search",
-                        on_click=lambda: perform_search(),
                     ).props("color=blue").classes("h-14")
+
+                # Exclude filters row
+                with ui.row().classes("items-center gap-4 w-full flex-wrap mt-2"):
+                    ui.checkbox(
+                        "Exclude LCR",
+                        value=filter_exclude_lcr["value"],
+                        on_change=lambda e: filter_exclude_lcr.update(
+                            {"value": e.value}
+                        ),
+                    )
+                    ui.checkbox(
+                        "Exclude gnomAD filtered",
+                        value=filter_exclude_gnomad["value"],
+                        on_change=lambda e: filter_exclude_gnomad.update(
+                            {"value": e.value}
+                        ),
+                    )
+                    ui.checkbox(
+                        "Exclude gnomAD WGS",
+                        value=filter_exclude_gnomad_wgs["value"],
+                        on_change=lambda e: filter_exclude_gnomad_wgs.update(
+                            {"value": e.value}
+                        ),
+                    )
 
                 # Help text
                 with ui.expansion("Query Examples", icon="help").classes("mt-2"):
@@ -735,15 +886,19 @@ def search_cohort_page(cohort_name: str) -> None:
             # Capture client context for callbacks
             page_client = context.client
 
-            def perform_search():
+            async def perform_search():
                 """Execute the search and display results."""
                 results_container.clear()
 
-                # Show spinner while loading
+                # Show progress indicator while loading
                 with results_container:
-                    with ui.row().classes("items-center gap-4 justify-center py-8"):
-                        ui.spinner(size="lg", color="blue")
-                        ui.label("Searching...").classes("text-lg text-gray-600")
+                    with ui.column().classes("items-center gap-4 justify-center py-8 w-full"):
+                        progress = ui.circular_progress(
+                            min=0, max=100, value=0, size="xl", color="blue"
+                        )
+                        status_label = ui.label("Starting search...").classes(
+                            "text-lg text-gray-600"
+                        )
 
                 selected_source = source_select.value
                 locus_query = locus_input.value
@@ -767,18 +922,62 @@ def search_cohort_page(cohort_name: str) -> None:
                         break
 
                 if not selected_file:
+                    results_container.clear()
                     with results_container:
                         ui.label("Selected source not found").classes("text-red-500")
                     return
 
+                # Update progress: validation complete
+                progress.set_value(10)
+                status_label.set_text("Loading data...")
+                await asyncio.sleep(0)
+
                 try:
-                    # Load dataframe
-                    df = pl.read_csv(
-                        selected_file["file_path"],
-                        separator="\t",
-                        infer_schema_length=100,
-                        schema_overrides={"sex": pl.Utf8},
-                    )
+                    # Define function to load and process dataframe (runs in background thread)
+                    def load_and_group_data():
+                        # Load dataframe
+                        df = pl.read_csv(
+                            selected_file["file_path"],
+                            separator="\t",
+                            infer_schema_length=100,
+                            schema_overrides={"sex": pl.Utf8},
+                            null_values=[".", ""],
+                        )
+
+                        # Group by variant and sample, aggregating other columns
+                        grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
+
+                        # Identify columns to aggregate
+                        agg_cols = [col for col in df.columns if col not in grouping_cols]
+
+                        # Create aggregation expressions
+                        agg_exprs = [pl.len().alias("n_grouped")]  # Count rows grouped
+                        for col in agg_cols:
+                            # Aggregate as comma-separated unique values, excluding empty/null/'.'
+                            agg_exprs.append(
+                                pl.col(col)
+                                .cast(pl.Utf8)
+                                .filter(
+                                    (pl.col(col).is_not_null())
+                                    & (pl.col(col).cast(pl.Utf8) != "")
+                                    & (pl.col(col).cast(pl.Utf8) != ".")
+                                )
+                                .unique()
+                                .str.join(",")
+                                .alias(col)
+                            )
+
+                        # Group and aggregate
+                        df = df.group_by(grouping_cols, maintain_order=True).agg(agg_exprs)
+                        return df
+
+                    # Run in background thread to avoid blocking
+                    df = await asyncio.to_thread(load_and_group_data)
+
+                    # Update progress: CSV loaded and grouped
+                    progress.set_value(35)
+                    status_label.set_text("Filtering data...")
+                    await asyncio.sleep(0)
 
                     # Apply locus filter if provided
                     if locus_query and locus_query.strip():
@@ -813,6 +1012,11 @@ def search_cohort_page(cohort_name: str) -> None:
                             )
                         )
 
+                    # Update progress: filtering complete
+                    progress.set_value(60)
+                    status_label.set_text("Processing variants...")
+                    await asyncio.sleep(0)
+
                     if len(filtered_df) == 0:
                         results_container.clear()
                         with results_container:
@@ -828,6 +1032,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     validation_file = store.data_dir / "validations" / "snvs.tsv"
                     validation_map = load_validation_map(validation_file, None)
 
+                    # Yield to event loop before badge processing
+                    await asyncio.sleep(0)
+
                     # Track unknown terms for warnings
                     unknown_consequences = set()
                     unknown_clinvar_terms = set()
@@ -842,38 +1049,58 @@ def search_cohort_page(cohort_name: str) -> None:
                         variant_key = f"{chrom}:{pos}:{ref}:{alt}"
                         row["Variant"] = variant_key
 
-                        # Add FID from sample mapping
-                        row["FID"] = sample_to_family.get(sample_id, "")
+                        # Add cohort name for FID link generation
+                        row["_cohort_name"] = cohort_name
 
-                        # Add consequence badges
+                        # Add FID and Phenotype from pedigree data
+                        ped_info = pedigree_data.get(sample_id, {})
+                        row["FID"] = ped_info.get("FID", sample_to_family.get(sample_id, ""))
+                        row["Phenotype"] = ped_info.get("Phenotype", "")
+
+                        # Add consequence badges (from aggregated comma-separated string)
                         consequence_str = row.get("VEP_Consequence", "")
                         if consequence_str:
-                            consequences = [
-                                c.strip() for c in str(consequence_str).split("&")
-                            ]
+                            # Split by both '&' and ',' to handle aggregated values
+                            consequences = []
+                            for part in str(consequence_str).split(","):
+                                for cons in part.split("&"):
+                                    cons = cons.strip()
+                                    if cons:
+                                        consequences.append(cons)
+
                             row["ConsequenceBadges"] = []
+                            seen_badges = set()  # Track unique (label, color) pairs
                             for cons in consequences:
                                 # Track unknown consequences
                                 if cons and cons not in VEP_CONSEQUENCES:
                                     unknown_consequences.add(cons)
-                                row["ConsequenceBadges"].append(
-                                    {
-                                        "label": format_consequence_display(cons),
-                                        "color": get_consequence_color(cons),
-                                    }
-                                )
+                                label = format_consequence_display(cons)
+                                color = get_consequence_color(cons)
+                                badge_key = (label, color)
+                                if badge_key not in seen_badges:
+                                    seen_badges.add(badge_key)
+                                    row["ConsequenceBadges"].append(
+                                        {
+                                            "label": label,
+                                            "color": color,
+                                        }
+                                    )
                         else:
                             row["ConsequenceBadges"] = []
 
-                        # Add ClinVar badges
+                        # Add ClinVar badges (from aggregated comma-separated string)
                         clinvar_str = row.get("VEP_CLIN_SIG", "")
                         if clinvar_str:
-                            clinvar_sigs = [
-                                c.strip()
-                                for c in str(clinvar_str).split("&")
-                                if c.strip() and c.strip() != "."
-                            ]
+                            # Split by both '&' and ',' to handle aggregated values
+                            clinvar_sigs = []
+                            for part in str(clinvar_str).split(","):
+                                for sig in part.split("&"):
+                                    sig = sig.strip()
+                                    if sig and sig != ".":
+                                        clinvar_sigs.append(sig)
+
                             row["ClinVarBadges"] = []
+                            seen_badges = set()  # Track unique (label, color) pairs
                             for sig in clinvar_sigs:
                                 # Track unknown ClinVar terms (case-insensitive check)
                                 sig_lower = sig.lower()
@@ -883,18 +1110,90 @@ def search_cohort_page(cohort_name: str) -> None:
                                 )
                                 if sig and not is_known:
                                     unknown_clinvar_terms.add(sig)
-                                row["ClinVarBadges"].append(
+                                label = format_clinvar_display(sig)
+                                color = get_clinvar_color(sig)
+                                badge_key = (label, color)
+                                if badge_key not in seen_badges:
+                                    seen_badges.add(badge_key)
+                                    row["ClinVarBadges"].append(
+                                        {
+                                            "label": label,
+                                            "color": color,
+                                        }
+                                    )
+                        else:
+                            row["ClinVarBadges"] = []
+
+                        # Add gene badges with color coding based on genesets
+                        gene_scorer = get_gene_scorer()
+
+                        # Process VEP_SYMBOL
+                        symbol_str = row.get("VEP_SYMBOL", "")
+                        if symbol_str:
+                            symbols = [
+                                s.strip()
+                                for s in str(symbol_str).split(",")
+                                if s.strip()
+                            ]
+                            row["GeneBadges"] = []
+                            for symbol in symbols:
+                                color = gene_scorer.get_gene_color(symbol)
+                                tooltip = gene_scorer.get_gene_tooltip(symbol)
+                                row["GeneBadges"].append(
                                     {
-                                        "label": format_clinvar_display(sig),
-                                        "color": get_clinvar_color(sig),
+                                        "label": symbol,
+                                        "color": color,
+                                        "tooltip": tooltip,
                                     }
                                 )
                         else:
-                            row["ClinVarBadges"] = []
+                            row["GeneBadges"] = []
+
+                        # Process VEP_Gene (ENSG IDs)
+                        gene_str = row.get("VEP_Gene", "")
+                        if gene_str:
+                            genes = [
+                                g.strip() for g in str(gene_str).split(",") if g.strip()
+                            ]
+                            row["VEP_Gene_badges"] = []
+                            for gene in genes:
+                                color = gene_scorer.get_gene_color(gene)
+                                tooltip = gene_scorer.get_gene_tooltip(gene)
+                                row["VEP_Gene_badges"].append(
+                                    {
+                                        "label": gene,
+                                        "color": color,
+                                        "tooltip": tooltip,
+                                    }
+                                )
+                        else:
+                            row["VEP_Gene_badges"] = []
 
                         add_validation_status_to_row(
                             row, validation_map, variant_key, sample_id
                         )
+
+                        # Add continuous score badges
+                        # Iterate over row columns and check if they have score configs
+                        # Use list() to create a copy of items to avoid "dictionary changed size during iteration" error
+                        for col_name, value_str in list(row.items()):
+                            if value_str and value_str != ".":
+                                try:
+                                    value = float(value_str)
+                                    badge_info = get_score_color(col_name, value)
+                                    if badge_info:
+                                        row[f"{col_name}_badge"] = {
+                                            "value": f"{value:.3f}",
+                                            "color": badge_info["color"],
+                                            "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})"
+                                        }
+                                except (ValueError, TypeError):
+                                    pass  # Skip invalid values or non-numeric columns
+
+                    # Update progress: badge processing complete
+                    progress.set_value(85)
+                    status_label.set_text("Rendering table...")
+                    await asyncio.sleep(0)
 
                     # Display warnings for unknown terms
                     if unknown_consequences:
@@ -922,6 +1221,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     # Ensure FID column is in the list
                     if "FID" not in all_columns:
                         all_columns.append("FID")
+                    # Ensure Phenotype column is in the list
+                    if "Phenotype" not in all_columns:
+                        all_columns.append("Phenotype")
                     # Ensure Validation column is in the list
                     if "Validation" not in all_columns:
                         all_columns.append("Validation")
@@ -934,14 +1236,24 @@ def search_cohort_page(cohort_name: str) -> None:
                         "VEP_CLIN_SIG",
                         "fafmax_faf95_max_genomes",
                         "FID",
+                        "Phenotype",
                         "sample",
                         "sample_gt",
                         "father_gt",
                         "mother_gt",
                         "Validation",
                     ]
+                    # Auto-select preset based on wombat config name
+                    wombat_config = selected_file["wombat_config"]
+                    initial_preset = select_preset_for_config(wombat_config, VIEW_PRESETS)
+                    selected_preset = {"name": initial_preset["name"]}
+
+                    # Override with preset columns if available
+                    preset_columns = initial_preset.get("columns", [])
+                    initial_selected = [col for col in preset_columns if col in all_columns]
+
                     selected_cols = {
-                        "value": [col for col in default_visible if col in all_columns]
+                        "value": initial_selected if initial_selected else [col for col in default_visible if col in all_columns]
                     }
 
                     # Apply impact filter if some impacts are deselected
@@ -964,7 +1276,12 @@ def search_cohort_page(cohort_name: str) -> None:
                                     filtered_rows.append(row)
                         all_rows = filtered_rows
 
-                    # Clear spinner and show results
+                    # Update progress: ready to display
+                    progress.set_value(100)
+                    status_label.set_text("Complete!")
+                    await asyncio.sleep(0)
+
+                    # Clear progress indicator and show results
                     results_container.clear()
                     with results_container:
 
@@ -972,6 +1289,41 @@ def search_cohort_page(cohort_name: str) -> None:
                         def render_results_table():
                             # No additional filtering - use all_rows as is
                             rows = all_rows.copy()
+
+                            # Apply exclude filters
+                            if filter_exclude_lcr["value"]:
+                                rows = [
+                                    r
+                                    for r in rows
+                                    if not (
+                                        r.get("LCR")
+                                        and "true" in str(r.get("LCR", "")).lower()
+                                    )
+                                ]
+
+                            if filter_exclude_gnomad["value"]:
+                                rows = [
+                                    r for r in rows if not r.get("genomes_filters")
+                                ]
+
+                            if filter_exclude_gnomad_wgs["value"]:
+                                rows = [
+                                    r
+                                    for r in rows
+                                    if not r.get("fafmax_faf95_max_genomes")
+                                ]
+
+                            # Apply validation filter
+                            if selected_validations["value"]:
+                                rows = [
+                                    row
+                                    for row in rows
+                                    if row.get("Validation", "") in selected_validations["value"]
+                                    or (
+                                        "TODO" in selected_validations["value"]
+                                        and not row.get("Validation")
+                                    )
+                                ]
 
                             # Prepare columns
                             visible_cols = selected_cols["value"]
@@ -994,15 +1346,24 @@ def search_cohort_page(cohort_name: str) -> None:
                                 )
                                 return cols
 
-                            with ui.row().classes("items-center gap-4 mt-4 mb-2"):
+                            with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
                                 ui.label(f"Results ({len(rows)} rows)").classes(
                                     "text-lg font-semibold text-blue-700"
                                 )
 
-                                # Column selector
+                                # Preset dropdown
+                                preset_select = ui.select(
+                                    options={p["name"]: p["name"] for p in VIEW_PRESETS},
+                                    value=selected_preset["name"],
+                                    label="Preset"
+                                ).classes("w-48")
+
+                                ui.space()  # Push column selector to the right
+
+                                # Compact column selector button
                                 with ui.button(
-                                    "Select Columns", icon="view_column"
-                                ).props("outline color=blue"):
+                                    "+ column", icon="view_column"
+                                ).props("outline color=blue size=sm"):
                                     with ui.menu():
                                         ui.label("Show/Hide Columns:").classes(
                                             "px-4 py-2 font-semibold text-sm"
@@ -1056,6 +1417,13 @@ def search_cohort_page(cohort_name: str) -> None:
                                                     selected_cols["value"].remove(
                                                         col_name
                                                     )
+
+                                                # Reorder to match all_columns order
+                                                selected_cols["value"] = [
+                                                    col for col in all_columns
+                                                    if col in selected_cols["value"]
+                                                ]
+
                                                 render_results_table.refresh()
 
                                             for col in all_columns:
@@ -1067,6 +1435,24 @@ def search_cohort_page(cohort_name: str) -> None:
                                                         c, e.value
                                                     ),
                                                 ).classes("text-sm")
+
+                            # Preset change handler
+                            def on_preset_change(e):
+                                """Handle preset selection change."""
+                                preset_name = e.value
+                                preset = next((p for p in VIEW_PRESETS if p["name"] == preset_name), None)
+                                if not preset:
+                                    return
+
+                                # Filter columns to only those available in the data
+                                available = [col for col in preset.get("columns", []) if col in all_columns]
+
+                                selected_cols["value"] = available
+                                selected_preset["name"] = preset_name
+                                render_results_table.refresh()
+
+                            # Connect preset change handler
+                            preset_select.on_value_change(on_preset_change)
 
                             # Create table
                             results_table = (
@@ -1168,6 +1554,10 @@ def search_cohort_page(cohort_name: str) -> None:
                         ui.label(traceback.format_exc()).classes(
                             "text-red-500 text-xs font-mono whitespace-pre"
                         )
+
+            # Set up handlers after function definition
+            search_button.on_click(perform_search)
+            locus_input.on("keydown.enter", perform_search)
 
     except Exception as e:
         import traceback

@@ -1,0 +1,132 @@
+# Continuous score gradient configuration
+# Each score has 4 threshold points defining a color gradient
+# Colors interpolate between adjacent points
+
+scores:
+  mpc: # Case-insensitive matching
+    log: false # Set to true to apply log10 transformation
+    points:
+      - threshold: 0.0
+        color: "#4caf50" # Benign (green)
+        label: "Benign"
+      - threshold: 0.5
+        color: "#ffa726" # Uncertain low (orange)
+        label: "Uncertain"
+      - threshold: 1.5
+        color: "#ff5722" # Uncertain high (deep orange)
+        label: "Uncertain"
+      - threshold: 2.6
+        color: "#d32f2f" # Pathogenic (red)
+        label: "Pathogenic"
+
+  revel:
+    log: false
+    points:
+      - threshold: 0.0
+        color: "#4caf50" # Benign
+        label: "Benign"
+      - threshold: 0.25
+        color: "#ffa726" # Uncertain low
+        label: "Uncertain"
+      - threshold: 0.773
+        color: "#ff5722" # Uncertain high
+        label: "Likely Pathogenic"
+      - threshold: 0.932
+        color: "#d32f2f" # Pathogenic
+        label: "Pathogenic"
+
+  mistic_score:
+    log: false
+    points:
+      - threshold: 0.0
+        color: "#4caf50" # Benign
+        label: "Benign"
+      - threshold: 0.25
+        color: "#ffa726" # Uncertain low
+        label: "Uncertain"
+      - threshold: 0.773
+        color: "#ff5722" # Uncertain high
+        label: "Likely Pathogenic"
+      - threshold: 0.932
+        color: "#d32f2f" # Pathogenic
+        label: "Pathogenic"
+
+  am_pathogenicity:
+    log: false
+    points:
+      - threshold: 0.0
+        color: "#4caf50" # Benign
+        label: "Benign"
+      - threshold: 0.3
+        color: "#ffa726" # Uncertain
+        label: "Uncertain"
+      - threshold: 0.56
+        color: "#ff5722" # Likely pathogenic
+        label: "Likely Pathogenic"
+      - threshold: 1.0
+        color: "#d32f2f" # Pathogenic
+        label: "Pathogenic"
+
+  cadd_v1.7:
+    log: false
+    points:
+      - threshold: 0.0
+        color: "#4caf50" # Benign
+        label: "Benign"
+      - threshold: 15.0
+        color: "#ffa726" # Uncertain
+        label: "Uncertain"
+      - threshold: 28.3
+        color: "#ff5722" # Likely pathogenic
+        label: "Likely Pathogenic"
+      - threshold: 40.0
+        color: "#d32f2f" # Pathogenic
+        label: "Pathogenic"
+
+  popeve:
+    log: false
+    points:
+      - threshold: -5.056
+        color: "#d32f2f" # Pathogenic
+        label: "Severe"
+      - threshold: -4.617
+        color: "#ff5722" # Likely pathogenic
+        label: "Uncertain"
+      - threshold: 0
+        color: "#ffa726" # Uncertain
+        label: "Benign"
+      - threshold: 5.0
+        color: "#4caf50" # Benign
+        label: "Benign"
+
+  spliceai_maxds:
+    log: false
+    points:
+      - threshold: 0
+        color: "#4caf50" # Low
+        label: "Low"
+      - threshold: 0.2
+        color: "#ffa726" # Uncertain
+        label: "Uncertain"
+      - threshold: 0.8
+        color: "#ff5722" # Strong
+        label: "Strong"
+      - threshold: 1
+        color: "#d32f2f" # Strong
+        label: "Strong"
+
+  mnv_proba:
+    log: false
+    points:
+      - threshold: 0
+        color: "#4caf50" # Low
+        label: "Low"
+      - threshold: 0.2
+        color: "#ffa726" # Uncertain
+        label: "Uncertain"
+      - threshold: 0.8
+        color: "#ff5722" # Strong
+        label: "Strong"
+      - threshold: 1
+        color: "#d32f2f" # Strong
+        label: "Strong"

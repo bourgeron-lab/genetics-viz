@@ -3,6 +3,20 @@
 from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.score_colors import reload_score_configs
+from genetics_viz.utils.gene_scoring import reload_gene_scoring
+from genetics_viz.pages.cohort.components.wombat_tab import reload_wombat_configs
+
+
+def reload_all_configs() -> None:
+    """Reload all YAML configuration files."""
+    try:
+        reload_score_configs()
+        reload_gene_scoring()
+        reload_wombat_configs()
+        ui.notify("✅ Configuration files reloaded successfully", type="positive")
+    except Exception as e:
+        ui.notify(f"❌ Error reloading configs: {e}", type="negative")
 
 
 def create_header() -> None:
@@ -84,9 +98,16 @@ def create_header() -> None:
                         except RuntimeError:
                             ui.menu_item("Loading...", auto_close=False)
 
-        # Data directory indicator
-        try:
-            store = get_data_store()
-            ui.label(f"📁 {store.data_dir.name}").classes("text-sm opacity-75")
-        except RuntimeError:
-            pass
+        # Right side - data directory indicator and refresh button
+        with ui.row().classes("items-center gap-2"):
+            try:
+                store = get_data_store()
+                ui.label(f"📁 {store.data_dir.name}").classes("text-sm opacity-75")
+            except RuntimeError:
+                pass
+
+            # Refresh configs button
+            ui.button(
+                icon="refresh",
+                on_click=reload_all_configs
+            ).props("flat color=white size=sm round").tooltip("Reload configuration files")

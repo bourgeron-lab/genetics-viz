@@ -127,6 +127,10 @@ class GeneScorer:
 
         return f"{gene_identifier}: {', '.join(geneset_names)}"
 
+    def reload(self):
+        """Reload gene scoring data from config files."""
+        self._load_data()
+
 
 # Global instance
 _gene_scorer = None
@@ -138,3 +142,9 @@ def get_gene_scorer() -> GeneScorer:
     if _gene_scorer is None:
         _gene_scorer = GeneScorer()
     return _gene_scorer
+
+
+def reload_gene_scoring():
+    """Reload gene scoring configuration."""
+    scorer = get_gene_scorer()
+    scorer.reload()

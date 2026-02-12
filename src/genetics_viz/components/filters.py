@@ -11,6 +11,9 @@ def create_validation_filter_menu(
     all_statuses: List[str],
     filter_state: Dict[str, List[str]],
     on_change: Callable[[], Any],
+    label: str = "Filter by Validation",
+    button_classes: str = "mb-4",
+    button_size: str = "",
 ) -> Dict[str, Any]:
     """Create a validation filter button with dropdown menu.
 
@@ -18,20 +21,26 @@ def create_validation_filter_menu(
         all_statuses: List of all possible validation statuses
         filter_state: Dictionary with "value" key containing selected statuses
         on_change: Callback function to call when filter changes
+        label: Button label text
+        button_classes: CSS classes for the button
+        button_size: Button size (e.g., "h-14")
 
     Returns:
         Dictionary mapping status names to their checkbox elements
     """
     validation_checkboxes: Dict[str, Any] = {}
 
-    with (
-        ui.button(
-            "Filter by Validation",
-            icon="filter_list",
-        )
-        .props("outline color=blue")
-        .classes("mb-4")
-    ):
+    button = ui.button(
+        label,
+        icon="filter_list",
+    ).props("outline color=blue")
+
+    if button_classes:
+        button.classes(button_classes)
+    if button_size:
+        button.classes(button_size)
+
+    with button:
         with ui.menu():
             ui.label("Select Validation Statuses:").classes(
                 "px-4 py-2 font-semibold text-sm"

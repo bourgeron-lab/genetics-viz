@@ -936,6 +936,13 @@ def render_wisecondorx_subtab(
                         selected_cols["value"].append(col_name)
                     elif not is_checked and col_name in selected_cols["value"]:
                         selected_cols["value"].remove(col_name)
+
+                    # Reorder to match all_columns order
+                    selected_cols["value"] = [
+                        col for col in all_columns
+                        if col in selected_cols["value"]
+                    ]
+
                     update_table()
 
                 def update_table():
