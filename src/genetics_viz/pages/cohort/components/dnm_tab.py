@@ -7,53 +7,17 @@ from typing import Any, Callable, Dict, List, Set
 import polars as pl
 from nicegui import ui
 
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
 )
 from genetics_viz.components.variant_dialog import show_variant_dialog
-
-# Table slot template for DNM data with view button and validation icons
-DNM_TABLE_SLOT = r"""
-    <q-tr :props="props">
-        <q-td key="actions" :props="props">
-            <q-btn 
-                flat 
-                dense 
-                size="sm" 
-                icon="visibility" 
-                color="blue"
-                @click="$parent.$emit('view_variant', props.row)"
-            >
-                <q-tooltip>View in IGV</q-tooltip>
-            </q-btn>
-        </q-td>
-        <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-            <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present' || col.value === 'in phase MNV'" style="display: flex; align-items: center; gap: 4px;">
-                    <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as {{ col.value }}</q-tooltip>
-                    </q-icon>
-                    <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
-                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
-                    <span v-if="col.value === 'in phase MNV'" style="font-size: 0.75em; color: #666;">MNV</span>
-                </span>
-                <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
-                    <q-tooltip>Validated as absent</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
-                    <q-tooltip>Validation uncertain or different</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
-                    <q-tooltip>Conflicting validations</q-tooltip>
-                </q-icon>
-            </template>
-            <template v-else>
-                {{ col.value }}
-            </template>
-        </q-td>
-    </q-tr>
-"""
+from genetics_viz.utils.column_names import (
+    get_column_group,
+    get_display_label,
+    reorder_columns_by_group,
+)
 
 # LoF and coding variant categories
 LOF_BASE_NAMES: Set[str] = {
@@ -87,22 +51,6 @@ def impact_matches_category(impact: str, base_names: Set[str]) -> bool:
             return True
     return False
 
-
-def get_dnm_display_label(col: str) -> str:
-    """Get display label for DNM column."""
-    if col == "chr:pos:ref:alt":
-        return "Variant"
-    elif col.startswith("VEP_"):
-        if col == "VEP_CLIN_SIG":
-            return "ClinVar"
-        return col[4:]
-    elif col == "fafmax_faf95_max_genomes":
-        return "gnomAD 4.1 WGS"
-    elif col == "nhomalt_genomes":
-        return "gnomAD 4.1 nhomalt WGS"
-    elif col == "genomes_filters":
-        return "gnomAD 4.1 WGS filter"
-    return col
 
 
 def render_dnm_tab(
@@ -212,7 +160,7 @@ def render_dnm_tab(
             add_validation_status_to_row(row, validation_map, variant_key, sample_id)
 
         # All available columns
-        all_columns = (
+        all_columns = reorder_columns_by_group(
             ["chr:pos:ref:alt"]
             + [col for col in df.columns if col != "chr:pos:ref:alt"]
             + ["Impact_priority", "Validation"]
@@ -409,25 +357,26 @@ def render_dnm_tab(
                 def make_columns(visible_cols):
                     cols = [
                         {
-                            "name": "actions",
-                            "label": "",
-                            "field": "actions",
+                            "id": "actions",
+                            "header": "",
+                            "cellType": "action",
+                            "actionName": "view_variant",
+                            "actionIcon": "visibility",
+                            "actionColor": "#1976d2",
+                            "actionTooltip": "View in IGV",
                             "sortable": False,
-                            "align": "center",
                         }
                     ]
-                    cols.extend(
-                        [
-                            {
-                                "name": col,
-                                "label": get_dnm_display_label(col),
-                                "field": col,
-                                "sortable": True,
-                                "align": "left",
-                            }
-                            for col in visible_cols
-                        ]
-                    )
+                    for col in visible_cols:
+                        col_def = {
+                            "id": col,
+                            "header": get_display_label(col),
+                            "group": get_column_group(col),
+                            "sortable": True,
+                        }
+                        if col == "Validation":
+                            col_def["cellType"] = "validation"
+                        cols.append(col_def)
                     return cols
 
                 with ui.row().classes("items-center gap-4 mt-4 mb-2"):
@@ -478,59 +427,52 @@ def render_dnm_tab(
                                         ),
                                     ).classes("text-sm")
 
-                with ui.card().classes("w-full"):
-                    dnm_table = (
-                        ui.table(
-                            columns=make_columns(selected_cols["value"]),
-                            rows=rows,
-                            pagination={"rowsPerPage": 10},
-                        )
-                        .classes("w-full")
-                        .props("dense flat")
-                    )
+                def on_view_dnm_variant(e):
+                    row_data = e.get("row", {})
+                    variant_key = row_data.get("chr:pos:ref:alt", "")
+                    parts = variant_key.split(":")
 
-                    dnm_table.add_slot("body", DNM_TABLE_SLOT)
+                    if len(parts) == 4:
+                        chrom, pos, ref, alt = parts
+                        sample_val = row_data.get("sample_id", "")
 
-                    def on_view_dnm_variant(e):
-                        row_data = e.args
-                        variant_key = row_data.get("chr:pos:ref:alt", "")
-                        parts = variant_key.split(":")
-
-                        if len(parts) == 4:
-                            chrom, pos, ref, alt = parts
-                            sample_val = row_data.get("sample_id", "")
-
-                            # Callback to update the Validation column in the table
-                            def on_save(validation_status: str):
-                                # Reload validation data from file
-                                validation_map = load_validation_map(
-                                    validation_file, family_id
-                                )
-                                # Re-add validation status to all rows
-                                for row in all_rows:
-                                    variant_key = row.get("chr:pos:ref:alt", "")
-                                    sample_id = row.get("sample_id", "")
-                                    add_validation_status_to_row(
-                                        row, validation_map, variant_key, sample_id
-                                    )
-                                # Refresh the table using the captured client context
-                                with page_client:
-                                    ui.timer(0.1, render_dnm_table.refresh, once=True)
-
-                            # Show dialog
-                            show_variant_dialog(
-                                cohort_name=cohort_name,
-                                family_id=family_id,
-                                chrom=chrom,
-                                pos=pos,
-                                ref=ref,
-                                alt=alt,
-                                sample=sample_val,
-                                variant_data=row_data,
-                                on_save_callback=on_save,
+                        # Callback to update the Validation column in the table
+                        def on_save(validation_status: str):
+                            # Reload validation data from file
+                            validation_map = load_validation_map(
+                                validation_file, family_id
                             )
+                            # Re-add validation status to all rows
+                            for row in all_rows:
+                                variant_key = row.get("chr:pos:ref:alt", "")
+                                sample_id = row.get("sample_id", "")
+                                add_validation_status_to_row(
+                                    row, validation_map, variant_key, sample_id
+                                )
+                            # Refresh the table using the captured client context
+                            with page_client:
+                                ui.timer(0.1, render_dnm_table.refresh, once=True)
 
-                    dnm_table.on("view_variant", on_view_dnm_variant)
+                        # Show dialog
+                        show_variant_dialog(
+                            cohort_name=cohort_name,
+                            family_id=family_id,
+                            chrom=chrom,
+                            pos=pos,
+                            ref=ref,
+                            alt=alt,
+                            sample=sample_val,
+                            variant_data=row_data,
+                            on_save_callback=on_save,
+                        )
+
+                with ui.card().classes("w-full"):
+                    DataTable(
+                        columns=make_columns(selected_cols["value"]),
+                        rows=rows,
+                        pagination={"rowsPerPage": 10},
+                        on_row_action=on_view_dnm_variant,
+                    )
 
                 def handle_col_change(col_name, is_checked):
                     if is_checked and col_name not in selected_cols["value"]:

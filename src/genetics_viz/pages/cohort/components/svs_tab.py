@@ -8,9 +8,15 @@ import yaml
 from nicegui import ui
 
 from genetics_viz.components.sv_dialog import show_sv_dialog
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
+)
+from genetics_viz.utils.column_names import (
+    get_column_group,
+    get_display_label,
+    reorder_columns_by_group,
 )
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 
@@ -29,136 +35,33 @@ def _load_wisecondorx_config():
 WISECONDORX_CONFIG = _load_wisecondorx_config()
 
 
-# Generate table slot template with config values
-def _generate_svs_table_slot():
-    """Generate SVS table slot with dynamic threshold values from config."""
+_GENE_BADGE_COLUMNS = {"genic_symbol", "genic_ensg", "exonic_symbol", "exonic_ensg", "VEP_Gene"}
+
+
+def _build_svs_color_thresholds(metric: str) -> list[dict]:
+    """Build color_scale threshold list for ratio or zscore columns."""
     robust_loss = WISECONDORX_CONFIG["robust_loss"]
     permissive_loss = WISECONDORX_CONFIG["permissive_loss"]
     robust_gain = WISECONDORX_CONFIG["robust_gain"]
     permissive_gain = WISECONDORX_CONFIG["permissive_gain"]
 
-    return f"""
-    <q-tr :props="props">
-        <q-td key="actions" :props="props">
-            <q-btn 
-                flat 
-                dense 
-                size="sm" 
-                icon="visibility" 
-                color="blue"
-                @click="$parent.$emit('view_sv', props.row)"
-            >
-                <q-tooltip>View in IGV</q-tooltip>
-            </q-btn>
-        </q-td>
-        <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-            <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present'" style="display: flex; align-items: center; gap: 4px;">
-                    <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as present</q-tooltip>
-                    </q-icon>
-                    <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
-                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
-                </span>
-                <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
-                    <q-tooltip>Validated as absent</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
-                    <q-tooltip>Validation uncertain or different</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
-                    <q-tooltip>Conflicting validations</q-tooltip>
-                </q-icon>
-            </template>
-            <template v-else-if="col.name === 'call'">
-                <q-badge 
-                    v-if="col.value === '{robust_loss["label"]}'"
-                    :label="col.value"
-                    style="background-color: {robust_loss["color"]}; color: white;"
-                />
-                <q-badge 
-                    v-else-if="col.value === '{permissive_loss["label"]}'"
-                    :label="col.value"
-                    style="background-color: {permissive_loss["color"]}; color: white;"
-                />
-                <q-badge 
-                    v-else-if="col.value === '{robust_gain["label"]}'"
-                    :label="col.value"
-                    style="background-color: {robust_gain["color"]}; color: white;"
-                />
-                <q-badge 
-                    v-else-if="col.value === '{permissive_gain["label"]}'"
-                    :label="col.value"
-                    style="background-color: {permissive_gain["color"]}; color: white;"
-                />
-                <span v-else class="text-grey-6">{{{{ col.value }}}}</span>
-            </template>
-            <template v-else-if="col.name === 'ratio'">
-                <span 
-                    :style="'color: ' + (parseFloat(col.value) <= {robust_loss["ratio_threshold"]} ? '{robust_loss["color"]}' : parseFloat(col.value) <= {permissive_loss["ratio_threshold"]} ? '{permissive_loss["color"]}' : parseFloat(col.value) >= {robust_gain["ratio_threshold"]} ? '{robust_gain["color"]}' : parseFloat(col.value) >= {permissive_gain["ratio_threshold"]} ? '{permissive_gain["color"]}' : 'inherit') + '; font-weight: ' + ((parseFloat(col.value) <= {robust_loss["ratio_threshold"]} || parseFloat(col.value) >= {robust_gain["ratio_threshold"]}) ? 'bold' : (parseFloat(col.value) <= {permissive_loss["ratio_threshold"]} || parseFloat(col.value) >= {permissive_gain["ratio_threshold"]}) ? '600' : 'normal')"
-                >
-                    {{{{ col.value }}}}
-                </span>
-            </template>
-            <template v-else-if="col.name === 'zscore'">
-                <span 
-                    :style="'color: ' + (parseFloat(col.value) <= {robust_loss["zscore_threshold"]} ? '{robust_loss["color"]}' : parseFloat(col.value) <= {permissive_loss["zscore_threshold"]} ? '{permissive_loss["color"]}' : parseFloat(col.value) >= {robust_gain["zscore_threshold"]} ? '{robust_gain["color"]}' : parseFloat(col.value) >= {permissive_gain["zscore_threshold"]} ? '{permissive_gain["color"]}' : 'inherit') + '; font-weight: ' + ((parseFloat(col.value) <= {robust_loss["zscore_threshold"]} || parseFloat(col.value) >= {robust_gain["zscore_threshold"]}) ? 'bold' : (parseFloat(col.value) <= {permissive_loss["zscore_threshold"]} || parseFloat(col.value) >= {permissive_gain["zscore_threshold"]}) ? '600' : 'normal')"
-                >
-                    {{{{ col.value }}}}
-                </span>
-            </template>
-            <template v-else-if="col.name === 'chr:start-end'">
-                <span style="display: flex; align-items: center; gap: 4px;">
-                    {{{{ col.value }}}}
-                    <q-icon v-if="props.row.IsCurated" name="check_circle" color="green" size="xs">
-                        <q-tooltip>Curated breakpoints from validation</q-tooltip>
-                    </q-icon>
-                </span>
-            </template>
-            <template v-else-if="col.name === 'gene'">
-                <template v-if="props.row.GeneBadges && props.row.GeneBadges.length > 0">
-                    <q-badge 
-                        v-for="(badge, idx) in props.row.GeneBadges" 
-                        :key="idx"
-                        :label="badge.label" 
-                        :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; ' + (badge.type.includes('exonic') ? 'border: 2px solid black;' : '')"
-                        class="q-mr-xs q-mb-xs"
-                    >
-                        <q-tooltip>{{{{ badge.tooltip }}}}</q-tooltip>
-                    </q-badge>
-                </template>
-                <template v-else>
-                    <span>-</span>
-                </template>
-            </template>
-            <template v-else-if="['genic_symbol', 'genic_ensg', 'exonic_symbol', 'exonic_ensg', 'VEP_Gene'].includes(col.name)">
-                <template v-if="props.row[col.name + '_badges'] && props.row[col.name + '_badges'].length > 0">
-                    <q-badge 
-                        v-for="(badge, idx) in props.row[col.name + '_badges']" 
-                        :key="idx"
-                        :label="badge.label" 
-                        :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; ' + (badge.isExonic ? 'border: 2px solid black;' : '')"
-                        class="q-mr-xs q-mb-xs"
-                    >
-                        <q-tooltip>{{{{ badge.tooltip }}}}</q-tooltip>
-                    </q-badge>
-                </template>
-                <template v-else-if="col.value && col.value !== '-' && col.value !== ''">
-                    <span>{{{{ col.value }}}}</span>
-                </template>
-                <template v-else>
-                    <span>-</span>
-                </template>
-            </template>
-            <template v-else>
-                {{{{ col.value }}}}
-            </template>
-        </q-td>
-    </q-tr>
-"""
+    key = f"{metric}_threshold"
+    return [
+        {"op": "<=", "value": robust_loss[key], "color": robust_loss["color"], "weight": "bold"},
+        {"op": "<=", "value": permissive_loss[key], "color": permissive_loss["color"], "weight": "600"},
+        {"op": ">=", "value": robust_gain[key], "color": robust_gain["color"], "weight": "bold"},
+        {"op": ">=", "value": permissive_gain[key], "color": permissive_gain["color"], "weight": "600"},
+    ]
 
 
-SVS_TABLE_SLOT = _generate_svs_table_slot()
+def _build_svs_call_colors() -> dict[str, str]:
+    """Build call label -> color mapping from WisecondorX config."""
+    return {
+        WISECONDORX_CONFIG["robust_loss"]["label"]: WISECONDORX_CONFIG["robust_loss"]["color"],
+        WISECONDORX_CONFIG["permissive_loss"]["label"]: WISECONDORX_CONFIG["permissive_loss"]["color"],
+        WISECONDORX_CONFIG["robust_gain"]["label"]: WISECONDORX_CONFIG["robust_gain"]["color"],
+        WISECONDORX_CONFIG["permissive_gain"]["label"]: WISECONDORX_CONFIG["permissive_gain"]["color"],
+    }
 
 
 def render_svs_tab(
@@ -695,8 +598,8 @@ def render_wisecondorx_subtab(
         # Initial load of validations
         reload_validations()
 
-        # Get all columns (add Validation column)
-        all_columns = list(df.columns) + ["Validation"]
+        # Get all columns (add Validation column), group same-group columns together
+        all_columns = reorder_columns_by_group(list(df.columns) + ["Validation"])
 
         # All columns visible by default except gene ID and symbol columns and type
         unchecked_columns = {
@@ -755,28 +658,48 @@ def render_wisecondorx_subtab(
                         if r.get("call") in selected_calls["value"]
                     ]
 
+                ratio_thresholds = _build_svs_color_thresholds("ratio")
+                zscore_thresholds = _build_svs_color_thresholds("zscore")
+                call_colors = _build_svs_call_colors()
+
                 def make_columns(visible_cols):
                     cols = [
                         {
-                            "name": "actions",
-                            "label": "",
-                            "field": "actions",
+                            "id": "actions",
+                            "header": "",
+                            "cellType": "action",
+                            "actionName": "view_sv",
+                            "actionIcon": "visibility",
+                            "actionColor": "#1976d2",
+                            "actionTooltip": "View in IGV",
                             "sortable": False,
-                            "align": "center",
                         }
                     ]
-                    cols.extend(
-                        [
-                            {
-                                "name": col,
-                                "label": col,
-                                "field": col,
-                                "sortable": True,
-                                "align": "left",
-                            }
-                            for col in visible_cols
-                        ]
-                    )
+                    for col in visible_cols:
+                        col_def: Dict[str, Any] = {
+                            "id": col,
+                            "header": get_display_label(col),
+                            "group": get_column_group(col),
+                            "sortable": True,
+                        }
+                        if col == "Validation":
+                            col_def["cellType"] = "validation"
+                        elif col == "call":
+                            col_def["cellType"] = "cnv_call"
+                            col_def["callColors"] = call_colors
+                        elif col == "ratio":
+                            col_def["cellType"] = "color_scale"
+                            col_def["thresholds"] = ratio_thresholds
+                        elif col == "zscore":
+                            col_def["cellType"] = "color_scale"
+                            col_def["thresholds"] = zscore_thresholds
+                        elif col == "gene":
+                            col_def["cellType"] = "gene_badge"
+                            col_def["badgesField"] = "GeneBadges"
+                        elif col in _GENE_BADGE_COLUMNS:
+                            col_def["cellType"] = "gene_badge"
+                            col_def["badgesField"] = f"{col}_badges"
+                        cols.append(col_def)
                     return cols
 
                 with ui.row().classes("items-center gap-4 mt-4 mb-2"):
@@ -800,11 +723,11 @@ def render_wisecondorx_subtab(
 
                                     def select_all():
                                         selected_cols["value"] = list(all_columns)
-                                        update_table()
+                                        render_data_table.refresh()
 
                                     def select_none():
                                         selected_cols["value"] = []
-                                        update_table()
+                                        render_data_table.refresh()
 
                                     ui.button("All", on_click=select_all).props(
                                         "size=sm flat dense"
@@ -864,72 +787,65 @@ def render_wisecondorx_subtab(
                                         ),
                                     ).classes("text-sm")
 
-                with ui.card().classes("w-full"):
-                    data_table = (
-                        ui.table(
-                            columns=make_columns(selected_cols["value"]),
-                            rows=rows,
-                            pagination={"rowsPerPage": 10},
+                def on_view_sv(e):
+                    row_data = e.get("row", {})
+                    locus = row_data.get("chr:start-end", "")
+                    sample_id = row_data.get("sample", "")
+
+                    if not locus or not sample_id:
+                        ui.notify(
+                            "Missing locus or sample information", type="warning"
                         )
-                        .classes("w-full")
-                        .props("dense flat")
-                    )
+                        return
 
-                    data_table.add_slot("body", SVS_TABLE_SLOT)
+                    # Parse locus (format: chr:start-end)
+                    # Use original locus if available (for curated variants)
+                    try:
+                        locus_to_parse = row_data.get("OriginalLocus", locus)
+                        parts = locus_to_parse.split(":")
+                        if len(parts) == 2:
+                            chrom = parts[0]
+                            range_parts = parts[1].split("-")
+                            if len(range_parts) == 2:
+                                start = range_parts[0]
+                                end = range_parts[1]
 
-                    def on_view_sv(e):
-                        row_data = e.args
-                        locus = row_data.get("chr:start-end", "")
-                        sample_id = row_data.get("sample", "")
+                                # Define refresh callback that reloads validations
+                                def on_save():
+                                    reload_validations()
+                                    render_data_table.refresh()
 
-                        if not locus or not sample_id:
-                            ui.notify(
-                                "Missing locus or sample information", type="warning"
-                            )
-                            return
-
-                        # Parse locus (format: chr:start-end)
-                        # Use original locus if available (for curated variants)
-                        try:
-                            locus_to_parse = row_data.get("OriginalLocus", locus)
-                            parts = locus_to_parse.split(":")
-                            if len(parts) == 2:
-                                chrom = parts[0]
-                                range_parts = parts[1].split("-")
-                                if len(range_parts) == 2:
-                                    start = range_parts[0]
-                                    end = range_parts[1]
-
-                                    # Define refresh callback that reloads validations
-                                    def on_save():
-                                        reload_validations()
-                                        render_data_table.refresh()
-
-                                    # Show SV dialog with refresh callback
-                                    show_sv_dialog(
-                                        cohort_name=cohort_name,
-                                        family_id=family_id,
-                                        chrom=chrom,
-                                        start=start,
-                                        end=end,
-                                        sample=sample_id,
-                                        sv_data=row_data,
-                                        on_validation_saved=on_save,
-                                    )
-                                else:
-                                    ui.notify(
-                                        "Invalid locus format. Expected chr:start-end",
-                                        type="warning",
-                                    )
+                                # Show SV dialog with refresh callback
+                                show_sv_dialog(
+                                    cohort_name=cohort_name,
+                                    family_id=family_id,
+                                    chrom=chrom,
+                                    start=start,
+                                    end=end,
+                                    sample=sample_id,
+                                    sv_data=row_data,
+                                    on_validation_saved=on_save,
+                                )
                             else:
                                 ui.notify(
                                     "Invalid locus format. Expected chr:start-end",
                                     type="warning",
                                 )
-                        except Exception as ex:
-                            ui.notify(f"Error parsing locus: {ex}", type="warning")
+                        else:
+                            ui.notify(
+                                "Invalid locus format. Expected chr:start-end",
+                                type="warning",
+                            )
+                    except Exception as ex:
+                        ui.notify(f"Error parsing locus: {ex}", type="warning")
 
-                    data_table.on("view_sv", on_view_sv)
+                with ui.card().classes("w-full"):
+                    DataTable(
+                        columns=make_columns(selected_cols["value"]),
+                        rows=rows,
+                        pagination={"rowsPerPage": 10},
+                        on_row_action=on_view_sv,
+                    )
 
                 def handle_col_change(col_name, is_checked):
                     if is_checked and col_name not in selected_cols["value"]:
@@ -943,15 +859,7 @@ def render_wisecondorx_subtab(
                         if col in selected_cols["value"]
                     ]
 
-                    update_table()
-
-                def update_table():
-                    visible = [c for c in all_columns if c in selected_cols["value"]]
-                    data_table.columns = make_columns(visible)
-                    data_table.update()
-
-                    for col, checkbox in checkboxes.items():
-                        checkbox.value = col in selected_cols["value"]
+                    render_data_table.refresh()
 
                 def handle_call_change(call_value, is_checked):
                     if is_checked and call_value not in selected_calls["value"]:
@@ -961,11 +869,7 @@ def render_wisecondorx_subtab(
                     update_call_filter()
 
                 def update_call_filter():
-                    # Refresh the entire data table to apply the call filter
                     render_data_table.refresh()
-                    # Update checkbox states
-                    for call, checkbox in call_checkboxes.items():
-                        checkbox.value = call in selected_calls["value"]
 
             data_table_refreshers.append(render_data_table.refresh)
             render_data_table()

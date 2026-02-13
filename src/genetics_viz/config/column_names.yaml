@@ -1,0 +1,318 @@
+"#CHROM":
+  name: "#CHROM"
+  group: ""
+POS:
+  name: "POS"
+  group: ""
+REF:
+  name: "REF"
+  group: ""
+ALT:
+  name: "ALT"
+  group: ""
+QUAL:
+  name: "QUAL"
+  group: ""
+FILTER:
+  name: "FILTER"
+  group: ""
+AC_genomes:
+  name: "AC_genomes"
+  group: ""
+AC_joint:
+  name: "AC_joint"
+  group: ""
+AF:
+  name: "AF"
+  group: ""
+AF_genomes:
+  name: "AF_genomes"
+  group: ""
+AN_exomes:
+  name: "AN_exomes"
+  group: ""
+AN_genomes:
+  name: "AN_genomes"
+  group: ""
+AQ:
+  name: "AQ"
+  group: ""
+MISTIC_pred:
+  name: "MISTIC pred"
+  group: "Missense"
+MISTIC_score:
+  name: "MISTIC"
+  group: "Missense"
+MPC:
+  name: "MPC"
+  group: "Missense"
+REVEL:
+  name: "REVEL"
+  group: "Missense"
+SpliceAI_maxDS:
+  name: "maxDS"
+  group: "SpliceAI"
+SpliceAI_symbol:
+  name: "symbol"
+  group: "SpliceAI"
+VEP_5UTR_annotation:
+  name: "VEP_5UTR_annotation"
+  group: ""
+VEP_5UTR_consequence:
+  name: "VEP_5UTR_consequence"
+  group: ""
+VEP_AF:
+  name: "VEP_AF"
+  group: ""
+VEP_Allele:
+  name: "VEP_Allele"
+  group: ""
+VEP_Amino_acids:
+  name: "VEP_Amino_acids"
+  group: ""
+VEP_BIOTYPE:
+  name: "VEP_BIOTYPE"
+  group: ""
+VEP_CANONICAL:
+  name: "VEP_CANONICAL"
+  group: ""
+VEP_CCDS:
+  name: "VEP_CCDS"
+  group: ""
+VEP_CDS_position:
+  name: "VEP_CDS_position"
+  group: ""
+VEP_CLIN_SIG:
+  name: "Clinvar"
+  group: ""
+VEP_Codons:
+  name: "VEP_Codons"
+  group: ""
+VEP_Consequence:
+  name: "Consequence"
+  group: ""
+VEP_DISTANCE:
+  name: "VEP_DISTANCE"
+  group: ""
+VEP_EXON:
+  name: "VEP_EXON"
+  group: ""
+VEP_Existing_InFrame_oORFs:
+  name: "VEP_Existing_InFrame_oORFs"
+  group: ""
+VEP_Existing_OutOfFrame_oORFs:
+  name: "VEP_Existing_OutOfFrame_oORFs"
+  group: ""
+VEP_Existing_uORFs:
+  name: "VEP_Existing_uORFs"
+  group: ""
+VEP_Existing_variation:
+  name: "VEP_Existing_variation"
+  group: ""
+VEP_FLAGS:
+  name: "VEP_FLAGS"
+  group: ""
+VEP_Feature:
+  name: "VEP_Feature"
+  group: ""
+VEP_Feature_type:
+  name: "VEP_Feature_type"
+  group: ""
+VEP_Gene:
+  name: "VEP_Gene"
+  group: ""
+VEP_HGNC_ID:
+  name: "VEP_HGNC_ID"
+  group: ""
+VEP_HGVS_OFFSET:
+  name: "VEP_HGVS_OFFSET"
+  group: ""
+VEP_HGVSc:
+  name: "VEP_HGVSc"
+  group: ""
+VEP_HGVSp:
+  name: "VEP_HGVSp"
+  group: ""
+VEP_HIGH_INF_POS:
+  name: "VEP_HIGH_INF_POS"
+  group: ""
+VEP_IMPACT:
+  name: "VEP_IMPACT"
+  group: ""
+VEP_INTRON:
+  name: "VEP_INTRON"
+  group: ""
+VEP_LoF:
+  name: "VEP_LoF"
+  group: ""
+VEP_LoF_filter:
+  name: "VEP_LoF_filter"
+  group: ""
+VEP_LoF_flags:
+  name: "VEP_LoF_flags"
+  group: ""
+VEP_LoF_info:
+  name: "VEP_LoF_info"
+  group: ""
+VEP_MANE:
+  name: "VEP_MANE"
+  group: ""
+VEP_MANE_PLUS_CLINICAL:
+  name: "VEP_MANE_PLUS_CLINICAL"
+  group: ""
+VEP_MANE_SELECT:
+  name: "VEP_MANE_SELECT"
+  group: ""
+VEP_MOTIF_NAME:
+  name: "VEP_MOTIF_NAME"
+  group: ""
+VEP_MOTIF_POS:
+  name: "VEP_MOTIF_POS"
+  group: ""
+VEP_MOTIF_SCORE_CHANGE:
+  name: "VEP_MOTIF_SCORE_CHANGE"
+  group: ""
+VEP_PHENO:
+  name: "VEP_PHENO"
+  group: ""
+VEP_PUBMED:
+  name: "VEP_PUBMED"
+  group: ""
+VEP_Protein_position:
+  name: "VEP_Protein_position"
+  group: ""
+VEP_REF_ALLELE:
+  name: "VEP_REF_ALLELE"
+  group: ""
+VEP_SOMATIC:
+  name: "VEP_SOMATIC"
+  group: ""
+VEP_STRAND:
+  name: "VEP_STRAND"
+  group: ""
+VEP_SYMBOL:
+  name: "Symbol"
+  group: ""
+VEP_SYMBOL_SOURCE:
+  name: "VEP_SYMBOL_SOURCE"
+  group: ""
+VEP_TRANSCRIPTION_FACTORS:
+  name: "VEP_TRANSCRIPTION_FACTORS"
+  group: ""
+VEP_UPLOADED_ALLELE:
+  name: "VEP_UPLOADED_ALLELE"
+  group: ""
+VEP_cDNA_position:
+  name: "VEP_cDNA_position"
+  group: ""
+am_class:
+  name: "AM class"
+  group: "Missense"
+am_pathogenicity:
+  name: "AM"
+  group: "Missense"
+cadd_v1.7:
+  name: "cadd_v1.7"
+  group: ""
+faf95_joint:
+  name: "faf95_joint"
+  group: ""
+faf95_joint_nfe:
+  name: "faf95_joint_nfe"
+  group: ""
+fafmax_faf95_max_genomes:
+  name: "AF"
+  group: "gnomAD 4.1 WGS"
+fafmax_faf95_max_joint:
+  name: "fafmax_faf95_max_joint"
+  group: ""
+genomes_filters:
+  name: "filter"
+  group: "gnomAD 4.1 WGS"
+nhomalt_genomes:
+  name: "nhomalt"
+  group: "gnomAD 4.1 WGS"
+nhomalt_joint:
+  name: "nhomalt_joint"
+  group: ""
+nhomalt_joint_nfe:
+  name: "nhomalt_joint_nfe"
+  group: ""
+popEVE:
+  name: "popEVE"
+  group: "Missense"
+stat_union_p_value:
+  name: "stat_union_p_value"
+  group: ""
+LCR:
+  name: "LCR"
+  group: ""
+sample:
+  name: "sample"
+  group: ""
+sample_gt:
+  name: "kid"
+  group: "Genotype"
+sample_dp:
+  name: "sample_dp"
+  group: ""
+sample_gq:
+  name: "sample_gq"
+  group: ""
+sample_ad:
+  name: "sample_ad"
+  group: ""
+sample_vaf:
+  name: "sample_vaf"
+  group: ""
+father:
+  name: "father"
+  group: ""
+mother:
+  name: "mother"
+  group: ""
+sex:
+  name: "sex"
+  group: ""
+father_gt:
+  name: "dad"
+  group: "Genotype"
+father_dp:
+  name: "father_dp"
+  group: ""
+father_gq:
+  name: "father_gq"
+  group: ""
+father_ad:
+  name: "father_ad"
+  group: ""
+father_vaf:
+  name: "father_vaf"
+  group: ""
+mother_gt:
+  name: "mom"
+  group: "Genotype"
+mother_dp:
+  name: "mother_dp"
+  group: ""
+mother_gq:
+  name: "mother_gq"
+  group: ""
+mother_ad:
+  name: "mother_ad"
+  group: ""
+mother_vaf:
+  name: "mother_vaf"
+  group: ""
+mnv_proba:
+  name: "mnv_proba"
+  group: ""
+mnv_inframe:
+  name: "mnv_inframe"
+  group: ""
+mnv_variant:
+  name: "mnv_variant"
+  group: ""
+"chr:pos:ref:alt":
+  name: "Variant"
+  group: ""

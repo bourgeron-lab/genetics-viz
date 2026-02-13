@@ -3,6 +3,7 @@
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.data import get_data_store
 
 
@@ -48,19 +49,18 @@ def cohort_page(cohort_name: str) -> None:
 
                     families_data = cohort.get_families_summary()
 
-                    # Create table with selection and pagination
-                    families_table = ui.table(
+                    DataTable(
                         columns=[
                             {
-                                "name": "family_id",
-                                "label": "Family ID",
-                                "field": "Family ID",
+                                "id": "Family ID",
+                                "header": "Family ID",
+                                "cellType": "link",
+                                "href": f"/cohort/{cohort_name}/family/{{Family ID}}",
                                 "sortable": True,
                             },
                             {
-                                "name": "members",
-                                "label": "Members",
-                                "field": "Members",
+                                "id": "Members",
+                                "header": "Members",
                                 "sortable": True,
                             },
                         ],
@@ -68,22 +68,7 @@ def cohort_page(cohort_name: str) -> None:
                         row_key="Family ID",
                         selection="single",
                         pagination={"rowsPerPage": 10},
-                    ).classes("w-full")
-                    families_table.props("dense")
-
-                    # Add custom slot for Family ID column to make it a link
-                    families_table.add_slot(
-                        "body-cell-family_id",
-                        r"""
-                            <q-td :props="props">
-                                <a :href="'/cohort/"""
-                        + cohort_name
-                        + r"""/family/' + props.row['Family ID']" 
-                                   class="text-blue-600 hover:text-blue-800 underline cursor-pointer">
-                                    {{ props.row['Family ID'] }}
-                                </a>
-                            </q-td>
-                        """,
+                        on_selection=lambda e: on_family_select(e),
                     )
 
                 # Right panel: Family members (shown when family selected)
@@ -97,18 +82,17 @@ def cohort_page(cohort_name: str) -> None:
                     """Handle family selection."""
                     members_container.clear()
 
-                    # Access selection from the table's selected property
-                    selection = families_table.selected
-
-                    if not selection:
+                    selected_keys = e.get("selected", [])
+                    if not selected_keys:
                         members_label.text = "Select a family to view members"
                         members_label.classes(
                             remove="text-blue-800", add="text-gray-400"
                         )
                         return
 
-                    selected_row = selection[0]
-                    family_id = selected_row.get("Family ID")
+                    family_id = e.get("row", {}).get("Family ID")
+                    if not family_id:
+                        return
 
                     members_label.text = f"Members of Family: {family_id}"
                     members_label.classes(remove="text-gray-400", add="text-blue-800")
@@ -116,36 +100,18 @@ def cohort_page(cohort_name: str) -> None:
                     members_data = cohort.get_family_members(family_id)
 
                     with members_container:
-                        ui.table(
+                        DataTable(
                             columns=[
-                                {
-                                    "name": "sample_id",
-                                    "label": "Sample ID",
-                                    "field": "Sample ID",
-                                    "sortable": True,
-                                },
-                                {
-                                    "name": "father",
-                                    "label": "Father",
-                                    "field": "Father",
-                                },
-                                {
-                                    "name": "mother",
-                                    "label": "Mother",
-                                    "field": "Mother",
-                                },
-                                {"name": "sex", "label": "Sex", "field": "Sex"},
-                                {
-                                    "name": "phenotype",
-                                    "label": "Phenotype",
-                                    "field": "Phenotype",
-                                },
+                                {"id": "Sample ID", "header": "Sample ID", "sortable": True},
+                                {"id": "Father", "header": "Father"},
+                                {"id": "Mother", "header": "Mother"},
+                                {"id": "Sex", "header": "Sex"},
+                                {"id": "Phenotype", "header": "Phenotype"},
                             ],
                             rows=members_data,
                             row_key="Sample ID",
-                        ).classes("w-full").props("dense")
-
-                families_table.on("selection", on_family_select)
+                            pagination={"rowsPerPage": 50},
+                        )
 
     except RuntimeError as e:
         ui.label(f"Error: {e}").classes("text-red-500")

@@ -9,11 +9,17 @@ import yaml
 from nicegui import ui
 
 from genetics_viz.components.filters import create_validation_filter_menu
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
 )
 from genetics_viz.components.variant_dialog import show_variant_dialog
+from genetics_viz.utils.column_names import (
+    get_column_group,
+    get_display_label,
+    reorder_columns_by_group,
+)
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
 
@@ -195,117 +201,6 @@ def format_clinvar_display(significance: str) -> str:
     """Format ClinVar significance for display: replace _ with space."""
     return significance.replace("_", " ")
 
-
-# Table slot template for wombat data with view button and validation icons
-WOMBAT_TABLE_SLOT = r"""
-    <q-tr :props="props">
-        <q-td key="actions" :props="props">
-            <div style="display: flex; align-items: center; gap: 4px;">
-                <q-btn 
-                    flat 
-                    dense 
-                    size="sm" 
-                    icon="visibility" 
-                    color="blue"
-                    @click="$parent.$emit('view_variant', props.row)"
-                >
-                    <q-tooltip>View in IGV</q-tooltip>
-                </q-btn>
-                <q-badge 
-                    v-if="props.row.n_grouped && props.row.n_grouped > 1"
-                    :label="props.row.n_grouped.toString()"
-                    color="orange"
-                    style="font-size: 11px;"
-                >
-                    <q-tooltip>
-                        {{ props.row.n_grouped }} transcripts collapsed
-                        <span v-if="props.row.VEP_SYMBOL"> for genes: {{ props.row.VEP_SYMBOL }}</span>
-                    </q-tooltip>
-                </q-badge>
-            </div>
-        </q-td>
-        <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-            <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present' || col.value === 'in phase MNV'" style="display: flex; align-items: center; gap: 4px;">
-                    <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as {{ col.value }}</q-tooltip>
-                    </q-icon>
-                    <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
-                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
-                    <span v-if="col.value === 'in phase MNV'" style="font-size: 0.75em; color: #666;">MNV</span>
-                </span>
-                <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
-                    <q-tooltip>Validated as absent</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
-                    <q-tooltip>Validation uncertain or different</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
-                    <q-tooltip>Conflicting validations</q-tooltip>
-                </q-icon>
-            </template>
-            <template v-else-if="col.name === 'VEP_Consequence'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ConsequenceBadges || [])" :key="idx" 
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_CLIN_SIG'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ClinVarBadges || [])" :key="idx" 
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_SYMBOL'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.GeneBadges || [])" :key="idx" 
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_Gene'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.VEP_Gene_badges || [])" :key="idx" 
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else>
-                <!-- Check for score badges dynamically -->
-                <div v-if="props.row[col.name + '_badge']" style="display: inline-block;">
-                    <q-badge
-                        :label="props.row[col.name + '_badge'].value"
-                        :style="'background-color: ' + props.row[col.name + '_badge'].color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ props.row[col.name + '_badge'].tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-                <span v-else>{{ col.value }}</span>
-            </template>
-        </q-td>
-    </q-tr>
-"""
-
-
-def get_wombat_display_label(col: str) -> str:
-    """Get display label for wombat column, removing VEP_ prefix and renaming gnomAD columns."""
-    if col == "fafmax_faf95_max_genomes":
-        return "gnomAD 4.1 WGS"
-    elif col == "nhomalt_genomes":
-        return "gnomAD 4.1 nhomalt WGS"
-    elif col == "VEP_CLIN_SIG":
-        return "ClinVar"
-    elif col.startswith("VEP_"):
-        return col[4:]  # Remove VEP_ prefix
-    else:
-        return col
 
 
 def render_wombat_tab(
@@ -595,7 +490,7 @@ def render_wombat_tab(
                                     badge_info = get_score_color(col_name, value)
                                     if badge_info:
                                         row[f"{col_name}_badge"] = {
-                                            "value": f"{value:.3f}",
+                                            "label": f"{value:.3f}",
                                             "color": badge_info["color"],
                                             "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})"
                                         }
@@ -622,7 +517,7 @@ def render_wombat_tab(
                         )
 
                     # All available columns (add Variant and Validation columns, exclude n_grouped from display)
-                    all_columns = (
+                    all_columns = reorder_columns_by_group(
                         ["Variant"]
                         + [
                             col
@@ -1341,29 +1236,51 @@ def render_wombat_tab(
                                     )
                                 ]
 
-                            def make_columns(visible_cols):
-                                cols = [
+                            def make_columns():
+                                cols: List[Dict[str, Any]] = [
                                     {
-                                        "name": "actions",
-                                        "label": "",
-                                        "field": "actions",
+                                        "id": "actions",
+                                        "header": "",
+                                        "cellType": "action",
+                                        "actionName": "view_variant",
+                                        "actionIcon": "visibility",
+                                        "actionColor": "#1976d2",
+                                        "actionTooltip": "View in IGV",
                                         "sortable": False,
-                                        "align": "center",
                                     }
                                 ]
-                                for col in visible_cols:
-                                    col_def = {
-                                        "name": col,
-                                        "label": get_wombat_display_label(col),
-                                        "field": col,
+                                for col in all_columns_local:
+                                    col_def: Dict[str, Any] = {
+                                        "id": col,
+                                        "header": get_display_label(col),
+                                        "group": get_column_group(col),
                                         "sortable": True,
-                                        "align": "left",
                                     }
-                                    # Use custom sort field for VEP_Consequence based on priority
-                                    if col == "VEP_Consequence":
-                                        col_def["field"] = "_consequence_priority"
+                                    if col == "Validation":
+                                        col_def["cellType"] = "validation"
+                                    elif col == "VEP_Consequence":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ConsequenceBadges"
+                                        col_def["sortField"] = "_consequence_priority"
+                                    elif col == "VEP_CLIN_SIG":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ClinVarBadges"
+                                    elif col == "VEP_SYMBOL":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "GeneBadges"
+                                    elif col == "VEP_Gene":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "VEP_Gene_badges"
+                                    else:
+                                        col_def["cellType"] = "score_badge"
                                     cols.append(col_def)
                                 return cols
+
+                            def _apply_col_visibility():
+                                """Push current column selection to JS table."""
+                                if data.get("_dt"):
+                                    visible = ["actions"] + list(selected_cols_local["value"])
+                                    data["_dt"].set_column_visibility(visible)
 
                             with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
                                 row_label = (
@@ -1398,15 +1315,21 @@ def render_wombat_tab(
                                             with ui.row().classes("gap-2 mb-2"):
                                                 checkboxes: Dict[str, Any] = {}
 
+                                                def _sync_checkboxes():
+                                                    for col, cb in checkboxes.items():
+                                                        cb.value = col in selected_cols_local["value"]
+
                                                 def select_all():
                                                     selected_cols_local["value"] = list(
                                                         all_columns_local
                                                     )
-                                                    update_table()
+                                                    _apply_col_visibility()
+                                                    _sync_checkboxes()
 
                                                 def select_none():
                                                     selected_cols_local["value"] = []
-                                                    update_table()
+                                                    _apply_col_visibility()
+                                                    _sync_checkboxes()
 
                                                 ui.button(
                                                     "All", on_click=select_all
@@ -1864,78 +1787,66 @@ def render_wombat_tab(
                                     "Stats", icon="bar_chart", on_click=show_stats_dialog
                                 ).props("outline color=blue size=sm")
 
-                            with ui.card().classes("w-full"):
-                                data_table = (
-                                    ui.table(
-                                        columns=make_columns(
-                                            selected_cols_local["value"]
-                                        ),
-                                        rows=rows,
-                                        pagination={
-                                            "rowsPerPage": 10,
-                                            "sortBy": "VEP_Consequence",
-                                            "descending": False,
-                                        },
+                            def on_view_variant(e):
+                                row_data = e.get("row", {})
+                                chrom = row_data.get("#CHROM", "")
+                                pos = row_data.get("POS", "")
+                                ref = row_data.get("REF", "")
+                                alt = row_data.get("ALT", "")
+                                sample_val = row_data.get("sample", "")
+
+                                # Callback to update the Validation column in the table
+                                def on_save(validation_status: str):
+                                    # Reload validation data from file
+                                    validation_file = (
+                                        store.data_dir / "validations" / "snvs.tsv"
                                     )
-                                    .classes("w-full")
-                                    .props("dense flat")
+                                    validation_map = load_validation_map(
+                                        validation_file, family_id
+                                    )
+                                    # Re-add validation status to all rows
+                                    for row in all_rows:
+                                        chrom = row.get("#CHROM", "")
+                                        pos = row.get("POS", "")
+                                        ref = row.get("REF", "")
+                                        alt = row.get("ALT", "")
+                                        sample_id = row.get("sample", "")
+                                        variant_key = f"{chrom}:{pos}:{ref}:{alt}"
+                                        add_validation_status_to_row(
+                                            row,
+                                            validation_map,
+                                            variant_key,
+                                            sample_id,
+                                        )
+                                    # Refresh the table using the captured client context
+                                    with page_client:
+                                        ui.timer(
+                                            0.1,
+                                            render_data_table.refresh,
+                                            once=True,
+                                        )
+
+                                # Show dialog
+                                show_variant_dialog(
+                                    cohort_name=cohort_name,
+                                    family_id=family_id,
+                                    chrom=chrom,
+                                    pos=pos,
+                                    ref=ref,
+                                    alt=alt,
+                                    sample=sample_val,
+                                    variant_data=row_data,
+                                    on_save_callback=on_save,
                                 )
 
-                                data_table.add_slot("body", WOMBAT_TABLE_SLOT)
-
-                                def on_view_variant(e):
-                                    row_data = e.args
-                                    chrom = row_data.get("#CHROM", "")
-                                    pos = row_data.get("POS", "")
-                                    ref = row_data.get("REF", "")
-                                    alt = row_data.get("ALT", "")
-                                    sample_val = row_data.get("sample", "")
-
-                                    # Callback to update the Validation column in the table
-                                    def on_save(validation_status: str):
-                                        # Reload validation data from file
-                                        validation_file = (
-                                            store.data_dir / "validations" / "snvs.tsv"
-                                        )
-                                        validation_map = load_validation_map(
-                                            validation_file, family_id
-                                        )
-                                        # Re-add validation status to all rows
-                                        for row in all_rows:
-                                            chrom = row.get("#CHROM", "")
-                                            pos = row.get("POS", "")
-                                            ref = row.get("REF", "")
-                                            alt = row.get("ALT", "")
-                                            sample_id = row.get("sample", "")
-                                            variant_key = f"{chrom}:{pos}:{ref}:{alt}"
-                                            add_validation_status_to_row(
-                                                row,
-                                                validation_map,
-                                                variant_key,
-                                                sample_id,
-                                            )
-                                        # Refresh the table using the captured client context
-                                        with page_client:
-                                            ui.timer(
-                                                0.1,
-                                                render_data_table.refresh,
-                                                once=True,
-                                            )
-
-                                    # Show dialog
-                                    show_variant_dialog(
-                                        cohort_name=cohort_name,
-                                        family_id=family_id,
-                                        chrom=chrom,
-                                        pos=pos,
-                                        ref=ref,
-                                        alt=alt,
-                                        sample=sample_val,
-                                        variant_data=row_data,
-                                        on_save_callback=on_save,
-                                    )
-
-                                data_table.on("view_variant", on_view_variant)
+                            data["_dt"] = DataTable(
+                                columns=make_columns(),
+                                rows=rows,
+                                row_key="Variant",
+                                pagination={"rowsPerPage": 10},
+                                visible_columns=["actions"] + list(selected_cols_local["value"]),
+                                on_row_action=on_view_variant,
+                            )
 
                             def on_preset_change(e):
                                 """Handle preset selection change."""
@@ -1952,7 +1863,8 @@ def render_wombat_tab(
 
                                 selected_cols_local["value"] = available
                                 data["selected_preset"]["name"] = preset_name
-                                update_table()
+                                _apply_col_visibility()
+                                _sync_checkboxes()
 
                             # Connect preset change handler
                             preset_select.on_value_change(on_preset_change)
@@ -1975,19 +1887,7 @@ def render_wombat_tab(
                                     if col in selected_cols_local["value"]
                                 ]
 
-                                update_table()
-
-                            def update_table():
-                                visible = [
-                                    c
-                                    for c in all_columns_local
-                                    if c in selected_cols_local["value"]
-                                ]
-                                data_table.columns = make_columns(visible)
-                                data_table.update()
-
-                                for col, checkbox in checkboxes.items():
-                                    checkbox.value = col in selected_cols_local["value"]
+                                _apply_col_visibility()
 
                         # Store refresh reference for filter callbacks
                         wombat_data[config_name]["_refresh"]["fn"] = render_data_table.refresh

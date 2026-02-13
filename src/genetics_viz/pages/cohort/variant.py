@@ -13,6 +13,7 @@ from nicegui import app as nicegui_app
 from nicegui import context, ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.data import get_data_store
 
 
@@ -566,81 +567,30 @@ def variant_page(
                                                 type="negative",
                                             )
 
-                                    columns = [
-                                        {
-                                            "name": "sample",
-                                            "label": "Sample",
-                                            "field": "Sample",
-                                            "align": "left",
-                                        },
-                                        {
-                                            "name": "user",
-                                            "label": "User",
-                                            "field": "User",
-                                            "align": "left",
-                                        },
-                                        {
-                                            "name": "inheritance",
-                                            "label": "Inheritance",
-                                            "field": "Inheritance",
-                                            "align": "left",
-                                        },
-                                        {
-                                            "name": "validation",
-                                            "label": "Validation",
-                                            "field": "Validation",
-                                            "align": "left",
-                                        },
-                                        {
-                                            "name": "timestamp",
-                                            "label": "Timestamp",
-                                            "field": "Timestamp",
-                                            "align": "left",
-                                        },
-                                        {
-                                            "name": "actions",
-                                            "label": "",
-                                            "field": "actions",
-                                            "align": "center",
-                                        },
-                                    ]
-
-                                    validation_table = (
-                                        ui.table(
-                                            columns=columns,
-                                            rows=validations,
-                                            row_key="Timestamp",
-                                        )
-                                        .classes("w-full")
-                                        .props("dense flat")
-                                    )
-
-                                    validation_table.add_slot(
-                                        "body",
-                                        r"""
-                                            <q-tr :props="props">
-                                                <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-                                                    {{ col.value }}
-                                                </q-td>
-                                                <q-td key="actions" :props="props">
-                                                    <q-btn 
-                                                        flat 
-                                                        dense 
-                                                        size="xs" 
-                                                        icon="delete" 
-                                                        color="red"
-                                                        @click="$parent.$emit('delete_validation', props.row.Timestamp)"
-                                                    >
-                                                        <q-tooltip>Delete this validation</q-tooltip>
-                                                    </q-btn>
-                                                </q-td>
-                                            </q-tr>
-                                        """,
-                                    )
-
-                                    validation_table.on(
-                                        "delete_validation",
-                                        lambda e: delete_validation(e.args),
+                                    DataTable(
+                                        columns=[
+                                            {"id": "Sample", "header": "Sample"},
+                                            {"id": "User", "header": "User"},
+                                            {"id": "Inheritance", "header": "Inheritance"},
+                                            {"id": "Validation", "header": "Validation"},
+                                            {"id": "Timestamp", "header": "Timestamp"},
+                                            {
+                                                "id": "actions",
+                                                "header": "",
+                                                "cellType": "action",
+                                                "actionName": "delete_validation",
+                                                "actionIcon": "delete",
+                                                "actionColor": "#f44336",
+                                                "actionTooltip": "Delete this validation",
+                                                "sortable": False,
+                                            },
+                                        ],
+                                        rows=validations,
+                                        row_key="Timestamp",
+                                        pagination={"rowsPerPage": 50},
+                                        on_row_action=lambda e: delete_validation(
+                                            e.get("row", {}).get("Timestamp", "")
+                                        ),
                                     )
                                 else:
                                     ui.label(

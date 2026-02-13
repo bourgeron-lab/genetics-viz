@@ -13,6 +13,7 @@ from nicegui import context, ui
 
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -22,113 +23,14 @@ from genetics_viz.pages.cohort.components.wombat_tab import (
     VIEW_PRESETS,
     select_preset_for_config,
 )
+from genetics_viz.utils.column_names import (
+    get_column_group,
+    get_display_label,
+    reorder_columns_by_group,
+)
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
-
-# Same table slot as wombat_tab
-SEARCH_TABLE_SLOT = r"""
-    <q-tr :props="props">
-        <q-td key="actions" :props="props">
-            <div style="display: flex; align-items: center; gap: 4px;">
-                <q-btn
-                    flat
-                    dense
-                    size="sm"
-                    icon="visibility"
-                    color="blue"
-                    @click="$parent.$emit('view_variant', props.row)"
-                >
-                    <q-tooltip>View in IGV</q-tooltip>
-                </q-btn>
-                <q-badge
-                    v-if="props.row.n_grouped && props.row.n_grouped > 1"
-                    :label="props.row.n_grouped.toString()"
-                    color="orange"
-                    style="font-size: 11px;"
-                >
-                    <q-tooltip>
-                        {{ props.row.n_grouped }} transcripts collapsed
-                        <span v-if="props.row.VEP_SYMBOL"> for genes: {{ props.row.VEP_SYMBOL }}</span>
-                    </q-tooltip>
-                </q-badge>
-            </div>
-        </q-td>
-        <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-            <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present' || col.value === 'in phase MNV'" style="display: flex; align-items: center; gap: 4px;">
-                    <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as {{ col.value }}</q-tooltip>
-                    </q-icon>
-                    <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
-                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
-                    <span v-if="col.value === 'in phase MNV'" style="font-size: 0.75em; color: #666;">MNV</span>
-                </span>
-                <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
-                    <q-tooltip>Validated as absent</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
-                    <q-tooltip>Validation uncertain or different</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
-                    <q-tooltip>Conflicting validations</q-tooltip>
-                </q-icon>
-            </template>
-            <template v-else-if="col.name === 'VEP_Consequence'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ConsequenceBadges || [])" :key="idx"
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_CLIN_SIG'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ClinVarBadges || [])" :key="idx"
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_SYMBOL'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.GeneBadges || [])" :key="idx"
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_Gene'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.VEP_Gene_badges || [])" :key="idx"
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'FID'">
-                <a v-if="col.value" :href="'/cohort/' + props.row._cohort_name + '/family/' + col.value" style="color: #2563eb; text-decoration: underline; cursor: pointer;">
-                    {{ col.value }}
-                </a>
-                <span v-else>{{ col.value }}</span>
-            </template>
-            <template v-else>
-                <!-- Check for score badges dynamically -->
-                <div v-if="props.row[col.name + '_badge']" style="display: inline-block;">
-                    <q-badge
-                        :label="props.row[col.name + '_badge'].value"
-                        :style="'background-color: ' + props.row[col.name + '_badge'].color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ props.row[col.name + '_badge'].tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-                <span v-else>{{ col.value }}</span>
-            </template>
-        </q-td>
-    </q-tr>
-"""
-
 
 # Load VEP Consequence data from YAML
 def _load_vep_consequences() -> Dict[str, tuple]:
@@ -187,18 +89,7 @@ def format_clinvar_display(significance: str) -> str:
     return significance.replace("_", " ")
 
 
-def get_display_label(col: str) -> str:
-    """Get display label for column."""
-    if col == "fafmax_faf95_max_genomes":
-        return "gnomAD 4.1 WGS"
-    elif col == "nhomalt_genomes":
-        return "gnomAD 4.1 nhomalt WGS"
-    elif col == "VEP_CLIN_SIG":
-        return "ClinVar"
-    elif col.startswith("VEP_"):
-        return col[4:]
-    else:
-        return col
+
 
 
 def parse_locus_query(query: str) -> Dict[str, Any]:
@@ -1183,7 +1074,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                     badge_info = get_score_color(col_name, value)
                                     if badge_info:
                                         row[f"{col_name}_badge"] = {
-                                            "value": f"{value:.3f}",
+                                            "label": f"{value:.3f}",
                                             "color": badge_info["color"],
                                             "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})"
                                         }
@@ -1227,6 +1118,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     # Ensure Validation column is in the list
                     if "Validation" not in all_columns:
                         all_columns.append("Validation")
+
+                    # Group same-group columns together
+                    all_columns = reorder_columns_by_group(all_columns)
 
                     # Default visible columns
                     default_visible = [
@@ -1325,26 +1219,57 @@ def search_cohort_page(cohort_name: str) -> None:
                                     )
                                 ]
 
-                            # Prepare columns
-                            visible_cols = selected_cols["value"]
+
 
                             def get_columns():
                                 cols: List[Dict[str, Any]] = [
-                                    {"name": "actions", "label": "", "field": "actions"}
+                                    {
+                                        "id": "actions",
+                                        "header": "",
+                                        "cellType": "action",
+                                        "actionName": "view_variant",
+                                        "actionIcon": "visibility",
+                                        "actionColor": "#1976d2",
+                                        "actionTooltip": "View in IGV",
+                                        "sortable": False,
+                                    }
                                 ]
-                                cols.extend(
-                                    [
-                                        {
-                                            "name": col,
-                                            "label": get_display_label(col),
-                                            "field": col,
-                                            "sortable": True,
-                                            "align": "left",
-                                        }
-                                        for col in visible_cols
-                                    ]
-                                )
+                                for col in all_columns:
+                                    col_def: Dict[str, Any] = {
+                                        "id": col,
+                                        "header": get_display_label(col),
+                                        "group": get_column_group(col),
+                                        "sortable": True,
+                                    }
+                                    if col == "Validation":
+                                        col_def["cellType"] = "validation"
+                                    elif col == "VEP_Consequence":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ConsequenceBadges"
+                                    elif col == "VEP_CLIN_SIG":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ClinVarBadges"
+                                    elif col == "VEP_SYMBOL":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "GeneBadges"
+                                    elif col == "VEP_Gene":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "VEP_Gene_badges"
+                                    elif col == "FID":
+                                        col_def["cellType"] = "link"
+                                        col_def["href"] = "/cohort/{_cohort_name}/family/{FID}"
+                                    else:
+                                        col_def["cellType"] = "score_badge"
+                                    cols.append(col_def)
                                 return cols
+
+                            # Reference to the DataTable for column visibility updates
+                            search_dt: Dict[str, Any] = {"ref": None}
+
+                            def _apply_col_visibility():
+                                if search_dt["ref"]:
+                                    visible = ["actions"] + list(selected_cols["value"])
+                                    search_dt["ref"].set_column_visibility(visible)
 
                             with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
                                 ui.label(f"Results ({len(rows)} rows)").classes(
@@ -1373,21 +1298,23 @@ def search_cohort_page(cohort_name: str) -> None:
                                         with ui.column().classes("p-2"):
                                             col_checkboxes = {}
 
+                                            def _sync_col_checkboxes():
+                                                for col, cb in col_checkboxes.items():
+                                                    cb.value = col in selected_cols["value"]
+
                                             with ui.row().classes("gap-2 mb-2"):
 
                                                 def col_select_all():
                                                     selected_cols["value"] = (
                                                         all_columns.copy()
                                                     )
-                                                    for cb in col_checkboxes.values():
-                                                        cb.value = True
-                                                    render_results_table.refresh()
+                                                    _apply_col_visibility()
+                                                    _sync_col_checkboxes()
 
                                                 def col_select_none():
                                                     selected_cols["value"] = []
-                                                    for cb in col_checkboxes.values():
-                                                        cb.value = False
-                                                    render_results_table.refresh()
+                                                    _apply_col_visibility()
+                                                    _sync_col_checkboxes()
 
                                                 ui.button(
                                                     "All", on_click=col_select_all
@@ -1424,7 +1351,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                                     if col in selected_cols["value"]
                                                 ]
 
-                                                render_results_table.refresh()
+                                                _apply_col_visibility()
 
                                             for col in all_columns:
                                                 col_checkboxes[col] = ui.checkbox(
@@ -1449,28 +1376,15 @@ def search_cohort_page(cohort_name: str) -> None:
 
                                 selected_cols["value"] = available
                                 selected_preset["name"] = preset_name
-                                render_results_table.refresh()
+                                _apply_col_visibility()
+                                _sync_col_checkboxes()
 
                             # Connect preset change handler
                             preset_select.on_value_change(on_preset_change)
 
-                            # Create table
-                            results_table = (
-                                ui.table(
-                                    columns=get_columns(),
-                                    rows=rows,
-                                    row_key="Variant",
-                                    pagination={"rowsPerPage": 50},
-                                )
-                                .classes("w-full")
-                                .props("dense flat")
-                            )
-
-                            results_table.add_slot("body", SEARCH_TABLE_SLOT)
-
                             # Handle view variant click
                             def on_view_variant(e):
-                                row_data = e.args
+                                row_data = e.get("row", {})
                                 variant_str = row_data.get("Variant", "")
                                 sample_id = row_data.get("sample", "")
 
@@ -1540,7 +1454,15 @@ def search_cohort_page(cohort_name: str) -> None:
                                         f"Error parsing variant: {ex}", type="warning"
                                     )
 
-                            results_table.on("view_variant", on_view_variant)
+                            # Create table with all columns, initial visibility from preset
+                            search_dt["ref"] = DataTable(
+                                columns=get_columns(),
+                                rows=rows,
+                                row_key="Variant",
+                                pagination={"rowsPerPage": 50},
+                                visible_columns=["actions"] + list(selected_cols["value"]),
+                                on_row_action=on_view_variant,
+                            )
 
                         render_results_table()
 

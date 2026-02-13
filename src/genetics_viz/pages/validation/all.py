@@ -10,7 +10,7 @@ from nicegui import ui
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
 from genetics_viz.components.sv_dialog import show_sv_dialog
-from genetics_viz.components.tables import VALIDATION_TABLE_SLOT
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.data import get_data_store
 
@@ -525,83 +525,29 @@ def validation_all_page() -> None:
 
                     # Prepare columns for table
                     columns: List[Dict[str, Any]] = [
-                        {"name": "actions", "label": "", "field": "actions"},
                         {
-                            "name": "Type",
-                            "label": "Type",
-                            "field": "Type",
-                            "sortable": True,
-                            "align": "left",
+                            "id": "actions",
+                            "header": "",
+                            "cellType": "action",
+                            "actionName": "view_variant",
+                            "actionIcon": "visibility",
+                            "actionColor": "#1976d2",
+                            "actionTooltip": "View in IGV",
+                            "sortable": False,
                         },
-                        {
-                            "name": "FID",
-                            "label": "Family ID",
-                            "field": "FID",
-                            "sortable": True,
-                            "align": "left",
-                        },
-                        {
-                            "name": "Variant",
-                            "label": "Variant",
-                            "field": "Variant",
-                            "sortable": True,
-                            "align": "left",
-                        },
-                        {
-                            "name": "Sample",
-                            "label": "Sample",
-                            "field": "Sample",
-                            "sortable": True,
-                            "align": "left",
-                        },
-                        {
-                            "name": "User",
-                            "label": "User",
-                            "field": "User",
-                            "sortable": True,
-                            "align": "left",
-                        },
-                        {
-                            "name": "Inheritance",
-                            "label": "Inheritance",
-                            "field": "Inheritance",
-                            "sortable": True,
-                            "align": "left",
-                        },
-                        {
-                            "name": "Validation",
-                            "label": "Validation",
-                            "field": "Validation",
-                            "sortable": True,
-                            "align": "left",
-                        },
-                        {
-                            "name": "Timestamp",
-                            "label": "Timestamp",
-                            "field": "Timestamp",
-                            "sortable": True,
-                            "align": "left",
-                        },
+                        {"id": "Type", "header": "Type", "sortable": True},
+                        {"id": "FID", "header": "Family ID", "sortable": True},
+                        {"id": "Variant", "header": "Variant", "sortable": True},
+                        {"id": "Sample", "header": "Sample", "sortable": True},
+                        {"id": "User", "header": "User", "sortable": True},
+                        {"id": "Inheritance", "header": "Inheritance", "sortable": True},
+                        {"id": "Validation", "header": "Validation", "cellType": "validation", "sortable": True},
+                        {"id": "Timestamp", "header": "Timestamp", "sortable": True},
                     ]
-
-                    # Create table
-                    validation_table = (
-                        ui.table(
-                            columns=columns,
-                            rows=filtered_data,
-                            row_key="Timestamp",
-                            pagination={"rowsPerPage": 50},
-                        )
-                        .classes("w-full")
-                        .props("dense flat")
-                    )
-
-                    # Add custom slot for view button and validation icons
-                    validation_table.add_slot("body", VALIDATION_TABLE_SLOT)
 
                     # Handle view button click
                     def on_view_variant(e):
-                        row_data = e.args
+                        row_data = e.get("row", {})
                         variant_type = row_data.get("Type", "SNV")
                         family_id = row_data.get("FID", "")
                         variant_str = row_data.get("Variant", "")
@@ -711,7 +657,13 @@ def validation_all_page() -> None:
                         except Exception as ex:
                             ui.notify(f"Error parsing variant: {ex}", type="warning")
 
-                    validation_table.on("view_variant", on_view_variant)
+                    DataTable(
+                        columns=columns,
+                        rows=filtered_data,
+                        row_key="Timestamp",
+                        pagination={"rowsPerPage": 50},
+                        on_row_action=on_view_variant,
+                    )
 
             # Initial render
             refresh_table()

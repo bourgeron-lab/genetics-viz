@@ -10,7 +10,7 @@ from nicegui import ui
 
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
-from genetics_viz.components.tables import VALIDATION_TABLE_SLOT
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
@@ -321,47 +321,44 @@ def validation_file_page(filename: str) -> None:
 
                     # Prepare columns for table
                     columns: List[Dict[str, Any]] = [
-                        {"name": "actions", "label": "", "field": "actions"}
+                        {
+                            "id": "actions",
+                            "header": "",
+                            "cellType": "action",
+                            "actionName": "view_variant",
+                            "actionIcon": "visibility",
+                            "actionColor": "#1976d2",
+                            "actionTooltip": "View in IGV",
+                            "sortable": False,
+                        }
                     ]
                     for header in headers:
-                        columns.append(
-                            {
-                                "name": header,
-                                "label": header,
-                                "field": header,
-                                "sortable": True,
-                                "align": "left",
-                            }
-                        )
+                        col_def: Dict[str, Any] = {
+                            "id": header,
+                            "header": header,
+                            "sortable": True,
+                        }
+                        header_lower = header.lower()
+                        if "symbol" in header_lower or "gene" in header_lower:
+                            col_def["cellType"] = "gene_badge"
+                            col_def["badgesField"] = f"{header}_badges"
+                        elif "impact" in header_lower:
+                            col_def["cellType"] = "badge_list"
+                            col_def["badgesField"] = f"{header}_badges"
+                        columns.append(col_def)
                     # Add Validation column
                     columns.append(
                         {
-                            "name": "Validation",
-                            "label": "Validation",
-                            "field": "Validation",
+                            "id": "Validation",
+                            "header": "Validation",
+                            "cellType": "validation",
                             "sortable": True,
-                            "align": "left",
                         }
                     )
 
-                    # Create table with pagination
-                    validation_table = (
-                        ui.table(
-                            columns=columns,
-                            rows=filtered_data,
-                            row_key=variant_col if has_variant else "Variant",
-                            pagination={"rowsPerPage": 50},
-                        )
-                        .classes("w-full")
-                        .props("dense flat")
-                    )
-
-                    # Add custom slot for view button and validation icons
-                    validation_table.add_slot("body", VALIDATION_TABLE_SLOT)
-
                     # Handle view button click
                     def on_view_variant(e):
-                        row_data = e.args
+                        row_data = e.get("row", {})
                         family_id = row_data.get(fid_col, "")
                         variant_str = row_data.get(variant_col, "")
                         sample_id = row_data.get(sample_col, "")
@@ -426,7 +423,13 @@ def validation_file_page(filename: str) -> None:
                         except Exception as ex:
                             ui.notify(f"Error parsing variant: {ex}", type="warning")
 
-                    validation_table.on("view_variant", on_view_variant)
+                    DataTable(
+                        columns=columns,
+                        rows=filtered_data,
+                        row_key=variant_col if has_variant else "Variant",
+                        pagination={"rowsPerPage": 50},
+                        on_row_action=on_view_variant,
+                    )
 
             # Initial render
             refresh_table()
