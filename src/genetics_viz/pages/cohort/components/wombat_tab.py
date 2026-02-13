@@ -14,6 +14,7 @@ from genetics_viz.components.validation_loader import (
     load_validation_map,
 )
 from genetics_viz.components.variant_dialog import show_variant_dialog
+from genetics_viz.utils.column_config import get_column_display_name
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
 
@@ -295,17 +296,8 @@ WOMBAT_TABLE_SLOT = r"""
 
 
 def get_wombat_display_label(col: str) -> str:
-    """Get display label for wombat column, removing VEP_ prefix and renaming gnomAD columns."""
-    if col == "fafmax_faf95_max_genomes":
-        return "gnomAD 4.1 WGS"
-    elif col == "nhomalt_genomes":
-        return "gnomAD 4.1 nhomalt WGS"
-    elif col == "VEP_CLIN_SIG":
-        return "ClinVar"
-    elif col.startswith("VEP_"):
-        return col[4:]  # Remove VEP_ prefix
-    else:
-        return col
+    """Get display label for wombat column from YAML config."""
+    return get_column_display_name(col)
 
 
 def render_wombat_tab(

@@ -22,112 +22,155 @@ from genetics_viz.pages.cohort.components.wombat_tab import (
     VIEW_PRESETS,
     select_preset_for_config,
 )
+from genetics_viz.utils.column_config import get_column_display_name, get_column_group
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
 
-# Same table slot as wombat_tab
-SEARCH_TABLE_SLOT = r"""
-    <q-tr :props="props">
-        <q-td key="actions" :props="props">
-            <div style="display: flex; align-items: center; gap: 4px;">
-                <q-btn
-                    flat
-                    dense
-                    size="sm"
-                    icon="visibility"
-                    color="blue"
-                    @click="$parent.$emit('view_variant', props.row)"
-                >
-                    <q-tooltip>View in IGV</q-tooltip>
-                </q-btn>
-                <q-badge
-                    v-if="props.row.n_grouped && props.row.n_grouped > 1"
-                    :label="props.row.n_grouped.toString()"
-                    color="orange"
-                    style="font-size: 11px;"
-                >
-                    <q-tooltip>
-                        {{ props.row.n_grouped }} transcripts collapsed
-                        <span v-if="props.row.VEP_SYMBOL"> for genes: {{ props.row.VEP_SYMBOL }}</span>
-                    </q-tooltip>
-                </q-badge>
-            </div>
-        </q-td>
-        <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-            <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present' || col.value === 'in phase MNV'" style="display: flex; align-items: center; gap: 4px;">
-                    <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as {{ col.value }}</q-tooltip>
-                    </q-icon>
-                    <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
-                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
-                    <span v-if="col.value === 'in phase MNV'" style="font-size: 0.75em; color: #666;">MNV</span>
-                </span>
-                <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
-                    <q-tooltip>Validated as absent</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
-                    <q-tooltip>Validation uncertain or different</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
-                    <q-tooltip>Conflicting validations</q-tooltip>
-                </q-icon>
-            </template>
-            <template v-else-if="col.name === 'VEP_Consequence'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ConsequenceBadges || [])" :key="idx"
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_CLIN_SIG'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ClinVarBadges || [])" :key="idx"
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_SYMBOL'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.GeneBadges || [])" :key="idx"
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_Gene'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.VEP_Gene_badges || [])" :key="idx"
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'FID'">
-                <a v-if="col.value" :href="'/cohort/' + props.row._cohort_name + '/family/' + col.value" style="color: #2563eb; text-decoration: underline; cursor: pointer;">
-                    {{ col.value }}
-                </a>
-                <span v-else>{{ col.value }}</span>
-            </template>
-            <template v-else>
-                <!-- Check for score badges dynamically -->
-                <div v-if="props.row[col.name + '_badge']" style="display: inline-block;">
-                    <q-badge
-                        :label="props.row[col.name + '_badge'].value"
-                        :style="'background-color: ' + props.row[col.name + '_badge'].color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ props.row[col.name + '_badge'].tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-                <span v-else>{{ col.value }}</span>
-            </template>
-        </q-td>
-    </q-tr>
-"""
+# Cell renderer functions for AG Grid
+def create_validation_cell_renderer():
+    """Create cell renderer for Validation column."""
+    return """
+    function(params) {
+        const value = params.value;
+        const row = params.data;
+        if (!value) return '';
+
+        if (value === 'present' || value === 'in phase MNV') {
+            let html = '<div style="display: flex; align-items: center; gap: 4px;">';
+            html += '<span style="color: #22c55e; font-size: 18px;">✓</span>';
+            if (row.ValidationInheritance === 'de novo') {
+                html += '<span style="font-weight: bold;">dnm</span>';
+            } else if (row.ValidationInheritance === 'homozygous') {
+                html += '<span style="font-weight: bold;">hom</span>';
+            }
+            if (value === 'in phase MNV') {
+                html += '<span style="font-size: 0.75em; color: #666;">MNV</span>';
+            }
+            html += '</div>';
+            return html;
+        } else if (value === 'absent') {
+            return '<span style="color: #ef4444; font-size: 18px;">✗</span>';
+        } else if (value === 'uncertain' || value === 'different') {
+            return '<span style="color: #f59e0b; font-size: 18px;">?</span>';
+        } else if (value === 'conflicting') {
+            return '<span style="color: #fbbf24; font-size: 18px;">⚡</span>';
+        }
+        return value;
+    }
+    """
+
+
+def create_consequence_cell_renderer():
+    """Create cell renderer for VEP_Consequence column."""
+    return """
+    function(params) {
+        const badges = params.data.ConsequenceBadges || [];
+        if (badges.length === 0) return '';
+
+        let html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">';
+        badges.forEach(badge => {
+            html += '<span style="background-color: ' + badge.color + '; color: white; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">' + badge.label + '</span>';
+        });
+        html += '</div>';
+        return html;
+    }
+    """
+
+
+def create_clinvar_cell_renderer():
+    """Create cell renderer for VEP_CLIN_SIG column."""
+    return """
+    function(params) {
+        const badges = params.data.ClinVarBadges || [];
+        if (badges.length === 0) return '';
+
+        let html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">';
+        badges.forEach(badge => {
+            html += '<span style="background-color: ' + badge.color + '; color: white; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">' + badge.label + '</span>';
+        });
+        html += '</div>';
+        return html;
+    }
+    """
+
+
+def create_gene_symbol_cell_renderer():
+    """Create cell renderer for VEP_SYMBOL column."""
+    return """
+    function(params) {
+        const badges = params.data.GeneBadges || [];
+        if (badges.length === 0) return '';
+
+        let html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">';
+        badges.forEach(badge => {
+            const textColor = badge.color === '#ffffff' ? 'black' : 'white';
+            html += '<span title="' + badge.tooltip + '" style="background-color: ' + badge.color + '; color: ' + textColor + '; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">' + badge.label + '</span>';
+        });
+        html += '</div>';
+        return html;
+    }
+    """
+
+
+def create_gene_id_cell_renderer():
+    """Create cell renderer for VEP_Gene column."""
+    return """
+    function(params) {
+        const badges = params.data.VEP_Gene_badges || [];
+        if (badges.length === 0) return '';
+
+        let html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">';
+        badges.forEach(badge => {
+            const textColor = badge.color === '#ffffff' ? 'black' : 'white';
+            html += '<span title="' + badge.tooltip + '" style="background-color: ' + badge.color + '; color: ' + textColor + '; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">' + badge.label + '</span>';
+        });
+        html += '</div>';
+        return html;
+    }
+    """
+
+
+def create_fid_cell_renderer():
+    """Create cell renderer for FID column."""
+    return """
+    function(params) {
+        const value = params.value;
+        if (!value) return '';
+        const cohortName = params.data._cohort_name;
+        return '<a href="/cohort/' + cohortName + '/family/' + value + '" style="color: #2563eb; text-decoration: underline; cursor: pointer;">' + value + '</a>';
+    }
+    """
+
+
+def create_score_badge_cell_renderer():
+    """Create cell renderer for columns with score badges."""
+    return """
+    function(params) {
+        const colId = params.column.getColId();
+        const badge = params.data[colId + '_badge'];
+        if (badge) {
+            return '<span style="background-color: ' + badge.color + '; color: white; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;" title="' + badge.tooltip + '">' + badge.value + '</span>';
+        }
+        return params.value || '';
+    }
+    """
+
+
+def create_actions_cell_renderer():
+    """Create cell renderer for actions column."""
+    return """
+    function(params) {
+        const row = params.data;
+        let html = '<div style="display: flex; align-items: center; gap: 4px;">';
+        html += '<button class="view-variant-btn" data-variant="' + row.Variant + '" style="background: none; border: none; color: #2563eb; cursor: pointer; padding: 4px; font-size: 18px;" title="View in IGV">👁</button>';
+        if (row.n_grouped && row.n_grouped > 1) {
+            html += '<span style="background-color: #f59e0b; color: white; font-size: 0.7em; padding: 1px 4px; border-radius: 3px; line-height: 1.2;" title="' + row.n_grouped + ' transcripts collapsed">' + row.n_grouped + '</span>';
+        }
+        html += '</div>';
+        return html;
+    }
+    """
 
 
 # Load VEP Consequence data from YAML
@@ -188,17 +231,8 @@ def format_clinvar_display(significance: str) -> str:
 
 
 def get_display_label(col: str) -> str:
-    """Get display label for column."""
-    if col == "fafmax_faf95_max_genomes":
-        return "gnomAD 4.1 WGS"
-    elif col == "nhomalt_genomes":
-        return "gnomAD 4.1 nhomalt WGS"
-    elif col == "VEP_CLIN_SIG":
-        return "ClinVar"
-    elif col.startswith("VEP_"):
-        return col[4:]
-    else:
-        return col
+    """Get display label for column from YAML config."""
+    return get_column_display_name(col)
 
 
 def parse_locus_query(query: str) -> Dict[str, Any]:
@@ -1325,25 +1359,172 @@ def search_cohort_page(cohort_name: str) -> None:
                                     )
                                 ]
 
-                            # Prepare columns
+                            # Prepare AG Grid column definitions
                             visible_cols = selected_cols["value"]
 
-                            def get_columns():
-                                cols: List[Dict[str, Any]] = [
-                                    {"name": "actions", "label": "", "field": "actions"}
-                                ]
-                                cols.extend(
-                                    [
-                                        {
-                                            "name": col,
-                                            "label": get_display_label(col),
-                                            "field": col,
-                                            "sortable": True,
-                                            "align": "left",
-                                        }
-                                        for col in visible_cols
-                                    ]
-                                )
+                            # Pre-render HTML for display columns
+                            for row in rows:
+                                # Actions column HTML
+                                actions_html = '<div style="display: flex; align-items: center; gap: 4px;">'
+                                actions_html += f'<button class="view-variant-btn" data-variant="{row.get("Variant", "")}" style="background: none; border: none; color: #2563eb; cursor: pointer; padding: 4px; font-size: 18px;" title="View in IGV">👁</button>'
+                                if row.get("n_grouped", 0) > 1:
+                                    actions_html += f'<span style="background-color: #f59e0b; color: white; font-size: 0.7em; padding: 1px 4px; border-radius: 3px; line-height: 1.2;" title="{row["n_grouped"]} transcripts collapsed">{row["n_grouped"]}</span>'
+                                actions_html += '</div>'
+                                row["_actions_html"] = actions_html
+
+                                # Validation column HTML
+                                val = row.get("Validation", "")
+                                if val == "present" or val == "in phase MNV":
+                                    val_html = '<div style="display: flex; align-items: center; gap: 4px;"><span style="color: #22c55e; font-size: 18px;">✓</span>'
+                                    if row.get("ValidationInheritance") == "de novo":
+                                        val_html += '<span style="font-weight: bold;">dnm</span>'
+                                    elif row.get("ValidationInheritance") == "homozygous":
+                                        val_html += '<span style="font-weight: bold;">hom</span>'
+                                    if val == "in phase MNV":
+                                        val_html += '<span style="font-size: 0.75em; color: #666;">MNV</span>'
+                                    val_html += '</div>'
+                                    row["_validation_html"] = val_html
+                                elif val == "absent":
+                                    row["_validation_html"] = '<span style="color: #ef4444; font-size: 18px;">✗</span>'
+                                elif val in ["uncertain", "different"]:
+                                    row["_validation_html"] = '<span style="color: #f59e0b; font-size: 18px;">?</span>'
+                                elif val == "conflicting":
+                                    row["_validation_html"] = '<span style="color: #fbbf24; font-size: 18px;">⚡</span>'
+                                else:
+                                    row["_validation_html"] = val
+
+                                # Consequence badges HTML
+                                if row.get("ConsequenceBadges"):
+                                    cons_html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">'
+                                    for badge in row["ConsequenceBadges"]:
+                                        cons_html += f'<span style="background-color: {badge["color"]}; color: white; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">{badge["label"]}</span>'
+                                    cons_html += '</div>'
+                                    row["_consequence_html"] = cons_html
+                                else:
+                                    row["_consequence_html"] = ""
+
+                                # ClinVar badges HTML
+                                if row.get("ClinVarBadges"):
+                                    clinvar_html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">'
+                                    for badge in row["ClinVarBadges"]:
+                                        clinvar_html += f'<span style="background-color: {badge["color"]}; color: white; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">{badge["label"]}</span>'
+                                    clinvar_html += '</div>'
+                                    row["_clinvar_html"] = clinvar_html
+                                else:
+                                    row["_clinvar_html"] = ""
+
+                                # Gene symbol badges HTML
+                                if row.get("GeneBadges"):
+                                    gene_html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">'
+                                    for badge in row["GeneBadges"]:
+                                        text_color = "black" if badge["color"] == "#ffffff" else "white"
+                                        gene_html += f'<span title="{badge["tooltip"]}" style="background-color: {badge["color"]}; color: {text_color}; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">{badge["label"]}</span>'
+                                    gene_html += '</div>'
+                                    row["_gene_symbol_html"] = gene_html
+                                else:
+                                    row["_gene_symbol_html"] = ""
+
+                                # Gene ID badges HTML
+                                if row.get("VEP_Gene_badges"):
+                                    gene_id_html = '<div style="display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">'
+                                    for badge in row["VEP_Gene_badges"]:
+                                        text_color = "black" if badge["color"] == "#ffffff" else "white"
+                                        gene_id_html += f'<span title="{badge["tooltip"]}" style="background-color: {badge["color"]}; color: {text_color}; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;">{badge["label"]}</span>'
+                                    gene_id_html += '</div>'
+                                    row["_gene_id_html"] = gene_id_html
+                                else:
+                                    row["_gene_id_html"] = ""
+
+                                # FID link HTML
+                                if row.get("FID"):
+                                    row["_fid_html"] = f'<a href="/cohort/{row["_cohort_name"]}/family/{row["FID"]}" style="color: #2563eb; text-decoration: underline; cursor: pointer;">{row["FID"]}</a>'
+                                else:
+                                    row["_fid_html"] = ""
+
+                            def get_aggrid_columns():
+                                """Create AG Grid column definitions."""
+                                cols: List[Dict[str, Any]] = []
+                                # Collect grouped columns: {group_name: [col_defs]}
+                                groups: Dict[str, List[Dict[str, Any]]] = {}
+                                # Track where each group first appeared in the column order
+                                group_first_idx: Dict[str, int] = {}
+
+                                # Actions column
+                                cols.append({
+                                    "headerName": "",
+                                    "field": "_actions_html",
+                                    "width": 100,
+                                    "sortable": False,
+                                    "filter": False,
+                                    "pinned": "left",
+                                    "lockPosition": True,
+                                    ":cellRenderer": "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }",
+                                })
+
+                                # Data columns
+                                for col_idx, col in enumerate(visible_cols):
+                                    col_def: Dict[str, Any] = {
+                                        "headerName": get_display_label(col),
+                                        "sortable": True,
+                                        "filter": True,
+                                        "resizable": True,
+                                    }
+
+                                    # Use HTML fields for special columns
+                                    if col == "Validation":
+                                        col_def["field"] = "_validation_html"
+                                        col_def[":cellRenderer"] = "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }"
+                                    elif col == "VEP_Consequence":
+                                        col_def["field"] = "_consequence_html"
+                                        col_def[":cellRenderer"] = "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }"
+                                    elif col == "VEP_CLIN_SIG":
+                                        col_def["field"] = "_clinvar_html"
+                                        col_def[":cellRenderer"] = "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }"
+                                    elif col == "VEP_SYMBOL":
+                                        col_def["field"] = "_gene_symbol_html"
+                                        col_def[":cellRenderer"] = "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }"
+                                    elif col == "VEP_Gene":
+                                        col_def["field"] = "_gene_id_html"
+                                        col_def[":cellRenderer"] = "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }"
+                                    elif col == "FID":
+                                        col_def["field"] = "_fid_html"
+                                        col_def[":cellRenderer"] = "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }"
+                                    else:
+                                        col_def["field"] = col
+                                        # Check if this column has score badges
+                                        score_col = f"{col}_badge"
+                                        if any(score_col in row for row in rows):
+                                            # Pre-render score badge HTML
+                                            for row in rows:
+                                                if score_col in row:
+                                                    badge = row[score_col]
+                                                    row[f"_{col}_html"] = f'<span style="background-color: {badge["color"]}; color: white; font-size: 0.75em; padding: 1px 6px; border-radius: 3px; white-space: nowrap; line-height: 1.2;" title="{badge["tooltip"]}">{badge["value"]}</span>'
+                                                else:
+                                                    row[f"_{col}_html"] = row.get(col, "")
+                                            col_def["field"] = f"_{col}_html"
+                                            col_def[":cellRenderer"] = "(params) => { const div = document.createElement('div'); div.innerHTML = params.value || ''; return div; }"
+
+                                    # Check if column belongs to a group
+                                    group_name = get_column_group(col)
+                                    if group_name:
+                                        if group_name not in groups:
+                                            groups[group_name] = []
+                                            group_first_idx[group_name] = col_idx
+                                        groups[group_name].append(col_def)
+                                    else:
+                                        cols.append(col_def)
+
+                                # Insert column groups at the position where they first appeared
+                                for group_name in sorted(groups, key=lambda g: group_first_idx[g]):
+                                    insert_pos = 1 + sum(
+                                        1 for c in visible_cols[:group_first_idx[group_name]]
+                                        if not get_column_group(c)
+                                    )
+                                    cols.insert(insert_pos, {
+                                        "headerName": group_name,
+                                        "children": groups[group_name],
+                                    })
+
                                 return cols
 
                             with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
@@ -1454,24 +1635,69 @@ def search_cohort_page(cohort_name: str) -> None:
                             # Connect preset change handler
                             preset_select.on_value_change(on_preset_change)
 
-                            # Create table
-                            results_table = (
-                                ui.table(
-                                    columns=get_columns(),
-                                    rows=rows,
-                                    row_key="Variant",
-                                    pagination={"rowsPerPage": 50},
-                                )
-                                .classes("w-full")
-                                .props("dense flat")
-                            )
+                            # Create AG Grid table with HTML rendering
+                            results_grid = ui.aggrid({
+                                "columnDefs": get_aggrid_columns(),
+                                "rowData": rows,
+                                "defaultColDef": {
+                                    "sortable": True,
+                                    "filter": True,
+                                    "resizable": True,
+                                },
+                                "rowHeight": 32,
+                                "autoSizeStrategy": {"type": "fitCellContents"},
+                                "enableRangeSelection": True,
+                                "enableCellTextSelection": True,
+                                "pagination": True,
+                                "paginationPageSize": 50,
+                                "paginationPageSizeSelector": [25, 50, 100, 200],
+                                "rowSelection": "multiple",
+                                "suppressRowClickSelection": True,
+                                "domLayout": "normal",
+                                "animateRows": True,
+                                "enableBrowserTooltips": True,
+                            }).classes("w-full h-[600px] search-grid")
 
-                            results_table.add_slot("body", SEARCH_TABLE_SLOT)
+                            # CSS to vertically center all cell content
+                            ui.add_head_html("""
+                            <style>
+                            .search-grid .ag-cell {
+                                display: flex !important;
+                                align-items: center !important;
+                            }
+                            </style>
+                            """)
+
+                            # Handle cell click events for actions column
+                            def on_cell_click(e):
+                                event_data = e.args
+                                if event_data.get("colId") == "_actions_html":
+                                    row_data = event_data.get("data", {})
+                                    on_view_variant_click(row_data)
+
+                            results_grid.on("cellClicked", on_cell_click)
 
                             # Handle view variant click
-                            def on_view_variant(e):
-                                row_data = e.args
+                            def on_view_variant_click(row_data):
+                                if not row_data:
+                                    return
+
                                 variant_str = row_data.get("Variant", "")
+
+                                # Find the row data for this variant
+                                row_data = None
+                                for row in all_rows:
+                                    if row.get("Variant") == variant_str:
+                                        row_data = row
+                                        break
+
+                                if not row_data:
+                                    ui.notify(
+                                        f"Could not find data for variant {variant_str}",
+                                        type="warning",
+                                    )
+                                    return
+
                                 sample_id = row_data.get("sample", "")
 
                                 # Get family from sample
@@ -1539,8 +1765,6 @@ def search_cohort_page(cohort_name: str) -> None:
                                     ui.notify(
                                         f"Error parsing variant: {ex}", type="warning"
                                     )
-
-                            results_table.on("view_variant", on_view_variant)
 
                         render_results_table()
 
