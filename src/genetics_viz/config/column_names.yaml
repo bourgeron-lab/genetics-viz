@@ -1,14 +1,18 @@
 "#CHROM":
   name: "#CHROM"
+  type: string
   group: ""
 POS:
   name: "POS"
+  type: int
   group: ""
 REF:
   name: "REF"
+  type: string
   group: ""
 ALT:
   name: "ALT"
+  type: string
   group: ""
 QUAL:
   name: "QUAL"
@@ -18,22 +22,22 @@ FILTER:
   group: ""
 AC_genomes:
   name: "AC_genomes"
-  group: ""
+  group: "gnomAD 4.1 WGS"
 AC_joint:
   name: "AC_joint"
-  group: ""
+  group: "gnomAD 4.1"
 AF:
   name: "AF"
   group: ""
 AF_genomes:
   name: "AF_genomes"
-  group: ""
+  group: "gnomAD 4.1 WGS"
 AN_exomes:
   name: "AN_exomes"
-  group: ""
+  group: "gnomAD 4.1 WES"
 AN_genomes:
   name: "AN_genomes"
-  group: ""
+  group: "gnomAD 4.1 WGS"
 AQ:
   name: "AQ"
   group: ""
@@ -56,155 +60,167 @@ SpliceAI_symbol:
   name: "symbol"
   group: "SpliceAI"
 VEP_5UTR_annotation:
-  name: "VEP_5UTR_annotation"
-  group: ""
+  name: "annotation"
+  group: "5UTR_annotator"
 VEP_5UTR_consequence:
-  name: "VEP_5UTR_consequence"
-  group: ""
+  name: "consequence"
+  group: "5UTR_annotator"
 VEP_AF:
-  name: "VEP_AF"
-  group: ""
+  name: "AF"
+  group: "VEP"
 VEP_Allele:
-  name: "VEP_Allele"
-  group: ""
+  name: "Allele"
+  group: "VEP"
 VEP_Amino_acids:
-  name: "VEP_Amino_acids"
-  group: ""
+  name: "amino_acids"
+  group: "VEP"
 VEP_BIOTYPE:
-  name: "VEP_BIOTYPE"
-  group: ""
+  name: "biotype"
+  group: "VEP"
 VEP_CANONICAL:
-  name: "VEP_CANONICAL"
-  group: ""
+  name: "canonical"
+  group: "VEP"
 VEP_CCDS:
-  name: "VEP_CCDS"
-  group: ""
+  name: "CCDS"
+  group: "VEP"
 VEP_CDS_position:
-  name: "VEP_CDS_position"
-  group: ""
+  name: "CDS_position"
+  group: "VEP"
 VEP_CLIN_SIG:
   name: "Clinvar"
-  group: ""
+  group: "VEP"
+  min_width: 250
+  max_width: 250
 VEP_Codons:
-  name: "VEP_Codons"
-  group: ""
+  name: "codons"
+  group: "VEP"
 VEP_Consequence:
-  name: "Consequence"
-  group: ""
+  name: "consequence"
+  group: "VEP"
+  min_width: 250
+  max_width: 250
 VEP_DISTANCE:
-  name: "VEP_DISTANCE"
-  group: ""
+  name: "distance"
+  group: "VEP"
 VEP_EXON:
-  name: "VEP_EXON"
-  group: ""
+  name: "exon"
+  group: "VEP"
 VEP_Existing_InFrame_oORFs:
-  name: "VEP_Existing_InFrame_oORFs"
-  group: ""
+  name: "Existing_InFrame_oORFs"
+  group: "VEP"
 VEP_Existing_OutOfFrame_oORFs:
-  name: "VEP_Existing_OutOfFrame_oORFs"
-  group: ""
+  name: "Existing_OutOfFrame_oORFs"
+  group: "VEP"
 VEP_Existing_uORFs:
-  name: "VEP_Existing_uORFs"
-  group: ""
+  name: "Existing_uORFs"
+  group: "VEP"
 VEP_Existing_variation:
-  name: "VEP_Existing_variation"
-  group: ""
+  name: "Existing_variation"
+  group: "VEP"
 VEP_FLAGS:
-  name: "VEP_FLAGS"
-  group: ""
+  name: "FLAGS"
+  group: "VEP"
 VEP_Feature:
-  name: "VEP_Feature"
-  group: ""
+  name: "feature"
+  group: "VEP"
 VEP_Feature_type:
-  name: "VEP_Feature_type"
-  group: ""
+  name: "feature_type"
+  group: "VEP"
 VEP_Gene:
-  name: "VEP_Gene"
-  group: ""
+  name: "ENSG"
+  group: "VEP"
 VEP_HGNC_ID:
-  name: "VEP_HGNC_ID"
-  group: ""
+  name: "HGNC"
+  group: "VEP"
 VEP_HGVS_OFFSET:
-  name: "VEP_HGVS_OFFSET"
-  group: ""
+  name: "HGVS_OFFSET"
+  group: "VEP"
 VEP_HGVSc:
-  name: "VEP_HGVSc"
-  group: ""
+  name: "HGVSc"
+  group: "VEP"
 VEP_HGVSp:
-  name: "VEP_HGVSp"
-  group: ""
+  name: "HGVSp"
+  group: "VEP"
 VEP_HIGH_INF_POS:
-  name: "VEP_HIGH_INF_POS"
-  group: ""
+  name: "HIGH_INF_POS"
+  group: "VEP"
 VEP_IMPACT:
-  name: "VEP_IMPACT"
-  group: ""
+  name: "impact"
+  group: "VEP"
 VEP_INTRON:
-  name: "VEP_INTRON"
-  group: ""
+  name: "intron"
+  group: "VEP"
 VEP_LoF:
-  name: "VEP_LoF"
-  group: ""
+  name: "LoF"
+  group: "Loftee"
 VEP_LoF_filter:
-  name: "VEP_LoF_filter"
-  group: ""
+  name: "filter"
+  group: "Loftee"
 VEP_LoF_flags:
-  name: "VEP_LoF_flags"
-  group: ""
+  name: "flags"
+  group: "Loftee"
 VEP_LoF_info:
-  name: "VEP_LoF_info"
-  group: ""
+  name: "info"
+  group: "Loftee"
 VEP_MANE:
-  name: "VEP_MANE"
-  group: ""
+  name: "MANE"
+  group: "VEP"
 VEP_MANE_PLUS_CLINICAL:
-  name: "VEP_MANE_PLUS_CLINICAL"
-  group: ""
+  name: "MANE_PLUS_CLINICAL"
+  group: "VEP"
 VEP_MANE_SELECT:
-  name: "VEP_MANE_SELECT"
-  group: ""
+  name: "MANE_SELECT"
+  group: "VEP"
 VEP_MOTIF_NAME:
-  name: "VEP_MOTIF_NAME"
-  group: ""
+  name: "MOTIF_NAME"
+  group: "VEP"
 VEP_MOTIF_POS:
-  name: "VEP_MOTIF_POS"
-  group: ""
+  name: "MOTIF_POS"
+  group: "VEP"
 VEP_MOTIF_SCORE_CHANGE:
-  name: "VEP_MOTIF_SCORE_CHANGE"
-  group: ""
+  name: "MOTIF_SCORE_CHANGE"
+  group: "VEP"
 VEP_PHENO:
-  name: "VEP_PHENO"
-  group: ""
+  name: "pheno"
+  group: "VEP"
 VEP_PUBMED:
-  name: "VEP_PUBMED"
-  group: ""
+  name: "pubmed"
+  type: string
+  group: "VEP"
 VEP_Protein_position:
-  name: "VEP_Protein_position"
-  group: ""
+  name: "protein_position"
+  group: "VEP"
 VEP_REF_ALLELE:
-  name: "VEP_REF_ALLELE"
-  group: ""
+  name: "REF_allele"
+  group: "VEP"
+  drop: true
 VEP_SOMATIC:
-  name: "VEP_SOMATIC"
-  group: ""
+  name: "somatic"
+  group: "VEP"
+  drop: true
 VEP_STRAND:
-  name: "VEP_STRAND"
-  group: ""
+  name: "strand"
+  group: "VEP"
+  drop: true
 VEP_SYMBOL:
-  name: "Symbol"
-  group: ""
+  name: "symbol"
+  group: "VEP"
+  min_width: 100
+  max_width: 100
 VEP_SYMBOL_SOURCE:
-  name: "VEP_SYMBOL_SOURCE"
-  group: ""
+  name: "symbol_source"
+  group: "VEP"
+  drop: true
 VEP_TRANSCRIPTION_FACTORS:
-  name: "VEP_TRANSCRIPTION_FACTORS"
-  group: ""
+  name: "transcription_factors"
+  group: "VEP"
 VEP_UPLOADED_ALLELE:
-  name: "VEP_UPLOADED_ALLELE"
-  group: ""
+  name: "uploaded_allele"
+  group: "VEP"
+  drop: true
 VEP_cDNA_position:
-  name: "VEP_cDNA_position"
-  group: ""
+  name: "cDNA_position"
+  group: "VEP"
 am_class:
   name: "AM class"
   group: "Missense"
@@ -215,17 +231,17 @@ cadd_v1.7:
   name: "cadd_v1.7"
   group: ""
 faf95_joint:
-  name: "faf95_joint"
-  group: ""
+  name: "faf95"
+  group: "gnomAD 4.1"
 faf95_joint_nfe:
-  name: "faf95_joint_nfe"
-  group: ""
+  name: "faf95_nfe"
+  group: "gnomAD 4.1"
 fafmax_faf95_max_genomes:
   name: "AF"
   group: "gnomAD 4.1 WGS"
 fafmax_faf95_max_joint:
-  name: "fafmax_faf95_max_joint"
-  group: ""
+  name: "faf95_max"
+  group: "gnomAD 4.1"
 genomes_filters:
   name: "filter"
   group: "gnomAD 4.1 WGS"
@@ -233,17 +249,17 @@ nhomalt_genomes:
   name: "nhomalt"
   group: "gnomAD 4.1 WGS"
 nhomalt_joint:
-  name: "nhomalt_joint"
-  group: ""
+  name: "nhomalt"
+  group: "gnomAD 4.1"
 nhomalt_joint_nfe:
-  name: "nhomalt_joint_nfe"
-  group: ""
+  name: "nhomalt_nfe"
+  group: "gnomAD 4.1"
 popEVE:
   name: "popEVE"
   group: "Missense"
 stat_union_p_value:
   name: "stat_union_p_value"
-  group: ""
+  group: "gnomAD 4.1"
 LCR:
   name: "LCR"
   group: ""
@@ -252,19 +268,19 @@ sample:
   group: ""
 sample_gt:
   name: "kid"
-  group: "Genotype"
+  group: "genotype"
 sample_dp:
-  name: "sample_dp"
-  group: ""
+  name: "DP"
+  group: "sample"
 sample_gq:
-  name: "sample_gq"
-  group: ""
+  name: "GQ"
+  group: "sample"
 sample_ad:
-  name: "sample_ad"
-  group: ""
+  name: "AD"
+  group: "sample"
 sample_vaf:
-  name: "sample_vaf"
-  group: ""
+  name: "VAF"
+  group: "sample"
 father:
   name: "father"
   group: ""
@@ -273,46 +289,59 @@ mother:
   group: ""
 sex:
   name: "sex"
-  group: ""
+  type: string
+  group: "sample"
 father_gt:
   name: "dad"
-  group: "Genotype"
+  group: "genotype"
 father_dp:
-  name: "father_dp"
-  group: ""
+  name: "DP"
+  group: "father"
 father_gq:
-  name: "father_gq"
-  group: ""
+  name: "GQ"
+  group: "father"
 father_ad:
-  name: "father_ad"
-  group: ""
+  name: "AD"
+  group: "father"
 father_vaf:
-  name: "father_vaf"
-  group: ""
+  name: "VAF"
+  group: "father"
 mother_gt:
   name: "mom"
-  group: "Genotype"
+  group: "genotype"
 mother_dp:
-  name: "mother_dp"
-  group: ""
+  name: "DP"
+  group: "mother"
 mother_gq:
-  name: "mother_gq"
-  group: ""
+  name: "GQ"
+  group: "mother"
 mother_ad:
-  name: "mother_ad"
-  group: ""
+  name: "AD"
+  group: "mother"
 mother_vaf:
-  name: "mother_vaf"
-  group: ""
+  name: "VAF"
+  group: "mother"
 mnv_proba:
-  name: "mnv_proba"
-  group: ""
+  name: "proba"
+  group: "MNV"
 mnv_inframe:
-  name: "mnv_inframe"
-  group: ""
+  name: "inframe"
+  group: "MNV"
 mnv_variant:
-  name: "mnv_variant"
+  name: "variant"
+  group: "MNV"
+Variant:
+  name: "Variant"
+  sorting: genomic
   group: ""
+  min_width: 150
+  max_width: 150
 "chr:pos:ref:alt":
   name: "Variant"
+  sorting: genomic
+  group: ""
+  min_width: 150
+  max_width: 150
+actions:
+  name: ""
   group: ""

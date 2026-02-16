@@ -11,8 +11,8 @@ class DataTable {
         this.container = document.getElementById(config.containerId);
         this.config = config;
         this.data = data || [];
-        this.sorting = [];
-        this.currentPage = 0;
+        this.sorting = config.initialSorting || [];
+        this.currentPage = config.initialPage || 0;
         this.rowsPerPage = (config.pagination && config.pagination.rowsPerPage) || 50;
         this.dense = config.dense !== false;
         this.selection = config.selection || null;
@@ -24,6 +24,11 @@ class DataTable {
         this._visibleColumnIds = config.visibleColumns
             ? config.visibleColumns
             : config.columns.map(function(c) { return c.id; });
+
+        // Clamp initial page to valid range
+        var maxPage = this._getTotalPages() - 1;
+        if (this.currentPage > maxPage) this.currentPage = maxPage;
+        if (this.currentPage < 0) this.currentPage = 0;
 
         this._initTable();
         this.render();
@@ -55,6 +60,7 @@ class DataTable {
                         return { id: s.id, desc: s.desc };
                     })
                 });
+                self._emitPageChange();
             },
             getCoreRowModel: TanStack.getCoreRowModel(),
             enableSorting: true,
@@ -131,7 +137,40 @@ class DataTable {
         this.data = data;
         this.currentPage = 0;
         this._updateTableData();
-        this.render();
+        // Partial update: only rebuild tbody + pagination to preserve filter focus
+        var table = this.container && this.container.querySelector('.dt-table');
+        if (table) {
+            this._updateBodyAndPagination(table);
+        } else {
+            this.render();
+        }
+    }
+
+    _updateBodyAndPagination(table) {
+        // Replace tbody
+        var oldTbody = table.querySelector('tbody');
+        var newTbody = this._renderBody();
+        if (oldTbody) {
+            table.replaceChild(newTbody, oldTbody);
+        } else {
+            table.appendChild(newTbody);
+        }
+
+        // Replace pagination / row-count bar
+        var wrapper = this.container.querySelector('.dt-wrapper');
+        if (!wrapper) return;
+        var oldPag = wrapper.querySelector('.dt-pagination');
+        if (oldPag) oldPag.remove();
+
+        if (this.data.length > this.rowsPerPage) {
+            wrapper.appendChild(this._renderPagination());
+        } else {
+            wrapper.appendChild(this._renderRowCount());
+        }
+
+        // Re-bind tooltip on scroll container
+        var scrollContainer = this.container.querySelector('.dt-scroll-container');
+        if (scrollContainer) this._bindValTooltip(scrollContainer);
     }
 
     setColumns(columns) {
@@ -185,6 +224,17 @@ class DataTable {
         var table = document.createElement('table');
         table.className = tableClasses;
 
+        // Compute group boundary flags for vertical separators
+        var visCols = this._getVisibleColumnDefs();
+        this._groupBorderFlags = [];
+        for (var gi = 0; gi < visCols.length; gi++) {
+            var curGroup = visCols[gi].group || '';
+            var nxtGroup = (gi + 1 < visCols.length) ? (visCols[gi + 1].group || '') : '';
+            this._groupBorderFlags.push(
+                gi < visCols.length - 1 && !(curGroup !== '' && curGroup === nxtGroup)
+            );
+        }
+
         table.appendChild(this._renderHeader());
         table.appendChild(this._renderBody());
         tableContainer.appendChild(table);
@@ -198,6 +248,7 @@ class DataTable {
         }
 
         this.container.appendChild(wrapper);
+        this._bindValTooltip(scrollContainer);
     }
 
     _renderHeader() {
@@ -210,10 +261,12 @@ class DataTable {
         // Collect group info from column metadata
         var colInfos = [];
         var hasGroups = false;
+        var hasFilters = false;
         for (var i = 0; i < headers.length; i++) {
             var meta = headers[i].column.columnDef.meta || {};
             var group = meta.group || '';
             if (group) hasGroups = true;
+            if (meta.filter) hasFilters = true;
             colInfos.push({ header: headers[i], group: group });
         }
 
@@ -221,7 +274,11 @@ class DataTable {
             // Single-row header (no groups)
             var tr = document.createElement('tr');
             for (var i = 0; i < colInfos.length; i++) {
-                tr.appendChild(this._renderHeaderCell(colInfos[i].header));
+                var th = this._renderHeaderCell(colInfos[i].header);
+                if (this._groupBorderFlags && this._groupBorderFlags[i]) {
+                    th.classList.add('dt-group-border');
+                }
+                tr.appendChild(th);
             }
             thead.appendChild(tr);
         } else {
@@ -237,6 +294,9 @@ class DataTable {
                     // Ungrouped: rowspan=2 in group row, skip column row
                     var th = this._renderHeaderCell(info.header);
                     th.rowSpan = 2;
+                    if (this._groupBorderFlags && this._groupBorderFlags[i]) {
+                        th.classList.add('dt-group-border');
+                    }
                     groupRow.appendChild(th);
                     i++;
                 } else {
@@ -253,11 +313,18 @@ class DataTable {
                     groupTh.className = 'dt-group-header';
                     groupTh.colSpan = span;
                     groupTh.textContent = groupName;
+                    if (this._groupBorderFlags && this._groupBorderFlags[i - 1]) {
+                        groupTh.classList.add('dt-group-border');
+                    }
                     groupRow.appendChild(groupTh);
 
                     // Column row: individual th cells
                     for (var j = startIdx; j < startIdx + span; j++) {
-                        columnRow.appendChild(this._renderHeaderCell(colInfos[j].header));
+                        var colTh = this._renderHeaderCell(colInfos[j].header);
+                        if (this._groupBorderFlags && this._groupBorderFlags[j]) {
+                            colTh.classList.add('dt-group-border');
+                        }
+                        columnRow.appendChild(colTh);
                     }
                 }
             }
@@ -266,12 +333,189 @@ class DataTable {
             thead.appendChild(columnRow);
         }
 
+        // Filter row (if any column has a filter definition)
+        if (hasFilters) {
+            thead.appendChild(this._renderFilterRow(headers));
+        }
+
         return thead;
+    }
+
+    _renderFilterRow(headers) {
+        var tr = document.createElement('tr');
+        tr.className = 'dt-filter-row';
+
+        // Initialize filter state if needed
+        if (!this._filterValues) this._filterValues = {};
+
+        for (var i = 0; i < headers.length; i++) {
+            var th = document.createElement('th');
+            th.className = 'dt-filter-cell';
+            var meta = headers[i].column.columnDef.meta || {};
+            var filter = meta.filter;
+
+            if (this._groupBorderFlags && this._groupBorderFlags[i]) {
+                th.classList.add('dt-group-border');
+            }
+
+            if (filter) {
+                var colId = meta.id;
+                var el = this._createFilterInput(colId, filter);
+                th.appendChild(el);
+            }
+
+            tr.appendChild(th);
+        }
+
+        return tr;
+    }
+
+    _createFilterInput(colId, filter) {
+        var self = this;
+        var type = filter.type || 'text';
+
+        if (type === 'text') {
+            var wrap = document.createElement('div');
+            wrap.className = 'dt-filter-text-wrap';
+
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'dt-filter-text';
+            input.placeholder = filter.placeholder || 'Filter...';
+            input.value = this._filterValues[colId] || '';
+
+            var clearBtn = document.createElement('button');
+            clearBtn.type = 'button';
+            clearBtn.className = 'dt-filter-clear';
+            clearBtn.textContent = '\u00D7';
+            clearBtn.style.display = input.value ? 'flex' : 'none';
+
+            input.addEventListener('input', function() {
+                self._filterValues[colId] = input.value;
+                clearBtn.style.display = input.value ? 'flex' : 'none';
+                self._emitFilterChange();
+            });
+
+            clearBtn.addEventListener('click', function() {
+                input.value = '';
+                self._filterValues[colId] = '';
+                clearBtn.style.display = 'none';
+                input.focus();
+                self._emitFilterChange();
+            });
+
+            wrap.appendChild(input);
+            wrap.appendChild(clearBtn);
+            return wrap;
+        }
+
+        if (type === 'select') {
+            var select = document.createElement('select');
+            select.className = 'dt-filter-select';
+            var options = filter.options || [];
+            for (var i = 0; i < options.length; i++) {
+                var opt = document.createElement('option');
+                opt.value = options[i].value !== undefined ? options[i].value : options[i];
+                opt.textContent = options[i].label || options[i];
+                select.appendChild(opt);
+            }
+            select.value = this._filterValues[colId] || '';
+            select.addEventListener('change', function() {
+                self._filterValues[colId] = select.value;
+                self._emitFilterChange();
+            });
+            return select;
+        }
+
+        if (type === 'multiselect') {
+            // Custom dropdown with checkboxes
+            var wrap = document.createElement('div');
+            wrap.className = 'dt-filter-multi-wrap';
+
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dt-filter-multi-btn';
+            var selected = this._filterValues[colId] || [];
+            btn.textContent = selected.length ? selected.length + ' selected' : filter.placeholder || 'All';
+
+            var dropdown = document.createElement('div');
+            dropdown.className = 'dt-filter-multi-dropdown';
+            dropdown.style.display = 'none';
+
+            var options = filter.options || [];
+            for (var i = 0; i < options.length; i++) {
+                (function(optVal) {
+                    var label = document.createElement('label');
+                    label.className = 'dt-filter-multi-option';
+                    var cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.value = optVal;
+                    cb.checked = selected.indexOf(optVal) !== -1;
+                    cb.addEventListener('change', function() {
+                        var vals = self._filterValues[colId] || [];
+                        if (cb.checked) {
+                            if (vals.indexOf(optVal) === -1) vals.push(optVal);
+                        } else {
+                            vals = vals.filter(function(v) { return v !== optVal; });
+                        }
+                        self._filterValues[colId] = vals;
+                        btn.textContent = vals.length ? vals.length + ' selected' : filter.placeholder || 'All';
+                        self._emitFilterChange();
+                    });
+                    label.appendChild(cb);
+                    label.appendChild(document.createTextNode(' ' + optVal));
+                    dropdown.appendChild(label);
+                })(options[i]);
+            }
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var isOpen = dropdown.style.display !== 'none';
+                dropdown.style.display = isOpen ? 'none' : 'block';
+            });
+
+            // Close dropdown when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!wrap.contains(e.target)) {
+                    dropdown.style.display = 'none';
+                }
+            });
+
+            wrap.appendChild(btn);
+            wrap.appendChild(dropdown);
+            return wrap;
+        }
+
+        if (type === 'checkbox') {
+            var label = document.createElement('label');
+            label.className = 'dt-filter-checkbox';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = this._filterValues[colId] || false;
+            cb.addEventListener('change', function() {
+                self._filterValues[colId] = cb.checked;
+                self._emitFilterChange();
+            });
+            label.appendChild(cb);
+            label.appendChild(document.createTextNode(' ' + (filter.label || '')));
+            return label;
+        }
+
+        // Unknown filter type — return empty span
+        return document.createElement('span');
+    }
+
+    _emitFilterChange() {
+        this._emitEvent('filterChange', { filters: this._filterValues });
     }
 
     _renderHeaderCell(header) {
         var th = document.createElement('th');
         var canSort = header.column.getCanSort();
+        var meta = header.column.columnDef.meta || {};
+
+        // Apply width constraints from YAML config
+        this._applyWidthStyles(th, meta);
 
         var label = document.createElement('span');
         label.className = 'dt-header-label';
@@ -302,6 +546,18 @@ class DataTable {
 
         th.appendChild(label);
         return th;
+    }
+
+    _applyWidthStyles(el, meta) {
+        if (meta.minWidth) {
+            el.style.minWidth = meta.minWidth + 'px';
+        }
+        if (meta.maxWidth) {
+            el.style.maxWidth = meta.maxWidth + 'px';
+            el.style.whiteSpace = 'normal';
+            el.style.overflowWrap = 'break-word';
+            el.style.wordBreak = 'break-word';
+        }
     }
 
     _renderBody() {
@@ -342,7 +598,12 @@ class DataTable {
             var cells = row.getVisibleCells();
             for (var ci = 0; ci < cells.length; ci++) {
                 var td = document.createElement('td');
+                var cellMeta = cells[ci].column.columnDef.meta || {};
+                this._applyWidthStyles(td, cellMeta);
                 td.innerHTML = this._renderCell(cells[ci], row.original);
+                if (this._groupBorderFlags && this._groupBorderFlags[ci]) {
+                    td.classList.add('dt-group-border');
+                }
                 tr.appendChild(td);
             }
             tbody.appendChild(tr);
@@ -406,29 +667,46 @@ class DataTable {
     }
 
     _renderValidationCell(value, rowData) {
-        if (!value) return '';
-        var v = String(value).toLowerCase();
+        var bd = rowData.Validation_badge;
+        if (!bd) {
+            if (!value) return '';
+            return this._escapeHtml(String(value));
+        }
 
-        if (v === 'present' || v === 'in phase mnv') {
-            var html = '<span class="dt-validation-wrap">';
-            html += '<span class="material-icons dt-validation-icon" style="color: #4caf50;" data-tooltip="Validated as ' + this._escapeAttr(value) + '">check_circle</span>';
-            var inh = rowData.ValidationInheritance || rowData.Inheritance || '';
-            if (inh === 'de novo') html += '<strong class="dt-inh-label">dnm</strong>';
-            else if (inh === 'homozygous') html += '<strong class="dt-inh-label">hom</strong>';
-            if (v === 'in phase mnv') html += '<span class="dt-mnv-label">MNV</span>';
-            html += '</span>';
-            return html;
+        var b = bd.badge;
+        var html = '<span class="dt-val-wrap">';
+        html += '<span class="dt-val-badge" style="background-color:' + b.bg + ';">';
+        if (b.symbol) {
+            html += '<span class="dt-val-symbol" style="color:' + b.sc + ';">' + this._escapeHtml(b.symbol) + '</span>';
         }
-        if (v === 'absent') {
-            return '<span class="material-icons dt-validation-icon" style="color: #f44336;" data-tooltip="Validated as absent">cancel</span>';
+        if (b.text) {
+            html += '<span class="dt-val-text" style="color:' + b.tc + ';">' + this._escapeHtml(b.text) + '</span>';
         }
-        if (v === 'uncertain' || v === 'different') {
-            return '<span class="material-icons dt-validation-icon" style="color: #ff9800;" data-tooltip="Validation uncertain or different">help</span>';
+        if (b.label) {
+            html += '<span class="dt-val-label" style="color:' + b.sc + ';">' + this._escapeHtml(b.label) + '</span>';
         }
-        if (v === 'conflicting') {
-            return '<span class="material-icons dt-validation-icon" style="color: #ff8f00;" data-tooltip="Conflicting validations">bolt</span>';
+        html += '</span>';
+
+        // Tooltip table with all validation details
+        var details = bd.details;
+        if (details && details.length) {
+            html += '<div class="dt-val-tooltip"><table>';
+            html += '<tr><th>Status</th><th>Inheritance</th><th>User</th><th>Comment</th><th>Date</th></tr>';
+            for (var i = 0; i < details.length; i++) {
+                var d = details[i];
+                html += '<tr>';
+                html += '<td><span style="color:' + d.sc + ';">' + this._escapeHtml(d.sy) + '</span> ' + this._escapeHtml(d.s) + '</td>';
+                html += '<td>' + this._escapeHtml(d.i || '') + '</td>';
+                html += '<td>' + this._escapeHtml(d.u || '') + '</td>';
+                html += '<td>' + this._escapeHtml(d.c || '') + '</td>';
+                html += '<td>' + this._escapeHtml(d.t || '') + '</td>';
+                html += '</tr>';
+            }
+            html += '</table></div>';
         }
-        return this._escapeHtml(String(value));
+
+        html += '</span>';
+        return html;
     }
 
     _renderBadgeCell(value, meta, rowData) {
@@ -579,6 +857,7 @@ class DataTable {
             self.currentPage = 0;
             self._updateTableData();
             self.render();
+            self._emitPageChange();
         });
         rppWrap.appendChild(select);
         bar.appendChild(rppWrap);
@@ -596,6 +875,7 @@ class DataTable {
                 self.currentPage--;
                 self._updateTableData();
                 self.render();
+                self._emitPageChange();
             }
         });
         nav.appendChild(prevBtn);
@@ -614,6 +894,7 @@ class DataTable {
                 self.currentPage++;
                 self._updateTableData();
                 self.render();
+                self._emitPageChange();
             }
         });
         nav.appendChild(nextBtn);
@@ -657,6 +938,10 @@ class DataTable {
         });
     }
 
+    _emitPageChange() {
+        this._emitEvent('pageChange', { page: this.currentPage });
+    }
+
     // ---- Events ----
 
     _emitEvent(name, data) {
@@ -688,6 +973,56 @@ class DataTable {
             .replace(/'/g, '&#39;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
+    }
+
+    // ---- Floating validation tooltip ----
+
+    static _getFloatingTooltip() {
+        var el = document.getElementById('dt-val-floating-tooltip');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'dt-val-floating-tooltip';
+            el.className = 'dt-val-tooltip dt-val-tooltip-floating';
+            document.body.appendChild(el);
+        }
+        return el;
+    }
+
+    _bindValTooltip(scrollContainer) {
+        scrollContainer.addEventListener('mouseenter', function(e) {
+            var wrap = e.target.closest('.dt-val-wrap');
+            if (!wrap) return;
+            var src = wrap.querySelector('.dt-val-tooltip');
+            if (!src) return;
+
+            var tip = DataTable._getFloatingTooltip();
+            tip.innerHTML = src.innerHTML;
+
+            var rect = wrap.getBoundingClientRect();
+            tip.style.display = 'block';
+            // Position below the badge, then clamp to viewport
+            var tipRect = tip.getBoundingClientRect();
+            var left = rect.left;
+            var top = rect.bottom + 4;
+            // Keep within viewport horizontally
+            if (left + tipRect.width > window.innerWidth - 8) {
+                left = window.innerWidth - tipRect.width - 8;
+            }
+            if (left < 8) left = 8;
+            // Flip above if no room below
+            if (top + tipRect.height > window.innerHeight - 8) {
+                top = rect.top - tipRect.height - 4;
+            }
+            tip.style.left = left + 'px';
+            tip.style.top = top + 'px';
+        }, true);
+
+        scrollContainer.addEventListener('mouseleave', function(e) {
+            var wrap = e.target.closest('.dt-val-wrap');
+            if (!wrap) return;
+            var tip = document.getElementById('dt-val-floating-tooltip');
+            if (tip) tip.style.display = 'none';
+        }, true);
     }
 }
 

@@ -1,16 +1,19 @@
-"""Cohort detail page - displays families in a cohort."""
+"""Cohort detail page - displays pedigree members with filters."""
+
+from typing import Any, Dict, List
 
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.pages.cohort.components.stats_panel import render_stats_panel
 from genetics_viz.utils.data import get_data_store
 
 
 @ui.page("/cohort/{cohort_name}")
 def cohort_page(cohort_name: str) -> None:
     """Render the cohort detail page."""
-    create_header()
+    create_header(cohort_name)
 
     try:
         store = get_data_store()
@@ -24,13 +27,32 @@ def cohort_page(cohort_name: str) -> None:
                 ui.button("← Back to Home", on_click=lambda: ui.navigate.to("/"))
             return
 
-        with ui.column().classes("w-full px-6 py-6"):
-            # Breadcrumb navigation
-            with ui.row().classes("items-center gap-2 mb-4"):
-                ui.link("Home", "/").classes("text-blue-600 hover:text-blue-800")
-                ui.label("/").classes("text-gray-400")
-                ui.label(cohort_name).classes("font-semibold")
+        # Build flat list of all individuals from pedigree
+        all_individuals: List[Dict[str, Any]] = []
+        for family in cohort.families.values():
+            for sample in family.samples:
+                all_individuals.append(
+                    {
+                        "FID": sample.family_id,
+                        "Sample ID": sample.sample_id,
+                        "Sex": sample.sex or "-",
+                        "Phenotype": sample.phenotype or "-",
+                        "Father": sample.father_id or "-",
+                        "Mother": sample.mother_id or "-",
+                    }
+                )
 
+        # Collect unique phenotype values for multiselect options
+        phenotype_values = sorted(
+            {ind["Phenotype"] for ind in all_individuals if ind["Phenotype"] != "-"}
+        )
+
+        # Sex options for multiselect filter
+        sex_values = sorted(
+            {ind["Sex"] for ind in all_individuals if ind["Sex"] != "-"}
+        )
+
+        with ui.column().classes("w-full px-6 py-6"):
             # Cohort header
             with ui.row().classes("items-center gap-4 mb-6"):
                 ui.label(f"🧬 {cohort_name}").classes(
@@ -39,79 +61,162 @@ def cohort_page(cohort_name: str) -> None:
                 ui.badge(f"{cohort.num_families} families").props("color=blue")
                 ui.badge(f"{cohort.num_samples} samples").props("color=teal")
 
-            # Main content: two-panel layout
-            with ui.row().classes("w-full gap-6 flex flex-row"):
-                # Left panel: Families table
-                with ui.column().classes("flex-1 min-w-0"):
-                    ui.label("Families").classes(
-                        "text-xl font-semibold mb-2 text-blue-800"
-                    )
+            # Shared filtered state for statistics panel
+            filtered_state: Dict[str, Any] = {
+                "individuals": list(all_individuals),
+            }
 
-                    families_data = cohort.get_families_summary()
+            # Side-by-side layout: table + statistics panel
+            with ui.row().classes("w-full items-start gap-4"):
+                # Left: pedigree table
+                with ui.column():
+                    # Count label (updated by filter callback)
+                    count_label = ui.label(
+                        f"{len(all_individuals)} individuals"
+                    ).classes("text-lg font-semibold text-blue-700 mb-2")
 
-                    DataTable(
+                    # Table holder for update_data access
+                    dt_ref: Dict[str, Any] = {"dt": None}
+
+                    def on_filter(e: Dict[str, Any]) -> None:
+                        filters = e.get("filters", {})
+                        filtered = all_individuals
+
+                        # FID text filter
+                        fid_text = (filters.get("FID") or "").strip().lower()
+                        if fid_text:
+                            filtered = [
+                                ind for ind in filtered
+                                if fid_text in ind["FID"].lower()
+                            ]
+
+                        # Sample ID text filter
+                        sample_text = (
+                            filters.get("Sample ID") or ""
+                        ).strip().lower()
+                        if sample_text:
+                            filtered = [
+                                ind for ind in filtered
+                                if sample_text in ind["Sample ID"].lower()
+                            ]
+
+                        # Sex filter (multiselect — list of selected values)
+                        sex_vals = filters.get("Sex") or []
+                        if sex_vals:
+                            selected_sex = set(sex_vals)
+                            filtered = [
+                                ind for ind in filtered
+                                if ind["Sex"] in selected_sex
+                            ]
+
+                        # Phenotype filter (multiselect)
+                        pheno_vals = filters.get("Phenotype") or []
+                        if pheno_vals:
+                            selected = set(pheno_vals)
+                            filtered = [
+                                ind for ind in filtered
+                                if ind["Phenotype"] in selected
+                            ]
+
+                        # Has father checkbox
+                        if filters.get("Father"):
+                            filtered = [
+                                ind for ind in filtered if ind["Father"] != "-"
+                            ]
+
+                        # Has mother checkbox
+                        if filters.get("Mother"):
+                            filtered = [
+                                ind for ind in filtered if ind["Mother"] != "-"
+                            ]
+
+                        # Update shared filtered state
+                        filtered_state["individuals"] = filtered
+
+                        # Update count label
+                        label = f"{len(filtered)} individuals"
+                        if len(filtered) < len(all_individuals):
+                            label += f" (of {len(all_individuals)} total)"
+                        count_label.text = label
+
+                        if dt_ref["dt"]:
+                            dt_ref["dt"].update_data(filtered)
+
+                    dt = DataTable(
                         columns=[
                             {
-                                "id": "Family ID",
+                                "id": "FID",
                                 "header": "Family ID",
                                 "cellType": "link",
-                                "href": f"/cohort/{cohort_name}/family/{{Family ID}}",
+                                "href": f"/cohort/{cohort_name}/family/{{FID}}",
                                 "sortable": True,
+                                "minWidth": 250,
+                                "filter": {
+                                    "type": "text",
+                                    "placeholder": "Filter...",
+                                },
                             },
                             {
-                                "id": "Members",
-                                "header": "Members",
+                                "id": "Sample ID",
+                                "header": "Sample ID",
                                 "sortable": True,
+                                "minWidth": 90,
+                                "filter": {
+                                    "type": "text",
+                                    "placeholder": "Filter...",
+                                },
+                            },
+                            {
+                                "id": "Sex",
+                                "header": "Sex",
+                                "sortable": True,
+                                "filter": {
+                                    "type": "multiselect",
+                                    "options": sex_values,
+                                    "placeholder": "All",
+                                },
+                            },
+                            {
+                                "id": "Phenotype",
+                                "header": "Phenotype",
+                                "sortable": True,
+                                "filter": {
+                                    "type": "multiselect",
+                                    "options": phenotype_values,
+                                    "placeholder": "All",
+                                },
+                            },
+                            {
+                                "id": "Father",
+                                "header": "Father ID",
+                                "sortable": True,
+                                "minWidth": 90,
+                                "filter": {
+                                    "type": "checkbox",
+                                    "label": "Has father",
+                                },
+                            },
+                            {
+                                "id": "Mother",
+                                "header": "Mother ID",
+                                "sortable": True,
+                                "minWidth": 90,
+                                "filter": {
+                                    "type": "checkbox",
+                                    "label": "Has mother",
+                                },
                             },
                         ],
-                        rows=families_data,
-                        row_key="Family ID",
-                        selection="single",
-                        pagination={"rowsPerPage": 10},
-                        on_selection=lambda e: on_family_select(e),
+                        rows=all_individuals,
+                        row_key="Sample ID",
+                        pagination={"rowsPerPage": 20},
+                        on_filter=on_filter,
                     )
+                    dt_ref["dt"] = dt
 
-                # Right panel: Family members (shown when family selected)
-                with ui.column().classes("flex-1 min-w-0"):
-                    members_label = ui.label("Select a family to view members").classes(
-                        "text-xl font-semibold mb-2 text-gray-400"
-                    )
-                    members_container = ui.column().classes("w-full")
-
-                def on_family_select(e) -> None:
-                    """Handle family selection."""
-                    members_container.clear()
-
-                    selected_keys = e.get("selected", [])
-                    if not selected_keys:
-                        members_label.text = "Select a family to view members"
-                        members_label.classes(
-                            remove="text-blue-800", add="text-gray-400"
-                        )
-                        return
-
-                    family_id = e.get("row", {}).get("Family ID")
-                    if not family_id:
-                        return
-
-                    members_label.text = f"Members of Family: {family_id}"
-                    members_label.classes(remove="text-gray-400", add="text-blue-800")
-
-                    members_data = cohort.get_family_members(family_id)
-
-                    with members_container:
-                        DataTable(
-                            columns=[
-                                {"id": "Sample ID", "header": "Sample ID", "sortable": True},
-                                {"id": "Father", "header": "Father"},
-                                {"id": "Mother", "header": "Mother"},
-                                {"id": "Sex", "header": "Sex"},
-                                {"id": "Phenotype", "header": "Phenotype"},
-                            ],
-                            rows=members_data,
-                            row_key="Sample ID",
-                            pagination={"rowsPerPage": 50},
-                        )
+                # Right: statistics panel
+                with ui.column().classes("flex-1 min-w-[400px]"):
+                    render_stats_panel(store, cohort, filtered_state)
 
     except RuntimeError as e:
         ui.label(f"Error: {e}").classes("text-red-500")

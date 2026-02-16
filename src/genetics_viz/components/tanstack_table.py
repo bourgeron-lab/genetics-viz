@@ -17,16 +17,12 @@ _STATIC_DIR = Path(__file__).parent.parent / "static"
 _JS_PATH = _STATIC_DIR / "js" / "data_table.js"
 _CSS_PATH = _STATIC_DIR / "css" / "data_table.css"
 
-# Track whether scripts have been injected for the current page builder
-_injected_pages: set[int] = set()
-
-
 def _inject_once() -> None:
     """Inject TanStack CDN + DataTable JS + CSS once per page context."""
-    page_id = id(ui.context.client)
-    if page_id in _injected_pages:
+    client = ui.context.client
+    if getattr(client, "_dt_scripts_injected", False):
         return
-    _injected_pages.add(page_id)
+    client._dt_scripts_injected = True
 
     css_source = _CSS_PATH.read_text()
     js_source = _JS_PATH.read_text()
@@ -71,6 +67,10 @@ class DataTable:
             Receives dict ``{"sorting": [{"id": str, "desc": bool}]}``.
             When provided, the caller is responsible for re-sorting data
             and calling ``update_data()`` with the sorted result.
+        on_filter: Callback for filter changes.
+            Receives dict ``{"filters": {col_id: value, ...}}``.
+            The caller should filter the full dataset and call
+            ``update_data()`` with the result.
         instance_id: Optional explicit instance ID. Auto-generated if omitted.
     """
 
@@ -88,6 +88,11 @@ class DataTable:
         on_row_action: Callable | None = None,
         on_selection: Callable | None = None,
         on_sort: Callable | None = None,
+        on_filter: Callable | None = None,
+        on_page_change: Callable | None = None,
+        initial_sorting: list[dict[str, Any]] | None = None,
+        initial_page: int = 0,
+        state_holder: dict[str, Any] | None = None,
         instance_id: str | None = None,
     ):
         self.instance_id = instance_id or f"dt-{uuid.uuid4().hex[:8]}"
@@ -102,6 +107,11 @@ class DataTable:
         self._on_row_action = on_row_action
         self._on_selection = on_selection
         self._on_sort = on_sort
+        self._on_filter = on_filter
+        self._on_page_change = on_page_change
+        self.initial_sorting = initial_sorting or []
+        self.initial_page = initial_page
+        self._state_holder = state_holder
 
         _inject_once()
         self._create_container()
@@ -131,6 +141,12 @@ class DataTable:
         if self._on_selection:
             ui.on(f"{prefix}_selection", lambda e: self._on_selection(e.args))
 
+        if self._on_filter:
+            ui.on(f"{prefix}_filterChange", lambda e: self._on_filter(e.args))
+
+        if self._on_page_change or self._state_holder is not None:
+            ui.on(f"{prefix}_page-change", self._handle_page_change)
+
     def _init_table(self) -> None:
         cfg_dict: dict[str, Any] = {
             "containerId": self.instance_id,
@@ -143,6 +159,10 @@ class DataTable:
         }
         if self.visible_columns is not None:
             cfg_dict["visibleColumns"] = self.visible_columns
+        if self.initial_sorting:
+            cfg_dict["initialSorting"] = self.initial_sorting
+        if self.initial_page:
+            cfg_dict["initialPage"] = self.initial_page
         config = json.dumps(cfg_dict, default=str)
         data = json.dumps(self.rows, default=str)
         inst_id = self.instance_id
@@ -150,20 +170,33 @@ class DataTable:
         ui.timer(
             0.1,
             lambda: ui.run_javascript(f"""
-                (function tryInit(n) {{
+                (function initDT() {{
+                    // Wait for TanStack library to load
                     if (!window.TanStackTable || !window.DataTable) {{
-                        if (n < 50) setTimeout(function() {{ tryInit(n+1) }}, 200);
-                        else console.error('DataTable init failed: TanStack not loaded');
-                        return;
-                    }}
-                    var el = document.getElementById('{inst_id}');
-                    if (!el) {{
-                        if (n < 50) setTimeout(function() {{ tryInit(n+1) }}, 200);
+                        setTimeout(initDT, 200);
                         return;
                     }}
                     if (window['_dt_{inst_id}']) return;
-                    window['_dt_{inst_id}'] = new DataTable({config}, {data});
-                }})(1);
+                    var el = document.getElementById('{inst_id}');
+                    if (el) {{
+                        window['_dt_{inst_id}'] = new DataTable({config}, {data});
+                        return;
+                    }}
+                    // Element not in DOM yet (e.g. inactive tab panel).
+                    // Use MutationObserver to init when it appears.
+                    var obs = new MutationObserver(function() {{
+                        var el = document.getElementById('{inst_id}');
+                        if (el && !window['_dt_{inst_id}']) {{
+                            obs.disconnect();
+                            clearTimeout(obsTimeout);
+                            window['_dt_{inst_id}'] = new DataTable({config}, {data});
+                        }}
+                    }});
+                    obs.observe(document.body, {{ childList: true, subtree: true }});
+                    var obsTimeout = setTimeout(function() {{
+                        obs.disconnect();
+                    }}, 30000);
+                }})();
             """),
             once=True,
         )
@@ -207,6 +240,15 @@ class DataTable:
             }}
         """)
 
+    # ---- Page change handler ----
+
+    def _handle_page_change(self, e: Any) -> None:
+        page = e.args.get("page", 0)
+        if self._state_holder is not None:
+            self._state_holder["page"] = page
+        if self._on_page_change:
+            self._on_page_change(e.args)
+
     # ---- Default sort handler (server-side in Python) ----
 
     def _default_sort_handler(self, e: Any) -> None:
@@ -215,8 +257,46 @@ class DataTable:
         if sorting:
             col_id = sorting[0]["id"]
             desc = sorting[0].get("desc", False)
-            self.rows.sort(
-                key=lambda r: (r.get(col_id) is None, r.get(col_id, "")),
-                reverse=desc,
+
+            # Look up column def for sort metadata
+            col_def = next(
+                (c for c in self.columns if c.get("id") == col_id), {}
             )
+            sort_field = col_def.get("sortField", col_id)
+            sort_type = col_def.get("sorting", "")
+
+            if sort_type == "genomic":
+                from genetics_viz.utils.column_names import genomic_sort_key
+
+                self.rows.sort(
+                    key=lambda r: (
+                        r.get(sort_field) is None,
+                        genomic_sort_key(r.get(sort_field, "")),
+                    ),
+                    reverse=desc,
+                )
+            elif sort_type == "numerical":
+
+                def _num_key(r: dict) -> tuple:
+                    v = r.get(sort_field)
+                    if v is None:
+                        return (True, 0.0)
+                    try:
+                        return (False, float(v))
+                    except (ValueError, TypeError):
+                        return (True, 0.0)
+
+                self.rows.sort(key=_num_key, reverse=desc)
+            else:
+                self.rows.sort(
+                    key=lambda r: (
+                        r.get(sort_field) is None,
+                        r.get(sort_field, ""),
+                    ),
+                    reverse=desc,
+                )
+        # Save sorting state for persistence across refreshes
+        if self._state_holder is not None:
+            self._state_holder["sorting"] = sorting
+            self._state_holder["page"] = 0  # Sort resets to page 0
         self.update_data(self.rows)

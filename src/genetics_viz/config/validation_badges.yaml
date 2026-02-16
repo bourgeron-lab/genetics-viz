@@ -1,0 +1,67 @@
+# Validation badge configuration
+# Controls how validation status and inheritance are displayed as badges
+
+# Badge background colors and text based on inheritance pattern
+inheritance:
+  de novo:
+    bg: "#dcfce7"
+    text: "dnm"
+    text_color: "#166534"
+  paternal:
+    bg: "#dbeafe"
+    text: "pat"
+    text_color: "#1e40af"
+  not maternal:
+    bg: "#dbeafe"
+    text: "!mom"
+    text_color: "#1e40af"
+  maternal:
+    bg: "#fce7f3"
+    text: "mat"
+    text_color: "#9d174d"
+  not paternal:
+    bg: "#fce7f3"
+    text: "!dad"
+    text_color: "#9d174d"
+  either:
+    bg: "#e9d5ff"
+    text: ""
+    text_color: "#6b21a8"
+  homozygous:
+    bg: "#f3f4f6"
+    text: "hom"
+    text_color: "#374151"
+  unknown:
+    bg: "#f3f4f6"
+    text: ""
+    text_color: "#374151"
+
+# Validation status symbols and colors
+status:
+  present:
+    symbol: "✓"
+    color: "#4caf50"
+  absent:
+    symbol: "✗"
+    color: "#f44336"
+  uncertain:
+    symbol: "?"
+    color: "#ff9800"
+  different:
+    symbol: "≠"
+    color: "#ff9800"
+  conflicting:
+    symbol: "⚡"
+    color: "#ff8f00"
+  in phase MNV:
+    symbol: "✓"
+    color: "#4caf50"
+    label: "MNV"
+  TODO:
+    symbol: ""
+    color: "#9e9e9e"
+
+# Default badge style when no inheritance specified
+default:
+  bg: "#ffffff"
+  text_color: "#374151"

@@ -14,8 +14,12 @@ from genetics_viz.components.validation_loader import (
 )
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.column_names import (
+    apply_width_constraints,
     get_column_group,
+    get_column_sorting,
     get_display_label,
+    get_dropped_columns,
+    get_schema_overrides,
     reorder_columns_by_group,
 )
 
@@ -102,8 +106,12 @@ def render_dnm_tab(
         df = pl.read_csv(
             dnm_file,
             separator="\t",
-            infer_schema_length=100,
+            infer_schema_length=10000,
+            schema_overrides=get_schema_overrides(),
         )
+        _drop = get_dropped_columns() & set(df.columns)
+        if _drop:
+            df = df.drop(list(_drop))
 
         all_rows = df.to_dicts()
 
@@ -372,10 +380,12 @@ def render_dnm_tab(
                             "id": col,
                             "header": get_display_label(col),
                             "group": get_column_group(col),
+                            "sorting": get_column_sorting(col),
                             "sortable": True,
                         }
                         if col == "Validation":
                             col_def["cellType"] = "validation"
+                        apply_width_constraints(col_def, col)
                         cols.append(col_def)
                     return cols
 

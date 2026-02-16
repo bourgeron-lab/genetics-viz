@@ -13,6 +13,7 @@ from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.validation_badges import build_validation_badge
 
 
 @ui.page("/validation/all")
@@ -183,6 +184,18 @@ def validation_all_page() -> None:
                         final_validation = "uncertain"
                         final_inheritance = ""
 
+                    # Build badge tuples for the badge builder
+                    badge_vals = [
+                        (v, i, "", ig, "", "", t)
+                        for v, i, ig, t in zip(
+                            data["validations"],
+                            data["inheritances"],
+                            data["ignored"],
+                            data["timestamps"],
+                        )
+                        if ig != "1"
+                    ]
+
                     validations_data.append(
                         {
                             "Type": data["Type"],
@@ -194,6 +207,11 @@ def validation_all_page() -> None:
                             "User": ", ".join(sorted(data["users"])),
                             "Inheritance": final_inheritance,
                             "Validation": final_validation,
+                            "Validation_badge": build_validation_badge(
+                                final_validation,
+                                final_inheritance,
+                                badge_vals,
+                            ),
                             "Timestamp": max(
                                 data["timestamps"]
                             ),  # Most recent timestamp

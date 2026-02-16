@@ -5,6 +5,48 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-16
+
+### Added
+- **TanStack Table** - New high-performance DataTable component replacing NiceGUI ag-grid, with virtual scrolling, column sorting, and custom cell renderers
+- **Cohort-wide Search** - Tabbed search parameters panel with Variants and Individuals tabs
+  - Individual filters: sex, phenotype, and "only samples with both parents"
+  - Filters use pedigree data from the Cohort object (no duplicate parsing)
+- **Variant Statistics dialog** - Stats button on search results showing:
+  - Stacked bar chart of variants per chromosome by validation status
+  - Consequence distribution pie chart (highest priority per variant)
+  - Validation status distribution pie chart
+  - Interactive SVG ideogram with cytoband rendering and variant positions
+  - SNV/Indel type filter checkboxes with live refresh
+- **ClinVar `Likely_risk_allele`** term added to clinvar_colors.yaml
+- **Column names config** (`column_names.yaml`) for display labels, groups, sorting, width, and drop flags
+- **View presets** for quick column visibility switching
+- **Gene scoring** utilities and score color coding
+- **Stats panel** component for carrier frequency box/bar plots
+- **CLAUDE.md** project-level instructions for Claude Code
+
+### Changed
+- **Pedigree parsing** now handles `-9` as missing/unknown (in addition to `0` and empty)
+- **Pedigree header detection** strips leading `#` (supports `#FID` headers)
+- **Search panel** uses dense Quasar props for a more compact layout
+- Pedigree data loaded from the already-parsed `Cohort` object via `DataStore` instead of re-reading the file
+
+### Refactored
+- Extracted `utils/vep.py` - consolidated VEP consequence utilities from 3 files
+- Extracted `utils/clinvar.py` - consolidated ClinVar utilities from 2 files
+- Extracted `utils/view_presets.py` - view preset logic from wombat_tab
+- Extracted `utils/cytobands.py` - cytoband/ideogram constants shared between wombat_tab and search
+- Fixed `header.py` coupling - no longer imports from page components
+
+### Fixed
+- **TanStack table memory leak** - replaced global `_injected_pages` set with per-client attribute
+- **MutationObserver timeout** - 30-second timeout prevents indefinite observation
+- `Sample.is_founder` now correctly handles `-9` parent IDs
+
+### Removed
+- Dead code: `variant.py` (unused variant page)
+- Dead code: `waves_backup.py` (obsolete backup)
+
 ## [0.2.0] - 2026-01-20
 
 ### Changed

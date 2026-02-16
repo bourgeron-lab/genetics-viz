@@ -8,7 +8,9 @@ A web-based visualization tool for genetics cohort data, providing interactive a
 
 - 📊 **Multi-Cohort Management** - Browse and analyze multiple cohorts from a single data directory
 - 👨‍👩‍👧‍👦 **Family Structure Visualization** - View pedigree information and family relationships
-- 🧬 **Variant Analysis** - Interactive tables for DNM (de novo mutations) and WOMBAT analysis
+- 🧬 **Variant Analysis** - Interactive TanStack-powered tables for DNM (de novo mutations) and WOMBAT analysis
+- 🔍 **Cohort-Wide Search** - Search variants across all samples with filters on locus, genesets, impact, individuals (sex, phenotype, parental status), and validation status
+- 📈 **Variant Statistics** - Interactive charts (chromosome distribution, consequence/validation pie charts) and ideogram visualization with cytoband rendering
 - ✅ **Variant Validation** - Track and validate genetic variants with inheritance patterns
 - 🔬 **IGV Integration** - Built-in IGV.js browser for sequence visualization (CRAM files)
 - 🌊 **WAVES Validation** - Specialized validation workflow for bedGraph/coverage analysis
@@ -95,7 +97,9 @@ The interface provides:
 
 - **Home Page** - List of available cohorts
 - **Cohort View** - Family list and overview
-- **Family View** - DNM and WOMBAT analysis tabs
+- **Family View** - DNM, WOMBAT, and SV analysis tabs with TanStack tables
+- **Search Page** - Cohort-wide variant search with tabbed filters (Variants and Individuals)
+- **Variant Statistics** - Charts and ideogram views for search results
 - **Validation Pages** - Track variant validations (file-specific and all validations)
 - **WAVES Validation** - Specialized coverage/bedGraph validation workflow
 
@@ -108,6 +112,8 @@ data_directory/
 ├── cohorts/
 │   ├── cohort1/
 │   │   ├── cohort1.pedigree.tsv
+│   │   ├── wombat/
+│   │   │   └── cohort1.rare.*.*.results.tsv (cohort-wide search files)
 │   │   └── families/
 │   │       ├── FAM001/
 │   │       │   ├── FAM001.wombat.*.tsv (WOMBAT analysis files)
@@ -116,6 +122,9 @@ data_directory/
 │   │           └── ...
 │   └── cohort2/
 │       └── ...
+├── params/
+│   └── genesets/
+│       └── *.tsv (gene set files for search filtering)
 ├── samples/
 │   ├── SAMPLE001/
 │   │   └── sequences/
@@ -133,33 +142,35 @@ data_directory/
 
 #### Pedigree File Format
 
-Pedigree files (`cohort_name.pedigree.tsv`) should be tab-separated. The header is optional - if present, it must start with "FID":
+Pedigree files (`cohort_name.pedigree.tsv`) should be tab-separated. The header is optional - if present, it must start with "FID" (a leading `#` is stripped automatically):
 
 **With header:**
 
 ```
-FID IID PAT MAT SEX PHENOTYPE
-FAM001 SAMPLE001 0 0 M affected
-FAM001 SAMPLE002 0 0 F unaffected
+#FID	IID	PAT	MAT	SEX	PHENOTYPE
+FAM001	SAMPLE001	SAMPLE003	SAMPLE004	1	2
+FAM001	SAMPLE002	0	0	2	1
 ```
 
-**Without header:**
+**Without header (positional columns):**
 
 ```
-FAM001 SAMPLE001 0 0 M affected
-FAM001 SAMPLE002 0 0 F unaffected
+FAM001	SAMPLE001	SAMPLE003	SAMPLE004	1	2
+FAM001	SAMPLE002	0	0	2	1
 ```
 
-**Column Mapping** (case-insensitive):
+Missing/unknown values for parent IDs are `0`, `-9`, or empty. These values are also treated as unknown for sex and phenotype when building filter options.
+
+**Column Mapping** (case-insensitive, `#` prefix stripped):
 
 | Column | Possible Names |
 |--------|----------------|
 | Family ID | `FID`, `family_id`, `familyid`, `family` |
-| Individual ID | `IID`, `individual_id`, `sample_id`, `sample` |
-| Father ID | `PAT`, `father_id`, `fatherid`, `father` |
-| Mother ID | `MAT`, `mother_id`, `motherid`, `mother` |
+| Individual ID | `IID`, `individual_id`, `sample_id`, `sampleid`, `sample` |
+| Father ID | `PAT`, `father_id`, `fatherid`, `father`, `paternal_id` |
+| Mother ID | `MAT`, `mother_id`, `motherid`, `mother`, `maternal_id` |
 | Sex | `SEX`, `gender` |
-| Phenotype | `PHENOTYPE`, `affected`, `status` |
+| Phenotype | `PHENOTYPE`, `affected`, `status`, `affection` |
 
 #### CRAM Files (for IGV visualization)
 

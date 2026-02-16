@@ -14,7 +14,9 @@ from genetics_viz.components.validation_loader import (
     load_validation_map,
 )
 from genetics_viz.utils.column_names import (
+    apply_width_constraints,
     get_column_group,
+    get_column_sorting,
     get_display_label,
     reorder_columns_by_group,
 )
@@ -680,6 +682,7 @@ def render_wisecondorx_subtab(
                             "id": col,
                             "header": get_display_label(col),
                             "group": get_column_group(col),
+                            "sorting": get_column_sorting(col),
                             "sortable": True,
                         }
                         if col == "Validation":
@@ -699,6 +702,7 @@ def render_wisecondorx_subtab(
                         elif col in _GENE_BADGE_COLUMNS:
                             col_def["cellType"] = "gene_badge"
                             col_def["badgesField"] = f"{col}_badges"
+                        apply_width_constraints(col_def, col)
                         cols.append(col_def)
                     return cols
 
