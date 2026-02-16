@@ -4,6 +4,8 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from genetics_viz.utils.validation_badges import build_validation_badge
+
 
 def load_validation_map(
     validation_file_path: Path, family_id: str | None = None
@@ -38,6 +40,7 @@ def load_validation_map(
             curated_start = row.get("CuratedStart", "")
             curated_end = row.get("CuratedEnd", "")
             timestamp = row.get("Timestamp", "")
+            user = row.get("User", "")
 
             # Filter by family_id if provided
             if family_id is not None and fid != family_id:
@@ -56,6 +59,7 @@ def load_validation_map(
                         curated_start or "",
                         curated_end or "",
                         timestamp or "",
+                        user or "",
                     )
                 )
 
@@ -89,6 +93,7 @@ def add_validation_status_to_row(
             # All validations are ignored
             row["Validation"] = ""
             row["ValidationInheritance"] = ""
+            row["Validation_badge"] = None
             return
 
         validation_statuses = [v[0] for v in validations]
@@ -107,21 +112,19 @@ def add_validation_status_to_row(
                 row["Validation"] = "in phase MNV"
             else:
                 row["Validation"] = "present"
-            # Check inheritance - prioritize de novo, then homozygous
-            is_de_novo = any(
-                v[1] == "de novo"
-                for v in validations
+            # Check inheritance - prioritize de novo, then homozygous,
+            # then first non-empty inheritance from present validations
+            present = [
+                v for v in validations
                 if v[0] in ("present", "in phase MNV")
-            )
-            is_homozygous = any(
-                v[1] == "homozygous"
-                for v in validations
-                if v[0] in ("present", "in phase MNV")
-            )
-            if is_de_novo:
+            ]
+            inh_values = [v[1] for v in present if v[1]]
+            if "de novo" in inh_values:
                 row["ValidationInheritance"] = "de novo"
-            elif is_homozygous:
+            elif "homozygous" in inh_values:
                 row["ValidationInheritance"] = "homozygous"
+            elif inh_values:
+                row["ValidationInheritance"] = inh_values[0]
             else:
                 row["ValidationInheritance"] = ""
         elif "absent" in unique_validations:
@@ -130,6 +133,11 @@ def add_validation_status_to_row(
         else:
             row["Validation"] = "uncertain"
             row["ValidationInheritance"] = ""
+
+        row["Validation_badge"] = build_validation_badge(
+            row["Validation"], row["ValidationInheritance"], validations
+        )
     else:
         row["Validation"] = ""
         row["ValidationInheritance"] = ""
+        row["Validation_badge"] = None

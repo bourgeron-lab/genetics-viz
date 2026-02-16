@@ -1,204 +1,58 @@
 """Search page for cohort-wide variant search."""
 
 import asyncio
-import csv
 import re
-from pathlib import Path
 from typing import Any, Dict, List
 
 import polars as pl
-import yaml
 from nicegui import app as nicegui_app
 from nicegui import context, ui
 
+from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
 )
 from genetics_viz.components.variant_dialog import show_variant_dialog
-from genetics_viz.pages.cohort.components.wombat_tab import (
-    VIEW_PRESETS,
-    select_preset_for_config,
+from genetics_viz.utils.view_presets import VIEW_PRESETS, select_preset_for_config
+from genetics_viz.utils.column_names import (
+    apply_width_constraints,
+    get_column_group,
+    get_column_sorting,
+    get_display_label,
+    get_dropped_columns,
+    get_schema_overrides,
+    reorder_columns_by_group,
 )
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
-
-# Same table slot as wombat_tab
-SEARCH_TABLE_SLOT = r"""
-    <q-tr :props="props">
-        <q-td key="actions" :props="props">
-            <div style="display: flex; align-items: center; gap: 4px;">
-                <q-btn
-                    flat
-                    dense
-                    size="sm"
-                    icon="visibility"
-                    color="blue"
-                    @click="$parent.$emit('view_variant', props.row)"
-                >
-                    <q-tooltip>View in IGV</q-tooltip>
-                </q-btn>
-                <q-badge
-                    v-if="props.row.n_grouped && props.row.n_grouped > 1"
-                    :label="props.row.n_grouped.toString()"
-                    color="orange"
-                    style="font-size: 11px;"
-                >
-                    <q-tooltip>
-                        {{ props.row.n_grouped }} transcripts collapsed
-                        <span v-if="props.row.VEP_SYMBOL"> for genes: {{ props.row.VEP_SYMBOL }}</span>
-                    </q-tooltip>
-                </q-badge>
-            </div>
-        </q-td>
-        <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-            <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present' || col.value === 'in phase MNV'" style="display: flex; align-items: center; gap: 4px;">
-                    <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as {{ col.value }}</q-tooltip>
-                    </q-icon>
-                    <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
-                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
-                    <span v-if="col.value === 'in phase MNV'" style="font-size: 0.75em; color: #666;">MNV</span>
-                </span>
-                <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
-                    <q-tooltip>Validated as absent</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
-                    <q-tooltip>Validation uncertain or different</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
-                    <q-tooltip>Conflicting validations</q-tooltip>
-                </q-icon>
-            </template>
-            <template v-else-if="col.name === 'VEP_Consequence'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ConsequenceBadges || [])" :key="idx"
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_CLIN_SIG'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ClinVarBadges || [])" :key="idx"
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_SYMBOL'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.GeneBadges || [])" :key="idx"
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_Gene'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.VEP_Gene_badges || [])" :key="idx"
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'FID'">
-                <a v-if="col.value" :href="'/cohort/' + props.row._cohort_name + '/family/' + col.value" style="color: #2563eb; text-decoration: underline; cursor: pointer;">
-                    {{ col.value }}
-                </a>
-                <span v-else>{{ col.value }}</span>
-            </template>
-            <template v-else>
-                <!-- Check for score badges dynamically -->
-                <div v-if="props.row[col.name + '_badge']" style="display: inline-block;">
-                    <q-badge
-                        :label="props.row[col.name + '_badge'].value"
-                        :style="'background-color: ' + props.row[col.name + '_badge'].color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ props.row[col.name + '_badge'].tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-                <span v-else>{{ col.value }}</span>
-            </template>
-        </q-td>
-    </q-tr>
-"""
+from genetics_viz.utils.clinvar import (
+    CLINVAR_COLORS,
+    format_clinvar_display,
+    get_clinvar_color,
+)
+from genetics_viz.utils.cytobands import (
+    CHROM_ORDER,
+    CHROM_SIZES_MB,
+    CYTOBANDS,
+    GIESTAIN_COLORS,
+    VALIDATION_COLORS,
+    norm_chrom,
+)
+from genetics_viz.utils.vep import (
+    VEP_CONSEQUENCES,
+    format_consequence_display,
+    get_consequence_color,
+    get_consequence_impact,
+    get_highest_consequence_term,
+)
 
 
-# Load VEP Consequence data from YAML
-def _load_vep_consequences() -> Dict[str, tuple]:
-    """Load VEP consequences from YAML config file."""
-    config_path = Path(__file__).parent.parent / "config" / "vep_consequences.yaml"
-    with open(config_path, "r") as f:
-        data = yaml.safe_load(f)
-    # Convert to dict with (impact, color) tuples
-    return {term: (info["impact"], info["color"]) for term, info in data.items()}
 
-
-VEP_CONSEQUENCES = _load_vep_consequences()
-
-
-def get_consequence_impact(consequence: str) -> str:
-    """Get impact level for a consequence term."""
-    return VEP_CONSEQUENCES.get(consequence, ("MODIFIER", "#636363"))[0]
-
-
-def get_consequence_color(consequence: str) -> str:
-    """Get color for a consequence term."""
-    return VEP_CONSEQUENCES.get(consequence, ("MODIFIER", "#636363"))[1]
-
-
-def format_consequence_display(consequence: str) -> str:
-    """Format consequence for display: remove _variant suffix and replace _ with space."""
-    display = consequence.replace("_variant", "").replace("_", " ")
-    return display
-
-
-# Load ClinVar significance colors from YAML
-def _load_clinvar_colors() -> Dict[str, str]:
-    """Load ClinVar colors from YAML config file."""
-    config_path = Path(__file__).parent.parent / "config" / "clinvar_colors.yaml"
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
-
-
-CLINVAR_COLORS = _load_clinvar_colors()
-
-
-def get_clinvar_color(significance: str) -> str:
-    """Get color for a ClinVar significance term (case-insensitive)."""
-    if not significance:
-        return "#757575"  # Default to gray
-    # Case-insensitive lookup
-    sig_lower = significance.lower()
-    for key, color in CLINVAR_COLORS.items():
-        if key.lower() == sig_lower:
-            return color
-    return "#757575"  # Default to gray if not found
-
-
-def format_clinvar_display(significance: str) -> str:
-    """Format ClinVar significance for display: replace _ with space."""
-    return significance.replace("_", " ")
-
-
-def get_display_label(col: str) -> str:
-    """Get display label for column."""
-    if col == "fafmax_faf95_max_genomes":
-        return "gnomAD 4.1 WGS"
-    elif col == "nhomalt_genomes":
-        return "gnomAD 4.1 nhomalt WGS"
-    elif col == "VEP_CLIN_SIG":
-        return "ClinVar"
-    elif col.startswith("VEP_"):
-        return col[4:]
-    else:
-        return col
 
 
 def parse_locus_query(query: str) -> Dict[str, Any]:
@@ -313,107 +167,40 @@ def filter_dataframe(df: pl.DataFrame, query_params: Dict[str, Any]) -> pl.DataF
     return df
 
 
-def load_sample_to_family_map(pedigree_file: Path) -> Dict[str, str]:
-    """Load mapping from sample ID to family ID from pedigree file."""
-    sample_to_family = {}
-
-    if not pedigree_file.exists():
-        return sample_to_family
-
-    with open(pedigree_file, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        # Handle case where there's no header
-        if reader.fieldnames and not reader.fieldnames[0].lower().startswith("fid"):
-            f.seek(0)
-            lines = f.readlines()
-            for line in lines:
-                parts = line.strip().split("\t")
-                if len(parts) >= 2:
-                    fid, iid = parts[0], parts[1]
-                    sample_to_family[iid] = fid
-        elif reader.fieldnames:
-            # Map column names (case-insensitive)
-            fieldnames_lower = {fn.lower(): fn for fn in reader.fieldnames}
-            fid_col = None
-            iid_col = None
-
-            for possible in ["fid", "family_id", "familyid", "family"]:
-                if possible in fieldnames_lower:
-                    fid_col = fieldnames_lower[possible]
-                    break
-
-            for possible in ["iid", "individual_id", "sample_id", "sample"]:
-                if possible in fieldnames_lower:
-                    iid_col = fieldnames_lower[possible]
-                    break
-
-            if fid_col and iid_col:
-                for row in reader:
-                    sample_to_family[row[iid_col]] = row[fid_col]
-
-    return sample_to_family
+# Values that represent "unknown/missing" in pedigree files
+_PED_MISSING = {"", "0", "-9"}
 
 
-def load_pedigree_data(pedigree_file: Path) -> Dict[str, Dict[str, str]]:
-    """Load full pedigree data from pedigree file.
+def _pedigree_data_from_cohort(cohort_name: str) -> Dict[str, Dict[str, str]]:
+    """Build pedigree lookup from the already-parsed Cohort object.
 
-    Returns dict mapping sample ID to pedigree info (FID, Phenotype, etc.)
+    Uses the DataStore's Cohort (which handles all header formats robustly)
+    instead of re-parsing the pedigree file.
+
+    Returns dict mapping sample_id -> {FID, Father, Mother, Sex, Phenotype}.
     """
-    pedigree_data = {}
+    store = get_data_store()
+    cohort = store.get_cohort(cohort_name)
+    if cohort is None:
+        return {}
 
-    if not pedigree_file.exists():
-        return pedigree_data
-
-    with open(pedigree_file, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        # Handle case where there's no header
-        if reader.fieldnames and not reader.fieldnames[0].lower().startswith("fid"):
-            f.seek(0)
-            lines = f.readlines()
-            for line in lines:
-                parts = line.strip().split("\t")
-                if len(parts) >= 6:
-                    fid, iid, phenotype = parts[0], parts[1], parts[5]
-                    pedigree_data[iid] = {
-                        "FID": fid,
-                        "Phenotype": phenotype,
-                    }
-        elif reader.fieldnames:
-            # Map column names (case-insensitive)
-            fieldnames_lower = {fn.lower(): fn for fn in reader.fieldnames}
-            fid_col = None
-            iid_col = None
-            phenotype_col = None
-
-            for possible in ["fid", "family_id", "familyid", "family"]:
-                if possible in fieldnames_lower:
-                    fid_col = fieldnames_lower[possible]
-                    break
-
-            for possible in ["iid", "individual_id", "sample_id", "sample"]:
-                if possible in fieldnames_lower:
-                    iid_col = fieldnames_lower[possible]
-                    break
-
-            for possible in ["phenotype", "pheno", "status", "affected"]:
-                if possible in fieldnames_lower:
-                    phenotype_col = fieldnames_lower[possible]
-                    break
-
-            if fid_col and iid_col:
-                for row in reader:
-                    pedigree_data[row[iid_col]] = {
-                        "FID": row[fid_col],
-                        "Phenotype": row.get(phenotype_col, "") if phenotype_col else "",
-                    }
-
+    pedigree_data: Dict[str, Dict[str, str]] = {}
+    for family in cohort.families.values():
+        for sample in family.samples:
+            pedigree_data[sample.sample_id] = {
+                "FID": sample.family_id,
+                "Father": sample.father_id or "",
+                "Mother": sample.mother_id or "",
+                "Sex": sample.sex or "",
+                "Phenotype": sample.phenotype or "",
+            }
     return pedigree_data
 
 
 @ui.page("/search/{cohort_name}")
 def search_cohort_page(cohort_name: str) -> None:
     """Search page for cohort-wide variant search."""
-    create_header()
+    create_header(cohort_name)
 
     # Add IGV.js library
     ui.add_head_html("""
@@ -467,12 +254,22 @@ def search_cohort_page(cohort_name: str) -> None:
                 ).classes("text-gray-500 text-lg italic")
                 return
 
-            # Load pedigree data for family and phenotype info
-            pedigree_file = (
-                store.data_dir / "cohorts" / cohort_name / f"{cohort_name}.pedigree.tsv"
+            # Load pedigree data from the already-parsed Cohort object
+            pedigree_data = _pedigree_data_from_cohort(cohort_name)
+            sample_to_family = {
+                sid: ped["FID"] for sid, ped in pedigree_data.items()
+            }
+
+            # Derive unique sex and phenotype values for individual filters
+            # Exclude missing-value sentinels ("", "0", "-9") from the option lists
+            available_sex_values = sorted(
+                {v.get("Sex", "") for v in pedigree_data.values()}
+                - _PED_MISSING
             )
-            sample_to_family = load_sample_to_family_map(pedigree_file)
-            pedigree_data = load_pedigree_data(pedigree_file)
+            available_phenotype_values = sorted(
+                {v.get("Phenotype", "") for v in pedigree_data.values()}
+                - _PED_MISSING
+            )
 
             # Load genesets from params/genesets
             genesets_dir = store.data_dir / "params" / "genesets"
@@ -505,380 +302,419 @@ def search_cohort_page(cohort_name: str) -> None:
             filter_exclude_gnomad: Dict[str, bool] = {"value": True}
             filter_exclude_gnomad_wgs: Dict[str, bool] = {"value": False}
 
+            # Individual filters state
+            filter_sex: Dict[str, List[str]] = {"value": []}
+            filter_phenotype: Dict[str, List[str]] = {"value": []}
+            filter_has_parents: Dict[str, bool] = {"value": False}
+
             # Button references for visual indicators
             geneset_button_ref: Dict[str, Any] = {"button": None}
             impact_button_ref: Dict[str, Any] = {"button": None}
 
             # Search panel
-            with ui.card().classes("w-full p-4 mb-4"):
-                ui.label("Search Parameters").classes("text-xl font-semibold mb-4")
+            with ui.card().classes("w-full p-2 mb-2").props("flat bordered"):
+                # Header row: title + search button (always visible)
+                with ui.row().classes("items-center justify-between w-full"):
+                    ui.label("Search Parameters").classes("text-lg font-semibold")
+                    search_button = ui.button(
+                        "Search",
+                        icon="search",
+                    ).props("color=blue dense")
 
-                with ui.row().classes("items-end gap-4 w-full flex-wrap"):
-                    # Source dropdown
-                    source_select = (
-                        ui.select(
-                            options=[wf["display_name"] for wf in wombat_files],
-                            label="Source",
-                            value=wombat_files[0]["display_name"]
-                            if wombat_files
-                            else None,
-                        )
-                        .props("outlined")
-                        .classes("w-64")
-                    )
+                # Tabs
+                with ui.tabs().classes("w-full").props("dense") as search_tabs:
+                    variants_tab = ui.tab("Variants", icon="biotech")
+                    individuals_tab = ui.tab("Individuals", icon="people")
 
-                    # Locus input (Enter key handler set later after function definition)
-                    locus_input = (
-                        ui.input(
-                            label="Locus (optional)",
-                            placeholder="chr1:10000-10100, SHANK3, ENSG...",
-                            on_change=lambda: None,  # Placeholder to enable events
-                        )
-                        .props("outlined")
-                        .classes("flex-grow")
-                    )
-
-                    # Geneset filter menu
-                    if available_genesets:
-                        geneset_btn = (
-                            ui.button("Genesets", icon="list")
-                            .props(
-                                "outline"
-                                if not selected_genesets["value"]
-                                else "unelevated color=green"
+                with ui.tab_panels(search_tabs, value=variants_tab).classes("w-full"):
+                  with ui.tab_panel(variants_tab).classes("p-0 pt-1"):
+                    with ui.row().classes("items-center gap-2 w-full flex-wrap"):
+                        # Source dropdown
+                        source_select = (
+                            ui.select(
+                                options=[wf["display_name"] for wf in wombat_files],
+                                label="Source",
+                                value=wombat_files[0]["display_name"]
+                                if wombat_files
+                                else None,
                             )
-                            .classes("h-14")
+                            .props("outlined dense")
+                            .classes("w-64")
                         )
-                        geneset_button_ref["button"] = geneset_btn
-                        with geneset_btn:
+
+                        # Locus input (Enter key handler set later after function definition)
+                        locus_input = (
+                            ui.input(
+                                label="Locus (optional)",
+                                placeholder="chr1:10000-10100, SHANK3, ENSG...",
+                                on_change=lambda: None,  # Placeholder to enable events
+                            )
+                            .props("outlined dense")
+                            .classes("flex-grow")
+                        )
+
+                        # Geneset filter menu
+                        if available_genesets:
+                            geneset_btn = (
+                                ui.button("Genesets", icon="list")
+                                .props(
+                                    ("outline"
+                                    if not selected_genesets["value"]
+                                    else "unelevated color=green")
+                                    + " dense"
+                                )
+                            )
+                            geneset_button_ref["button"] = geneset_btn
+                            with geneset_btn:
+                                with ui.menu():
+                                    ui.label("Select Genesets:").classes(
+                                        "px-4 py-2 font-semibold text-sm"
+                                    )
+                                    ui.separator()
+
+                                    with ui.column().classes("p-2"):
+                                        geneset_checkboxes: Dict[str, Any] = {}
+
+                                        with ui.row().classes("gap-2 mb-2"):
+
+                                            def select_all_genesets():
+                                                selected_genesets["value"] = list(
+                                                    available_genesets.keys()
+                                                )
+                                                for cb in geneset_checkboxes.values():
+                                                    cb.value = True
+                                                if geneset_button_ref["button"]:
+                                                    geneset_button_ref["button"].props(
+                                                        remove="outline",
+                                                        add="unelevated color=green",
+                                                    )
+                                                    geneset_button_ref["button"].update()
+
+                                            def select_no_genesets():
+                                                selected_genesets["value"] = []
+                                                for cb in geneset_checkboxes.values():
+                                                    cb.value = False
+                                                if geneset_button_ref["button"]:
+                                                    geneset_button_ref["button"].props(
+                                                        remove="unelevated color=green",
+                                                        add="outline",
+                                                    )
+                                                    geneset_button_ref["button"].update()
+
+                                            ui.button(
+                                                "All", on_click=select_all_genesets
+                                            ).props("size=sm flat dense").classes("text-xs")
+                                            ui.button(
+                                                "None", on_click=select_no_genesets
+                                            ).props("size=sm flat dense").classes("text-xs")
+
+                                        ui.separator()
+
+                                        for geneset_name in sorted(
+                                            available_genesets.keys()
+                                        ):
+
+                                            def make_geneset_handler(gs_name):
+                                                def handler(e):
+                                                    if e.value:
+                                                        if (
+                                                            gs_name
+                                                            not in selected_genesets[
+                                                                "value"
+                                                            ]
+                                                        ):
+                                                            selected_genesets[
+                                                                "value"
+                                                            ].append(gs_name)
+                                                    else:
+                                                        if (
+                                                            gs_name
+                                                            in selected_genesets["value"]
+                                                        ):
+                                                            selected_genesets[
+                                                                "value"
+                                                            ].remove(gs_name)
+                                                    # Update button visual state
+                                                    if geneset_button_ref["button"]:
+                                                        if selected_genesets["value"]:
+                                                            geneset_button_ref[
+                                                                "button"
+                                                            ].props(
+                                                                remove="outline",
+                                                                add="unelevated color=green",
+                                                            )
+                                                        else:
+                                                            geneset_button_ref[
+                                                                "button"
+                                                            ].props(
+                                                                remove="unelevated color=green",
+                                                                add="outline",
+                                                            )
+                                                        geneset_button_ref[
+                                                            "button"
+                                                        ].update()
+
+                                                return handler
+
+                                            geneset_checkboxes[geneset_name] = ui.checkbox(
+                                                f"{geneset_name} ({len(available_genesets[geneset_name])} genes)",
+                                                value=False,
+                                                on_change=make_geneset_handler(
+                                                    geneset_name
+                                                ),
+                                            ).classes("text-sm")
+
+                        # Impact filter menu
+                        impact_btn = (
+                            ui.button("Impacts", icon="filter_list")
+                            .props("outline dense")
+                        )
+                        impact_button_ref["button"] = impact_btn
+                        with impact_btn:
                             with ui.menu():
-                                ui.label("Select Genesets:").classes(
+                                ui.label("Select Impact Types:").classes(
                                     "px-4 py-2 font-semibold text-sm"
                                 )
                                 ui.separator()
 
                                 with ui.column().classes("p-2"):
-                                    geneset_checkboxes: Dict[str, Any] = {}
+                                    impact_checkboxes_search: Dict[str, Any] = {}
 
-                                    with ui.row().classes("gap-2 mb-2"):
+                                    with ui.row().classes("gap-2 mb-2 flex-wrap"):
 
-                                        def select_all_genesets():
-                                            selected_genesets["value"] = list(
-                                                available_genesets.keys()
+                                        def select_all_impacts_search():
+                                            selected_impacts_search["value"] = list(
+                                                VEP_CONSEQUENCES.keys()
                                             )
-                                            for cb in geneset_checkboxes.values():
+                                            for cb in impact_checkboxes_search.values():
                                                 cb.value = True
-                                            if geneset_button_ref["button"]:
-                                                geneset_button_ref["button"].props(
-                                                    remove="outline",
-                                                    add="unelevated color=green",
-                                                )
-                                                geneset_button_ref["button"].update()
-
-                                        def select_no_genesets():
-                                            selected_genesets["value"] = []
-                                            for cb in geneset_checkboxes.values():
-                                                cb.value = False
-                                            if geneset_button_ref["button"]:
-                                                geneset_button_ref["button"].props(
-                                                    remove="unelevated color=green",
+                                            if impact_button_ref["button"]:
+                                                impact_button_ref["button"].props(
+                                                    remove="unelevated color=orange",
                                                     add="outline",
                                                 )
-                                                geneset_button_ref["button"].update()
+                                                impact_button_ref["button"].update()
+
+                                        def select_none_impacts_search():
+                                            selected_impacts_search["value"] = []
+                                            for cb in impact_checkboxes_search.values():
+                                                cb.value = False
+                                            if impact_button_ref["button"]:
+                                                impact_button_ref["button"].props(
+                                                    remove="outline",
+                                                    add="unelevated color=orange",
+                                                )
+                                                impact_button_ref["button"].update()
+
+                                        def select_by_impact_level(level: str):
+                                            selected = [
+                                                cons
+                                                for cons, (
+                                                    imp,
+                                                    _,
+                                                ) in VEP_CONSEQUENCES.items()
+                                                if imp == level
+                                            ]
+                                            selected_impacts_search["value"] = selected
+                                            for (
+                                                impact,
+                                                cb,
+                                            ) in impact_checkboxes_search.items():
+                                                cb.value = impact in selected
+                                            if impact_button_ref["button"]:
+                                                impact_button_ref["button"].props(
+                                                    remove="outline",
+                                                    add="unelevated color=orange",
+                                                )
+                                                impact_button_ref["button"].update()
 
                                         ui.button(
-                                            "All", on_click=select_all_genesets
+                                            "All", on_click=select_all_impacts_search
                                         ).props("size=sm flat dense").classes("text-xs")
                                         ui.button(
-                                            "None", on_click=select_no_genesets
+                                            "None", on_click=select_none_impacts_search
                                         ).props("size=sm flat dense").classes("text-xs")
+                                        ui.button(
+                                            "HIGH",
+                                            on_click=lambda: select_by_impact_level("HIGH"),
+                                        ).props("size=sm flat dense color=red").classes(
+                                            "text-xs"
+                                        )
+                                        ui.button(
+                                            "MODERATE",
+                                            on_click=lambda: select_by_impact_level(
+                                                "MODERATE"
+                                            ),
+                                        ).props("size=sm flat dense color=orange").classes(
+                                            "text-xs"
+                                        )
+                                        ui.button(
+                                            "LOW",
+                                            on_click=lambda: select_by_impact_level("LOW"),
+                                        ).props(
+                                            "size=sm flat dense color=yellow-8"
+                                        ).classes("text-xs")
+                                        ui.button(
+                                            "MODIFIER",
+                                            on_click=lambda: select_by_impact_level(
+                                                "MODIFIER"
+                                            ),
+                                        ).props("size=sm flat dense color=grey").classes(
+                                            "text-xs"
+                                        )
 
                                     ui.separator()
 
-                                    for geneset_name in sorted(
-                                        available_genesets.keys()
-                                    ):
+                                    # Pre-populate with all VEP consequences
+                                    with ui.column().classes("gap-1"):
 
-                                        def make_geneset_handler(gs_name):
+                                        def make_impact_handler_search(cons):
                                             def handler(e):
                                                 if e.value:
                                                     if (
-                                                        gs_name
-                                                        not in selected_genesets[
+                                                        cons
+                                                        not in selected_impacts_search[
                                                             "value"
                                                         ]
                                                     ):
-                                                        selected_genesets[
+                                                        selected_impacts_search[
                                                             "value"
-                                                        ].append(gs_name)
+                                                        ].append(cons)
                                                 else:
                                                     if (
-                                                        gs_name
-                                                        in selected_genesets["value"]
+                                                        cons
+                                                        in selected_impacts_search["value"]
                                                     ):
-                                                        selected_genesets[
+                                                        selected_impacts_search[
                                                             "value"
-                                                        ].remove(gs_name)
+                                                        ].remove(cons)
                                                 # Update button visual state
-                                                if geneset_button_ref["button"]:
-                                                    if selected_genesets["value"]:
-                                                        geneset_button_ref[
-                                                            "button"
-                                                        ].props(
-                                                            remove="outline",
-                                                            add="unelevated color=green",
-                                                        )
-                                                    else:
-                                                        geneset_button_ref[
-                                                            "button"
-                                                        ].props(
-                                                            remove="unelevated color=green",
+                                                if impact_button_ref["button"]:
+                                                    if len(
+                                                        selected_impacts_search["value"]
+                                                    ) == len(VEP_CONSEQUENCES):
+                                                        impact_button_ref["button"].props(
+                                                            remove="unelevated color=orange",
                                                             add="outline",
                                                         )
-                                                    geneset_button_ref[
-                                                        "button"
-                                                    ].update()
+                                                    else:
+                                                        impact_button_ref["button"].props(
+                                                            remove="outline",
+                                                            add="unelevated color=orange",
+                                                        )
+                                                    impact_button_ref["button"].update()
 
                                             return handler
 
-                                        geneset_checkboxes[geneset_name] = ui.checkbox(
-                                            f"{geneset_name} ({len(available_genesets[geneset_name])} genes)",
-                                            value=False,
-                                            on_change=make_geneset_handler(
-                                                geneset_name
-                                            ),
-                                        ).classes("text-sm")
+                                        # Group by impact level for better organization
+                                        for impact_level in [
+                                            "HIGH",
+                                            "MODERATE",
+                                            "LOW",
+                                            "MODIFIER",
+                                        ]:
+                                            consequences = [
+                                                cons
+                                                for cons, (
+                                                    imp,
+                                                    _,
+                                                ) in VEP_CONSEQUENCES.items()
+                                                if imp == impact_level
+                                            ]
+                                            if consequences:
+                                                ui.label(f"{impact_level}:").classes(
+                                                    "text-xs font-bold text-gray-600 mt-2"
+                                                )
+                                                for cons in sorted(consequences):
+                                                    impact_checkboxes_search[cons] = (
+                                                        ui.checkbox(
+                                                            format_consequence_display(
+                                                                cons
+                                                            ),
+                                                            value=True,
+                                                            on_change=make_impact_handler_search(
+                                                                cons
+                                                            ),
+                                                        ).classes("text-sm")
+                                                    )
 
-                    # Impact filter menu
-                    impact_btn = (
-                        ui.button("Impacts", icon="filter_list")
-                        .props("outline")
-                        .classes("h-14")
-                    )
-                    impact_button_ref["button"] = impact_btn
-                    with impact_btn:
-                        with ui.menu():
-                            ui.label("Select Impact Types:").classes(
-                                "px-4 py-2 font-semibold text-sm"
-                            )
-                            ui.separator()
-
-                            with ui.column().classes("p-2"):
-                                impact_checkboxes_search: Dict[str, Any] = {}
-
-                                with ui.row().classes("gap-2 mb-2 flex-wrap"):
-
-                                    def select_all_impacts_search():
+                                        # Initialize with all selected
                                         selected_impacts_search["value"] = list(
                                             VEP_CONSEQUENCES.keys()
                                         )
-                                        for cb in impact_checkboxes_search.values():
-                                            cb.value = True
-                                        if impact_button_ref["button"]:
-                                            impact_button_ref["button"].props(
-                                                remove="unelevated color=orange",
-                                                add="outline",
-                                            )
-                                            impact_button_ref["button"].update()
 
-                                    def select_none_impacts_search():
-                                        selected_impacts_search["value"] = []
-                                        for cb in impact_checkboxes_search.values():
-                                            cb.value = False
-                                        if impact_button_ref["button"]:
-                                            impact_button_ref["button"].props(
-                                                remove="outline",
-                                                add="unelevated color=orange",
-                                            )
-                                            impact_button_ref["button"].update()
+                        # Validation filter
+                        create_validation_filter_menu(
+                            all_statuses=["present", "absent", "uncertain", "conflicting", "TODO"],
+                            filter_state=selected_validations,
+                            on_change=lambda: None,  # No action needed during search parameter setup
+                            label="Validation",
+                            button_classes="",
+                            button_size="",
+                            button_props="dense",
+                        )
 
-                                    def select_by_impact_level(level: str):
-                                        selected = [
-                                            cons
-                                            for cons, (
-                                                imp,
-                                                _,
-                                            ) in VEP_CONSEQUENCES.items()
-                                            if imp == level
-                                        ]
-                                        selected_impacts_search["value"] = selected
-                                        for (
-                                            impact,
-                                            cb,
-                                        ) in impact_checkboxes_search.items():
-                                            cb.value = impact in selected
-                                        if impact_button_ref["button"]:
-                                            impact_button_ref["button"].props(
-                                                remove="outline",
-                                                add="unelevated color=orange",
-                                            )
-                                            impact_button_ref["button"].update()
+                    # Exclude filters row
+                    with ui.row().classes("items-center gap-4 w-full flex-wrap mt-1"):
+                        ui.checkbox(
+                            "Exclude LCR",
+                            value=filter_exclude_lcr["value"],
+                            on_change=lambda e: filter_exclude_lcr.update(
+                                {"value": e.value}
+                            ),
+                        ).props("dense")
+                        ui.checkbox(
+                            "Exclude gnomAD filtered",
+                            value=filter_exclude_gnomad["value"],
+                            on_change=lambda e: filter_exclude_gnomad.update(
+                                {"value": e.value}
+                            ),
+                        ).props("dense")
+                        ui.checkbox(
+                            "Exclude gnomAD WGS",
+                            value=filter_exclude_gnomad_wgs["value"],
+                            on_change=lambda e: filter_exclude_gnomad_wgs.update(
+                                {"value": e.value}
+                            ),
+                        ).props("dense")
 
-                                    ui.button(
-                                        "All", on_click=select_all_impacts_search
-                                    ).props("size=sm flat dense").classes("text-xs")
-                                    ui.button(
-                                        "None", on_click=select_none_impacts_search
-                                    ).props("size=sm flat dense").classes("text-xs")
-                                    ui.button(
-                                        "HIGH",
-                                        on_click=lambda: select_by_impact_level("HIGH"),
-                                    ).props("size=sm flat dense color=red").classes(
-                                        "text-xs"
-                                    )
-                                    ui.button(
-                                        "MODERATE",
-                                        on_click=lambda: select_by_impact_level(
-                                            "MODERATE"
-                                        ),
-                                    ).props("size=sm flat dense color=orange").classes(
-                                        "text-xs"
-                                    )
-                                    ui.button(
-                                        "LOW",
-                                        on_click=lambda: select_by_impact_level("LOW"),
-                                    ).props(
-                                        "size=sm flat dense color=yellow-8"
-                                    ).classes("text-xs")
-                                    ui.button(
-                                        "MODIFIER",
-                                        on_click=lambda: select_by_impact_level(
-                                            "MODIFIER"
-                                        ),
-                                    ).props("size=sm flat dense color=grey").classes(
-                                        "text-xs"
-                                    )
-
-                                ui.separator()
-
-                                # Pre-populate with all VEP consequences
-                                with ui.column().classes("gap-1"):
-
-                                    def make_impact_handler_search(cons):
-                                        def handler(e):
-                                            if e.value:
-                                                if (
-                                                    cons
-                                                    not in selected_impacts_search[
-                                                        "value"
-                                                    ]
-                                                ):
-                                                    selected_impacts_search[
-                                                        "value"
-                                                    ].append(cons)
-                                            else:
-                                                if (
-                                                    cons
-                                                    in selected_impacts_search["value"]
-                                                ):
-                                                    selected_impacts_search[
-                                                        "value"
-                                                    ].remove(cons)
-                                            # Update button visual state
-                                            if impact_button_ref["button"]:
-                                                if len(
-                                                    selected_impacts_search["value"]
-                                                ) == len(VEP_CONSEQUENCES):
-                                                    impact_button_ref["button"].props(
-                                                        remove="unelevated color=orange",
-                                                        add="outline",
-                                                    )
-                                                else:
-                                                    impact_button_ref["button"].props(
-                                                        remove="outline",
-                                                        add="unelevated color=orange",
-                                                    )
-                                                impact_button_ref["button"].update()
-
-                                        return handler
-
-                                    # Group by impact level for better organization
-                                    for impact_level in [
-                                        "HIGH",
-                                        "MODERATE",
-                                        "LOW",
-                                        "MODIFIER",
-                                    ]:
-                                        consequences = [
-                                            cons
-                                            for cons, (
-                                                imp,
-                                                _,
-                                            ) in VEP_CONSEQUENCES.items()
-                                            if imp == impact_level
-                                        ]
-                                        if consequences:
-                                            ui.label(f"{impact_level}:").classes(
-                                                "text-xs font-bold text-gray-600 mt-2"
-                                            )
-                                            for cons in sorted(consequences):
-                                                impact_checkboxes_search[cons] = (
-                                                    ui.checkbox(
-                                                        format_consequence_display(
-                                                            cons
-                                                        ),
-                                                        value=True,
-                                                        on_change=make_impact_handler_search(
-                                                            cons
-                                                        ),
-                                                    ).classes("text-sm")
-                                                )
-
-                                    # Initialize with all selected
-                                    selected_impacts_search["value"] = list(
-                                        VEP_CONSEQUENCES.keys()
-                                    )
-
-                    # Validation filter
-                    create_validation_filter_menu(
-                        all_statuses=["present", "absent", "uncertain", "conflicting", "TODO"],
-                        filter_state=selected_validations,
-                        on_change=lambda: None,  # No action needed during search parameter setup
-                        label="Validation",
-                        button_classes="",
-                        button_size="h-14",
-                    )
-
-                    # Search button (handler set later after function definition)
-                    search_button = ui.button(
-                        "Search",
-                        icon="search",
-                    ).props("color=blue").classes("h-14")
-
-                # Exclude filters row
-                with ui.row().classes("items-center gap-4 w-full flex-wrap mt-2"):
-                    ui.checkbox(
-                        "Exclude LCR",
-                        value=filter_exclude_lcr["value"],
-                        on_change=lambda e: filter_exclude_lcr.update(
-                            {"value": e.value}
-                        ),
-                    )
-                    ui.checkbox(
-                        "Exclude gnomAD filtered",
-                        value=filter_exclude_gnomad["value"],
-                        on_change=lambda e: filter_exclude_gnomad.update(
-                            {"value": e.value}
-                        ),
-                    )
-                    ui.checkbox(
-                        "Exclude gnomAD WGS",
-                        value=filter_exclude_gnomad_wgs["value"],
-                        on_change=lambda e: filter_exclude_gnomad_wgs.update(
-                            {"value": e.value}
-                        ),
-                    )
-
-                # Help text
-                with ui.expansion("Query Examples", icon="help").classes("mt-2"):
-                    ui.markdown("""
+                    # Help text
+                    with ui.expansion("Query Examples", icon="help").classes("mt-1").props("dense"):
+                        ui.markdown("""
 - **chr1:10000-10100** - All variants in range [10000, 10100] on chr1
 - **chr1:10000** - Exact position 10000 on chr1
 - **chr1:10000:A:GC** - Exact variant with REF=A and ALT=GC
 - **SHANK3** - All variants in SHANK3 gene
 - **SHANK*** - All variants in genes starting with SHANK
 - **ENSG00000164099** - All variants in gene with this Ensembl ID
-                    """)
+                        """)
+
+                  with ui.tab_panel(individuals_tab).classes("p-0 pt-1"):
+                    with ui.row().classes("items-center gap-2 flex-wrap"):
+                        # Sex filter (always shown)
+                        ui.select(
+                            options=available_sex_values,
+                            label="Sex",
+                            value=filter_sex["value"],
+                            multiple=True,
+                            on_change=lambda e: filter_sex.update({"value": e.value or []}),
+                        ).props("outlined dense use-chips").classes("w-48")
+
+                        # Phenotype filter (always shown)
+                        ui.select(
+                            options=available_phenotype_values,
+                            label="Phenotype",
+                            value=filter_phenotype["value"],
+                            multiple=True,
+                            on_change=lambda e: filter_phenotype.update({"value": e.value or []}),
+                        ).props("outlined dense use-chips").classes("w-48")
+
+                        # Has parents checkbox
+                        ui.checkbox(
+                            "Only samples with both parents",
+                            value=filter_has_parents["value"],
+                            on_change=lambda e: filter_has_parents.update({"value": e.value}),
+                        ).props("dense")
 
             # Results container
             results_container = ui.column().classes("w-full")
@@ -939,10 +775,13 @@ def search_cohort_page(cohort_name: str) -> None:
                         df = pl.read_csv(
                             selected_file["file_path"],
                             separator="\t",
-                            infer_schema_length=100,
-                            schema_overrides={"sex": pl.Utf8},
+                            infer_schema_length=10000,
+                            schema_overrides=get_schema_overrides(),
                             null_values=[".", ""],
                         )
+                        _drop = get_dropped_columns() & set(df.columns)
+                        if _drop:
+                            df = df.drop(list(_drop))
 
                         # Group by variant and sample, aggregating other columns
                         grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
@@ -1183,7 +1022,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                     badge_info = get_score_color(col_name, value)
                                     if badge_info:
                                         row[f"{col_name}_badge"] = {
-                                            "value": f"{value:.3f}",
+                                            "label": f"{value:.3f}",
                                             "color": badge_info["color"],
                                             "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})"
                                         }
@@ -1228,6 +1067,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     if "Validation" not in all_columns:
                         all_columns.append("Validation")
 
+                    # Group same-group columns together
+                    all_columns = reorder_columns_by_group(all_columns)
+
                     # Default visible columns
                     default_visible = [
                         "Variant",
@@ -1256,6 +1098,36 @@ def search_cohort_page(cohort_name: str) -> None:
                         "value": initial_selected if initial_selected else [col for col in default_visible if col in all_columns]
                     }
 
+                    # Table state for persistence across refreshes
+                    table_state: Dict[str, Any] = {"sorting": [], "page": 0}
+
+                    # Apply individual filters (sex, phenotype, has-parents)
+                    if filter_sex["value"]:
+                        all_rows = [
+                            r for r in all_rows
+                            if pedigree_data.get(r.get("sample", ""), {}).get("Sex", "") in filter_sex["value"]
+                        ]
+
+                    if filter_phenotype["value"]:
+                        all_rows = [
+                            r for r in all_rows
+                            if pedigree_data.get(r.get("sample", ""), {}).get("Phenotype", "") in filter_phenotype["value"]
+                        ]
+
+                    if filter_has_parents["value"]:
+                        def _has_parents(ped: Dict[str, str]) -> bool:
+                            father = ped.get("Father", "")
+                            mother = ped.get("Mother", "")
+                            return (
+                                father not in _PED_MISSING
+                                and mother not in _PED_MISSING
+                            )
+
+                        all_rows = [
+                            r for r in all_rows
+                            if _has_parents(pedigree_data.get(r.get("sample", ""), {}))
+                        ]
+
                     # Apply impact filter if some impacts are deselected
                     if selected_impacts_search["value"] and set(
                         selected_impacts_search["value"]
@@ -1265,9 +1137,13 @@ def search_cohort_page(cohort_name: str) -> None:
                         for row in all_rows:
                             consequence_str = row.get("VEP_Consequence", "")
                             if consequence_str:
-                                consequences = [
-                                    c.strip() for c in str(consequence_str).split("&")
-                                ]
+                                # Split by both "," (aggregated) and "&" (compound VEP)
+                                consequences = []
+                                for part in str(consequence_str).split(","):
+                                    for c in part.split("&"):
+                                        c = c.strip()
+                                        if c:
+                                            consequences.append(c)
                                 # Keep row if any of its consequences is in selected impacts
                                 if any(
                                     c in selected_impacts_search["value"]
@@ -1325,26 +1201,59 @@ def search_cohort_page(cohort_name: str) -> None:
                                     )
                                 ]
 
-                            # Prepare columns
-                            visible_cols = selected_cols["value"]
+
 
                             def get_columns():
                                 cols: List[Dict[str, Any]] = [
-                                    {"name": "actions", "label": "", "field": "actions"}
+                                    {
+                                        "id": "actions",
+                                        "header": "",
+                                        "cellType": "action",
+                                        "actionName": "view_variant",
+                                        "actionIcon": "visibility",
+                                        "actionColor": "#1976d2",
+                                        "actionTooltip": "View in IGV",
+                                        "sortable": False,
+                                    }
                                 ]
-                                cols.extend(
-                                    [
-                                        {
-                                            "name": col,
-                                            "label": get_display_label(col),
-                                            "field": col,
-                                            "sortable": True,
-                                            "align": "left",
-                                        }
-                                        for col in visible_cols
-                                    ]
-                                )
+                                for col in all_columns:
+                                    col_def: Dict[str, Any] = {
+                                        "id": col,
+                                        "header": get_display_label(col),
+                                        "group": get_column_group(col),
+                                        "sorting": get_column_sorting(col),
+                                        "sortable": True,
+                                    }
+                                    if col == "Validation":
+                                        col_def["cellType"] = "validation"
+                                    elif col == "VEP_Consequence":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ConsequenceBadges"
+                                    elif col == "VEP_CLIN_SIG":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ClinVarBadges"
+                                    elif col == "VEP_SYMBOL":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "GeneBadges"
+                                    elif col == "VEP_Gene":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "VEP_Gene_badges"
+                                    elif col == "FID":
+                                        col_def["cellType"] = "link"
+                                        col_def["href"] = "/cohort/{_cohort_name}/family/{FID}"
+                                    else:
+                                        col_def["cellType"] = "score_badge"
+                                    apply_width_constraints(col_def, col)
+                                    cols.append(col_def)
                                 return cols
+
+                            # Reference to the DataTable for column visibility updates
+                            search_dt: Dict[str, Any] = {"ref": None}
+
+                            def _apply_col_visibility():
+                                if search_dt["ref"]:
+                                    visible = ["actions"] + list(selected_cols["value"])
+                                    search_dt["ref"].set_column_visibility(visible)
 
                             with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
                                 ui.label(f"Results ({len(rows)} rows)").classes(
@@ -1360,81 +1269,390 @@ def search_cohort_page(cohort_name: str) -> None:
 
                                 ui.space()  # Push column selector to the right
 
-                                # Compact column selector button
-                                with ui.button(
-                                    "+ column", icon="view_column"
-                                ).props("outline color=blue size=sm"):
-                                    with ui.menu():
-                                        ui.label("Show/Hide Columns:").classes(
-                                            "px-4 py-2 font-semibold text-sm"
+                                # Column selector dialog
+                                col_dialog, _sync_col_selector = build_column_selector(
+                                    all_columns=all_columns,
+                                    selected_cols=selected_cols,
+                                    on_visibility_change=_apply_col_visibility,
+                                    presets=VIEW_PRESETS,
+                                )
+                                ui.button(
+                                    "Columns", icon="view_column",
+                                    on_click=col_dialog.open,
+                                ).props("outline color=blue size=sm")
+
+                                # --- Stats button + dialog ---
+                                def show_stats_dialog(current_rows=rows):
+                                    from collections import Counter
+
+                                    # Deduplicate by (#CHROM, POS, REF, ALT)
+                                    seen: set = set()
+                                    unique_variants: list = []
+                                    for r in current_rows:
+                                        key = (
+                                            r.get("#CHROM", ""),
+                                            r.get("POS", ""),
+                                            r.get("REF", ""),
+                                            r.get("ALT", ""),
                                         )
-                                        ui.separator()
+                                        if key not in seen:
+                                            seen.add(key)
+                                            unique_variants.append(r)
 
-                                        with ui.column().classes("p-2"):
-                                            col_checkboxes = {}
+                                    # Classify variant type
+                                    for r in unique_variants:
+                                        ref = str(r.get("REF", ""))
+                                        alt = str(r.get("ALT", ""))
+                                        r["_is_snv"] = len(ref) == 1 and len(alt) == 1
 
-                                            with ui.row().classes("gap-2 mb-2"):
+                                    chrom_order = CHROM_ORDER
+                                    chrom_sizes_mb = CHROM_SIZES_MB
+                                    validation_colors = VALIDATION_COLORS
 
-                                                def col_select_all():
-                                                    selected_cols["value"] = (
-                                                        all_columns.copy()
+                                    # Filter state
+                                    type_filter = {"snv": True, "indel": True}
+                                    show_ideogram: Dict[str, bool] = {"value": False}
+                                    _containers: Dict[str, Any] = {"charts": None, "ideo": None}
+
+                                    with ui.dialog().props(
+                                        "full-width"
+                                    ) as stats_dialog, ui.card().classes("w-full"):
+                                        with ui.column().classes("w-full p-4"):
+                                            # Header
+                                            with ui.row().classes(
+                                                "items-center justify-between w-full mb-2"
+                                            ):
+                                                with ui.row().classes("items-center gap-3"):
+                                                    ui.label("Variant Statistics").classes(
+                                                        "text-xl font-bold text-blue-900"
                                                     )
-                                                    for cb in col_checkboxes.values():
-                                                        cb.value = True
-                                                    render_results_table.refresh()
-
-                                                def col_select_none():
-                                                    selected_cols["value"] = []
-                                                    for cb in col_checkboxes.values():
-                                                        cb.value = False
-                                                    render_results_table.refresh()
-
+                                                    subtitle_label = ui.label("").classes(
+                                                        "text-sm text-gray-500"
+                                                    )
+                                                    ideogram_btn = ui.button(
+                                                        "Ideogram",
+                                                    ).props(
+                                                        "outline color=blue size=sm dense no-caps"
+                                                    )
+                                                    snv_cb = ui.checkbox(
+                                                        "SNVs", value=True
+                                                    ).props("dense").classes("text-sm")
+                                                    indel_cb = ui.checkbox(
+                                                        "Indels", value=True
+                                                    ).props("dense").classes("text-sm")
                                                 ui.button(
-                                                    "All", on_click=col_select_all
-                                                ).props("size=sm flat dense").classes(
-                                                    "text-xs"
-                                                )
-                                                ui.button(
-                                                    "None", on_click=col_select_none
-                                                ).props("size=sm flat dense").classes(
-                                                    "text-xs"
-                                                )
+                                                    icon="close",
+                                                    on_click=lambda: stats_dialog.close(),
+                                                ).props("flat round")
 
-                                            def handle_col_change(col_name, is_checked):
-                                                if (
-                                                    is_checked
-                                                    and col_name
-                                                    not in selected_cols["value"]
-                                                ):
-                                                    selected_cols["value"].append(
-                                                        col_name
-                                                    )
-                                                elif (
-                                                    not is_checked
-                                                    and col_name
-                                                    in selected_cols["value"]
-                                                ):
-                                                    selected_cols["value"].remove(
-                                                        col_name
-                                                    )
-
-                                                # Reorder to match all_columns order
-                                                selected_cols["value"] = [
-                                                    col for col in all_columns
-                                                    if col in selected_cols["value"]
+                                            @ui.refreshable
+                                            def render_stats_content():
+                                                # Filter variants by type
+                                                filtered = [
+                                                    r for r in unique_variants
+                                                    if (type_filter["snv"] and r["_is_snv"])
+                                                    or (type_filter["indel"] and not r["_is_snv"])
                                                 ]
+                                                snv_n = sum(1 for r in filtered if r["_is_snv"])
+                                                indel_n = len(filtered) - snv_n
+                                                subtitle_label.text = (
+                                                    f"{len(filtered)} unique variants "
+                                                    f"({snv_n} SNVs, {indel_n} Indels)"
+                                                )
 
-                                                render_results_table.refresh()
+                                                # Chromosome distribution stacked by validation
+                                                chrom_validation: Dict[str, Dict[str, int]] = {
+                                                    c: {} for c in chrom_order
+                                                }
+                                                for r in filtered:
+                                                    chrom = norm_chrom(r.get("#CHROM", ""))
+                                                    status = r.get("Validation", "") or "TODO"
+                                                    if chrom in chrom_validation:
+                                                        chrom_validation[chrom][status] = (
+                                                            chrom_validation[chrom].get(status, 0) + 1
+                                                        )
+                                                all_statuses: List[str] = []
+                                                for c in chrom_order:
+                                                    for s in chrom_validation[c]:
+                                                        if s not in all_statuses:
+                                                            all_statuses.append(s)
 
-                                            for col in all_columns:
-                                                col_checkboxes[col] = ui.checkbox(
-                                                    get_display_label(col),
-                                                    value=col in selected_cols["value"],
-                                                    on_change=lambda e,
-                                                    c=col: handle_col_change(
-                                                        c, e.value
-                                                    ),
-                                                ).classes("text-sm")
+                                                # Consequence distribution
+                                                consequence_counts = Counter(
+                                                    get_highest_consequence_term(
+                                                        str(r.get("VEP_Consequence", ""))
+                                                    )
+                                                    for r in filtered
+                                                )
+                                                # Validation distribution
+                                                validation_counts = Counter(
+                                                    r.get("Validation", "") or "TODO"
+                                                    for r in filtered
+                                                )
+
+                                                # Scatter data for ideogram
+                                                scatter_data: List[List[Any]] = []
+                                                for r in filtered:
+                                                    chrom = norm_chrom(r.get("#CHROM", ""))
+                                                    pos = r.get("POS", 0)
+                                                    try:
+                                                        pos_mb = round(float(pos) / 1_000_000, 2)
+                                                    except (ValueError, TypeError):
+                                                        continue
+                                                    if chrom in chrom_sizes_mb:
+                                                        status = r.get("Validation", "") or "TODO"
+                                                        scatter_data.append([pos_mb, chrom, status])
+
+                                                # --- Charts container ---
+                                                _containers["charts"] = ui.column().classes("w-full")
+                                                _containers["charts"].set_visibility(not show_ideogram["value"])
+                                                with _containers["charts"]:
+                                                    ui.label("Variants per Chromosome").classes(
+                                                        "text-lg font-semibold text-gray-800 mt-2"
+                                                    )
+                                                    stacked_series = [
+                                                        {
+                                                            "name": status,
+                                                            "type": "bar",
+                                                            "stack": "total",
+                                                            "data": [
+                                                                chrom_validation[c].get(status, 0)
+                                                                for c in chrom_order
+                                                            ],
+                                                            "itemStyle": {
+                                                                "color": validation_colors.get(
+                                                                    status, "#94a3b8"
+                                                                )
+                                                            },
+                                                        }
+                                                        for status in all_statuses
+                                                    ]
+                                                    ui.echart(
+                                                        {
+                                                            "tooltip": {
+                                                                "trigger": "axis",
+                                                                "axisPointer": {"type": "shadow"},
+                                                            },
+                                                            "legend": {"data": all_statuses, "top": 0},
+                                                            "grid": {"top": 30},
+                                                            "xAxis": {
+                                                                "type": "category",
+                                                                "data": chrom_order,
+                                                                "name": "Chromosome",
+                                                            },
+                                                            "yAxis": {"type": "value", "name": "Count"},
+                                                            "series": stacked_series,
+                                                        }
+                                                    ).classes("w-full h-64")
+
+                                                    with ui.row().classes("w-full gap-4 flex-wrap mt-4"):
+                                                        # Consequence pie chart
+                                                        with ui.column().classes("flex-1 min-w-[400px]"):
+                                                            ui.label(
+                                                                "Consequence Distribution (highest per variant)"
+                                                            ).classes("text-lg font-semibold text-gray-800")
+                                                            cons_data = [
+                                                                {
+                                                                    "name": format_consequence_display(cons),
+                                                                    "value": count,
+                                                                    "itemStyle": {
+                                                                        "color": VEP_CONSEQUENCES.get(
+                                                                            cons, ("", "#6b7280")
+                                                                        )[1]
+                                                                    },
+                                                                }
+                                                                for cons, count in consequence_counts.most_common()
+                                                            ]
+                                                            ui.echart(
+                                                                {
+                                                                    "tooltip": {"trigger": "item"},
+                                                                    "series": [{
+                                                                        "type": "pie",
+                                                                        "radius": "70%",
+                                                                        "data": cons_data,
+                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
+                                                                    }],
+                                                                }
+                                                            ).classes("w-full h-80")
+
+                                                        # Validation pie chart
+                                                        with ui.column().classes("flex-1 min-w-[400px]"):
+                                                            ui.label(
+                                                                "Validation Status Distribution"
+                                                            ).classes("text-lg font-semibold text-gray-800")
+                                                            val_data = [
+                                                                {
+                                                                    "name": st,
+                                                                    "value": cnt,
+                                                                    "itemStyle": {
+                                                                        "color": validation_colors.get(st, "#6b7280")
+                                                                    },
+                                                                }
+                                                                for st, cnt in validation_counts.most_common()
+                                                            ]
+                                                            ui.echart(
+                                                                {
+                                                                    "tooltip": {"trigger": "item"},
+                                                                    "series": [{
+                                                                        "type": "pie",
+                                                                        "radius": "70%",
+                                                                        "data": val_data,
+                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
+                                                                    }],
+                                                                }
+                                                            ).classes("w-full h-80")
+
+                                                # --- Ideogram container ---
+                                                _containers["ideo"] = ui.column().classes("w-full")
+                                                _containers["ideo"].set_visibility(show_ideogram["value"])
+                                                with _containers["ideo"]:
+                                                    svg_w = 1800
+                                                    lbl_w = 50
+                                                    plot_w = svg_w - lbl_w - 20
+                                                    row_h = 16
+                                                    tri_h = 6
+                                                    row_gap = tri_h + 4
+                                                    svg_h = len(chrom_order) * (row_h + row_gap) + 60
+                                                    max_mb = max(chrom_sizes_mb.values())
+
+                                                    svg_parts = [
+                                                        f'<svg viewBox="0 0 {svg_w} {svg_h}" '
+                                                        f'xmlns="http://www.w3.org/2000/svg" '
+                                                        f'preserveAspectRatio="xMinYMin meet" '
+                                                        f'style="font-family: sans-serif; width: 100%; height: auto;">'
+                                                    ]
+
+                                                    axis_y = len(chrom_order) * (row_h + row_gap)
+                                                    for mb_val in range(0, 260, 50):
+                                                        gx = lbl_w + (mb_val / max_mb) * plot_w
+                                                        svg_parts.append(
+                                                            f'<line x1="{gx:.1f}" y1="0" '
+                                                            f'x2="{gx:.1f}" y2="{axis_y}" '
+                                                            f'stroke="#e5e7eb" stroke-width="0.5" '
+                                                            f'stroke-dasharray="3,3"/>'
+                                                        )
+                                                        svg_parts.append(
+                                                            f'<text x="{gx:.1f}" y="{axis_y + 14}" '
+                                                            f'text-anchor="middle" font-size="12" '
+                                                            f'fill="#6b7280">{mb_val}</text>'
+                                                        )
+                                                    svg_parts.append(
+                                                        f'<text x="{svg_w / 2}" y="{axis_y + 32}" '
+                                                        f'text-anchor="middle" font-size="13" '
+                                                        f'fill="#6b7280">Position (Mb)</text>'
+                                                    )
+
+                                                    for ci, chrom in enumerate(chrom_order):
+                                                        bar_y = ci * (row_h + row_gap) + tri_h
+                                                        bands = CYTOBANDS.get(chrom, [])
+                                                        cs = chrom_sizes_mb.get(chrom, 0)
+                                                        total_w = (cs / max_mb) * plot_w
+
+                                                        svg_parts.append(
+                                                            f'<text x="{lbl_w - 6}" y="{bar_y + row_h * 0.75}" '
+                                                            f'text-anchor="end" font-size="12" '
+                                                            f'fill="#374151">{chrom}</text>'
+                                                        )
+                                                        for band in bands:
+                                                            bx = lbl_w + (band["start"] / max_mb) * plot_w
+                                                            bw = max(
+                                                                ((band["end"] - band["start"]) / max_mb) * plot_w,
+                                                                0.5,
+                                                            )
+                                                            color = GIESTAIN_COLORS.get(band["stain"], "#e5e7eb")
+                                                            svg_parts.append(
+                                                                f'<rect x="{bx:.1f}" y="{bar_y}" '
+                                                                f'width="{bw:.1f}" height="{row_h}" '
+                                                                f'fill="{color}"/>'
+                                                            )
+                                                        svg_parts.append(
+                                                            f'<rect x="{lbl_w}" y="{bar_y}" '
+                                                            f'width="{total_w:.1f}" height="{row_h}" '
+                                                            f'fill="none" stroke="#9ca3af" '
+                                                            f'stroke-width="0.5" rx="3"/>'
+                                                        )
+
+                                                    for sd in scatter_data:
+                                                        v_mb, v_chrom, v_status = sd
+                                                        if v_chrom not in chrom_order:
+                                                            continue
+                                                        v_idx = chrom_order.index(v_chrom)
+                                                        bar_y = v_idx * (row_h + row_gap) + tri_h
+                                                        vx = lbl_w + (v_mb / max_mb) * plot_w
+                                                        v_color = validation_colors.get(v_status, "#94a3b8")
+                                                        tw = 5
+                                                        svg_parts.append(
+                                                            f'<polygon points="{vx - tw:.1f},{bar_y - tri_h} '
+                                                            f'{vx + tw:.1f},{bar_y - tri_h} '
+                                                            f'{vx:.1f},{bar_y}" '
+                                                            f'fill="{v_color}" opacity="0.9"/>'
+                                                        )
+                                                        svg_parts.append(
+                                                            f'<line x1="{vx:.1f}" y1="{bar_y}" '
+                                                            f'x2="{vx:.1f}" y2="{bar_y + row_h}" '
+                                                            f'stroke="{v_color}" stroke-width="1.5" '
+                                                            f'opacity="0.85"/>'
+                                                        )
+
+                                                    legend_y = axis_y + 40
+                                                    legend_x = lbl_w
+                                                    for v_status in all_statuses:
+                                                        v_color = validation_colors.get(v_status, "#94a3b8")
+                                                        svg_parts.append(
+                                                            f'<rect x="{legend_x}" y="{legend_y}" '
+                                                            f'width="12" height="12" rx="2" fill="{v_color}"/>'
+                                                        )
+                                                        svg_parts.append(
+                                                            f'<text x="{legend_x + 16}" y="{legend_y + 10}" '
+                                                            f'font-size="12" fill="#374151">{v_status}</text>'
+                                                        )
+                                                        legend_x += len(v_status) * 8 + 32
+
+                                                    svg_parts.append("</svg>")
+                                                    ui.html(
+                                                        "\n".join(svg_parts),
+                                                        sanitize=False,
+                                                    ).classes("w-full")
+
+                                            render_stats_content()
+
+                                            # Toggle ideogram/charts view
+                                            def toggle_ideogram(_e=None):
+                                                show_ideogram["value"] = not show_ideogram["value"]
+                                                if _containers["charts"]:
+                                                    _containers["charts"].set_visibility(
+                                                        not show_ideogram["value"]
+                                                    )
+                                                if _containers["ideo"]:
+                                                    _containers["ideo"].set_visibility(
+                                                        show_ideogram["value"]
+                                                    )
+                                                if show_ideogram["value"]:
+                                                    ideogram_btn.props(
+                                                        remove="outline", add="unelevated"
+                                                    )
+                                                else:
+                                                    ideogram_btn.props(
+                                                        remove="unelevated", add="outline"
+                                                    )
+                                                ideogram_btn.update()
+
+                                            ideogram_btn.on_click(toggle_ideogram)
+
+                                            # SNV / Indel filter handler
+                                            def on_type_filter_change(_e=None):
+                                                type_filter["snv"] = snv_cb.value
+                                                type_filter["indel"] = indel_cb.value
+                                                render_stats_content.refresh()
+
+                                            snv_cb.on_value_change(on_type_filter_change)
+                                            indel_cb.on_value_change(on_type_filter_change)
+
+                                    stats_dialog.open()
+
+                                ui.button(
+                                    "Stats", icon="bar_chart", on_click=show_stats_dialog
+                                ).props("outline color=blue size=sm")
 
                             # Preset change handler
                             def on_preset_change(e):
@@ -1449,28 +1667,15 @@ def search_cohort_page(cohort_name: str) -> None:
 
                                 selected_cols["value"] = available
                                 selected_preset["name"] = preset_name
-                                render_results_table.refresh()
+                                _apply_col_visibility()
+                                _sync_col_selector()
 
                             # Connect preset change handler
                             preset_select.on_value_change(on_preset_change)
 
-                            # Create table
-                            results_table = (
-                                ui.table(
-                                    columns=get_columns(),
-                                    rows=rows,
-                                    row_key="Variant",
-                                    pagination={"rowsPerPage": 50},
-                                )
-                                .classes("w-full")
-                                .props("dense flat")
-                            )
-
-                            results_table.add_slot("body", SEARCH_TABLE_SLOT)
-
                             # Handle view variant click
                             def on_view_variant(e):
-                                row_data = e.args
+                                row_data = e.get("row", {})
                                 variant_str = row_data.get("Variant", "")
                                 sample_id = row_data.get("sample", "")
 
@@ -1540,7 +1745,56 @@ def search_cohort_page(cohort_name: str) -> None:
                                         f"Error parsing variant: {ex}", type="warning"
                                     )
 
-                            results_table.on("view_variant", on_view_variant)
+                            # Restore table state (sorting / page) across refreshes
+                            saved_sorting = table_state.get("sorting", [])
+                            if saved_sorting:
+                                col_id = saved_sorting[0]["id"]
+                                desc = saved_sorting[0].get("desc", False)
+                                col_def = next(
+                                    (c for c in get_columns() if c.get("id") == col_id), {}
+                                )
+                                sort_field = col_def.get("sortField", col_id)
+                                sort_type = col_def.get("sorting", "")
+                                if sort_type == "genomic":
+                                    from genetics_viz.utils.column_names import genomic_sort_key
+                                    rows.sort(
+                                        key=lambda r: (
+                                            r.get(sort_field) is None,
+                                            genomic_sort_key(r.get(sort_field, "")),
+                                        ),
+                                        reverse=desc,
+                                    )
+                                elif sort_type == "numerical":
+                                    def _num_key(r):
+                                        v = r.get(sort_field)
+                                        if v is None:
+                                            return (True, 0.0)
+                                        try:
+                                            return (False, float(v))
+                                        except (ValueError, TypeError):
+                                            return (True, 0.0)
+                                    rows.sort(key=_num_key, reverse=desc)
+                                else:
+                                    rows.sort(
+                                        key=lambda r: (
+                                            r.get(sort_field) is None,
+                                            r.get(sort_field, ""),
+                                        ),
+                                        reverse=desc,
+                                    )
+
+                            # Create table with all columns, initial visibility from preset
+                            search_dt["ref"] = DataTable(
+                                columns=get_columns(),
+                                rows=rows,
+                                row_key="Variant",
+                                pagination={"rowsPerPage": 50},
+                                visible_columns=["actions"] + list(selected_cols["value"]),
+                                on_row_action=on_view_variant,
+                                initial_sorting=saved_sorting,
+                                initial_page=table_state.get("page", 0),
+                                state_holder=table_state,
+                            )
 
                         render_results_table()
 

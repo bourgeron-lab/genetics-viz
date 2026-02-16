@@ -14,7 +14,7 @@ from genetics_viz.utils.data import get_data_store
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
 def family_page(cohort_name: str, family_id: str) -> None:
     """Render the family detail page."""
-    create_header()
+    create_header(cohort_name)
 
     # Add IGV.js library at page level
     ui.add_head_html("""

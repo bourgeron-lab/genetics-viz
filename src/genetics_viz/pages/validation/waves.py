@@ -10,6 +10,7 @@ from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.waves_loader import (
     get_wave_category,
     get_wave_color,
@@ -271,84 +272,36 @@ def waves_validation_page() -> None:
                             # Prepare table data (already filtered)
                             table_rows = filtered_table_rows
 
-                            # Table columns
-                            columns = [
-                                {
-                                    "name": "sample_id",
-                                    "label": "Sample ID",
-                                    "field": "sample_id",
-                                    "align": "left",
-                                    "sortable": True,
-                                },
-                                {
-                                    "name": "validations",
-                                    "label": "Validations",
-                                    "field": "validations",
-                                    "align": "left",
-                                },
-                                {
-                                    "name": "count",
-                                    "label": "# Validations",
-                                    "field": "count",
-                                    "align": "center",
-                                    "sortable": True,
-                                },
-                                {
-                                    "name": "category",
-                                    "label": "Status",
-                                    "field": "category",
-                                    "align": "center",
-                                    "sortable": True,
-                                },
-                                {
-                                    "name": "actions",
-                                    "label": "Actions",
-                                    "field": "sample_id",
-                                    "align": "center",
-                                },
-                            ]
-
-                            # Custom table slot for status with colors
-                            table = ui.table(
-                                columns=columns,
+                            DataTable(
+                                columns=[
+                                    {"id": "sample_id", "header": "Sample ID", "sortable": True},
+                                    {"id": "validations", "header": "Validations"},
+                                    {"id": "count", "header": "# Validations", "sortable": True},
+                                    {
+                                        "id": "category",
+                                        "header": "Status",
+                                        "cellType": "badge",
+                                        "colorField": "color",
+                                        "sortable": True,
+                                    },
+                                    {
+                                        "id": "actions",
+                                        "header": "Actions",
+                                        "cellType": "action",
+                                        "actionName": "view_igv",
+                                        "actionIcon": "visibility",
+                                        "actionColor": "#1976d2",
+                                        "actionTooltip": "View on IGV",
+                                        "sortable": False,
+                                    },
+                                ],
                                 rows=table_rows,
                                 row_key="sample_id",
-                                pagination={"rowsPerPage": 20, "sortBy": "sample_id"},
-                            ).classes("w-full")
-
-                            # Add custom slot for category with color
-                            table.add_slot(
-                                "body-cell-category",
-                                r"""
-                                <q-td :props="props">
-                                    <q-badge :color="props.row.color" :label="props.value" />
-                                </q-td>
-                                """,
+                                pagination={"rowsPerPage": 20},
+                                on_row_action=lambda e: show_wave_dialog(
+                                    e.get("row", {}).get("sample_id", "")
+                                ),
                             )
-
-                            # Add custom slot for actions (View on IGV button)
-                            table.add_slot(
-                                "body-cell-actions",
-                                r"""
-                                <q-td :props="props">
-                                    <q-btn
-                                        dense
-                                        flat
-                                        color="primary"
-                                        icon="visibility"
-                                        label="View on IGV"
-                                        @click="$parent.$emit('view_igv', props.value)"
-                                    />
-                                </q-td>
-                                """,
-                            )
-
-                            # Handle View on IGV button clicks
-                            def handle_view_igv(e):
-                                sample_id = e.args
-                                show_wave_dialog(sample_id)
-
-                            table.on("view_igv", handle_view_igv)
 
             def show_wave_dialog(sample_id: str):
                 """Show wave validation dialog for a sample."""

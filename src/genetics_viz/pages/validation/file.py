@@ -4,41 +4,21 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
 from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
-from genetics_viz.components.tables import VALIDATION_TABLE_SLOT
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
-
-
-def _load_vep_consequences() -> Dict[str, tuple]:
-    """Load VEP consequences from YAML config file."""
-    config_path = (
-        Path(__file__).parent.parent.parent / "config" / "vep_consequences.yaml"
-    )
-    with open(config_path, "r") as f:
-        data = yaml.safe_load(f)
-    # Convert to dict with (impact, color) tuples
-    return {term: (info["impact"], info["color"]) for term, info in data.items()}
-
-
-VEP_CONSEQUENCES = _load_vep_consequences()
-
-
-def get_consequence_color(consequence: str) -> str:
-    """Get color for a consequence term."""
-    return VEP_CONSEQUENCES.get(consequence, ("MODIFIER", "#636363"))[1]
-
-
-def format_consequence_display(consequence: str) -> str:
-    """Format consequence for display: remove _variant suffix and replace _ with space."""
-    display = consequence.replace("_variant", "").replace("_", " ")
-    return display
+from genetics_viz.utils.validation_badges import build_validation_badge
+from genetics_viz.utils.vep import (
+    VEP_CONSEQUENCES,
+    format_consequence_display,
+    get_consequence_color,
+)
 
 
 def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
@@ -105,21 +85,19 @@ def _add_validation_status_to_rows(
                     row["Validation"] = "in phase MNV"
                 else:
                     row["Validation"] = "present"
-                # Check inheritance - prioritize de novo, then homozygous
-                is_de_novo = any(
-                    v[1] == "de novo"
-                    for v in validations
+                # Check inheritance - prioritize de novo, then homozygous,
+                # then first non-empty inheritance from present validations
+                present = [
+                    v for v in validations
                     if v[0] in ("present", "in phase MNV")
-                )
-                is_homozygous = any(
-                    v[1] == "homozygous"
-                    for v in validations
-                    if v[0] in ("present", "in phase MNV")
-                )
-                if is_de_novo:
+                ]
+                inh_values = [v[1] for v in present if v[1]]
+                if "de novo" in inh_values:
                     row["ValidationInheritance"] = "de novo"
-                elif is_homozygous:
+                elif "homozygous" in inh_values:
                     row["ValidationInheritance"] = "homozygous"
+                elif inh_values:
+                    row["ValidationInheritance"] = inh_values[0]
                 else:
                     row["ValidationInheritance"] = ""
             elif "absent" in unique_validations:
@@ -128,9 +106,14 @@ def _add_validation_status_to_rows(
             else:
                 row["Validation"] = "uncertain"
                 row["ValidationInheritance"] = ""
+
+            row["Validation_badge"] = build_validation_badge(
+                row["Validation"], row["ValidationInheritance"], validations
+            )
         else:
             row["Validation"] = ""
             row["ValidationInheritance"] = ""
+            row["Validation_badge"] = None
 
 
 @ui.page("/validation/file/{filename}")
@@ -321,47 +304,44 @@ def validation_file_page(filename: str) -> None:
 
                     # Prepare columns for table
                     columns: List[Dict[str, Any]] = [
-                        {"name": "actions", "label": "", "field": "actions"}
+                        {
+                            "id": "actions",
+                            "header": "",
+                            "cellType": "action",
+                            "actionName": "view_variant",
+                            "actionIcon": "visibility",
+                            "actionColor": "#1976d2",
+                            "actionTooltip": "View in IGV",
+                            "sortable": False,
+                        }
                     ]
                     for header in headers:
-                        columns.append(
-                            {
-                                "name": header,
-                                "label": header,
-                                "field": header,
-                                "sortable": True,
-                                "align": "left",
-                            }
-                        )
+                        col_def: Dict[str, Any] = {
+                            "id": header,
+                            "header": header,
+                            "sortable": True,
+                        }
+                        header_lower = header.lower()
+                        if "symbol" in header_lower or "gene" in header_lower:
+                            col_def["cellType"] = "gene_badge"
+                            col_def["badgesField"] = f"{header}_badges"
+                        elif "impact" in header_lower:
+                            col_def["cellType"] = "badge_list"
+                            col_def["badgesField"] = f"{header}_badges"
+                        columns.append(col_def)
                     # Add Validation column
                     columns.append(
                         {
-                            "name": "Validation",
-                            "label": "Validation",
-                            "field": "Validation",
+                            "id": "Validation",
+                            "header": "Validation",
+                            "cellType": "validation",
                             "sortable": True,
-                            "align": "left",
                         }
                     )
 
-                    # Create table with pagination
-                    validation_table = (
-                        ui.table(
-                            columns=columns,
-                            rows=filtered_data,
-                            row_key=variant_col if has_variant else "Variant",
-                            pagination={"rowsPerPage": 50},
-                        )
-                        .classes("w-full")
-                        .props("dense flat")
-                    )
-
-                    # Add custom slot for view button and validation icons
-                    validation_table.add_slot("body", VALIDATION_TABLE_SLOT)
-
                     # Handle view button click
                     def on_view_variant(e):
-                        row_data = e.args
+                        row_data = e.get("row", {})
                         family_id = row_data.get(fid_col, "")
                         variant_str = row_data.get(variant_col, "")
                         sample_id = row_data.get(sample_col, "")
@@ -426,7 +406,13 @@ def validation_file_page(filename: str) -> None:
                         except Exception as ex:
                             ui.notify(f"Error parsing variant: {ex}", type="warning")
 
-                    validation_table.on("view_variant", on_view_variant)
+                    DataTable(
+                        columns=columns,
+                        rows=filtered_data,
+                        row_key=variant_col if has_variant else "Variant",
+                        pagination={"rowsPerPage": 50},
+                        on_row_action=on_view_variant,
+                    )
 
             # Initial render
             refresh_table()

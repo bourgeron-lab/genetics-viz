@@ -3,7 +3,7 @@
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
 from genetics_viz.components.icons import VALIDATION_STATUS_ICONS, get_validation_icon
-from genetics_viz.components.tables import VALIDATION_TABLE_SLOT
+
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -23,7 +23,7 @@ __all__ = [
     "VALIDATION_STATUS_ICONS",
     "get_validation_icon",
     "create_validation_filter_menu",
-    "VALIDATION_TABLE_SLOT",
+
     "load_validation_map",
     "add_validation_status_to_row",
     "show_variant_dialog",

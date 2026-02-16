@@ -14,6 +14,7 @@ def create_validation_filter_menu(
     label: str = "Filter by Validation",
     button_classes: str = "mb-4",
     button_size: str = "",
+    button_props: str = "",
 ) -> Dict[str, Any]:
     """Create a validation filter button with dropdown menu.
 
@@ -24,16 +25,20 @@ def create_validation_filter_menu(
         label: Button label text
         button_classes: CSS classes for the button
         button_size: Button size (e.g., "h-14")
+        button_props: Extra Quasar props for the button (e.g., "dense")
 
     Returns:
         Dictionary mapping status names to their checkbox elements
     """
     validation_checkboxes: Dict[str, Any] = {}
 
+    props_str = "outline color=blue"
+    if button_props:
+        props_str += f" {button_props}"
     button = ui.button(
         label,
         icon="filter_list",
-    ).props("outline color=blue")
+    ).props(props_str)
 
     if button_classes:
         button.classes(button_classes)

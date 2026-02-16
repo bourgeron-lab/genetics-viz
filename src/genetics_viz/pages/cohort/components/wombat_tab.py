@@ -1,311 +1,53 @@
 """Wombat tab component for family page."""
 
 import re
-from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 import polars as pl
-import yaml
 from nicegui import ui
 
+from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.filters import create_validation_filter_menu
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
 )
 from genetics_viz.components.variant_dialog import show_variant_dialog
+from genetics_viz.utils.column_names import (
+    apply_width_constraints,
+    get_column_group,
+    get_column_sorting,
+    get_display_label,
+    get_dropped_columns,
+    get_schema_overrides,
+    reorder_columns_by_group,
+)
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
+from genetics_viz.utils.clinvar import (
+    CLINVAR_COLORS,
+    format_clinvar_display,
+    get_clinvar_color,
+)
+from genetics_viz.utils.vep import (
+    VEP_CONSEQUENCES,
+    VEP_CONSEQUENCE_PRIORITY,
+    format_consequence_display,
+    get_consequence_color,
+    get_highest_consequence_term,
+    get_highest_priority_consequence,
+)
+from genetics_viz.utils.view_presets import VIEW_PRESETS, select_preset_for_config
+from genetics_viz.utils.cytobands import (
+    CHROM_ORDER,
+    CHROM_SIZES_MB,
+    CYTOBANDS,
+    GIESTAIN_COLORS,
+    VALIDATION_COLORS,
+    norm_chrom,
+)
 
-
-# Load VEP Consequence data from YAML
-def _load_vep_consequences() -> Dict[str, tuple]:
-    """Load VEP consequences from YAML config file."""
-    config_path = (
-        Path(__file__).parent.parent.parent.parent / "config" / "vep_consequences.yaml"
-    )
-    with open(config_path, "r") as f:
-        data = yaml.safe_load(f)
-    # Convert to dict with (impact, color) tuples
-    return {term: (info["impact"], info["color"]) for term, info in data.items()}
-
-
-VEP_CONSEQUENCES = _load_vep_consequences()
-
-# Cytoband stain colors for ideogram rendering
-GIESTAIN_COLORS = {
-    "gneg": "#f5f5f5",
-    "gpos25": "#c8c8c8",
-    "gpos50": "#969696",
-    "gpos75": "#646464",
-    "gpos100": "#323232",
-    "acen": "#d92f27",
-    "gvar": "#646464",
-    "stalk": "#969696",
-}
-
-
-def _load_cytobands() -> Dict[str, list]:
-    """Load cytoband data from TSV file, grouped by chromosome."""
-    config_path = (
-        Path(__file__).parent.parent.parent.parent / "config" / "cytobands_hg38.tsv"
-    )
-    bands: Dict[str, list] = {}
-    if not config_path.exists():
-        return bands
-    with open(config_path, "r") as f:
-        for line in f:
-            parts = line.strip().split("\t")
-            if len(parts) < 5:
-                continue
-            chrom = parts[0].replace("chr", "").upper()
-            if chrom == "M":
-                chrom = "MT"
-            start_mb = int(parts[1]) / 1_000_000
-            end_mb = int(parts[2]) / 1_000_000
-            name = parts[3]
-            stain = parts[4]
-            bands.setdefault(chrom, []).append(
-                {"start": start_mb, "end": end_mb, "name": name, "stain": stain}
-            )
-    return bands
-
-
-CYTOBANDS = _load_cytobands()
-
-# Create consequence priority map (lower number = higher priority)
-VEP_CONSEQUENCE_PRIORITY = {
-    term: idx for idx, term in enumerate(_load_vep_consequences().keys())
-}
-
-
-def get_consequence_priority(consequence: str) -> int:
-    """Get priority for a consequence term (lower = higher priority)."""
-    return VEP_CONSEQUENCE_PRIORITY.get(consequence, 9999)
-
-
-def get_highest_priority_consequence(consequence_str: str) -> int:
-    """Get the highest priority (lowest number) from a comma/ampersand-separated consequence string."""
-    if not consequence_str:
-        return 9999
-
-    # Split by both '&' and ',' to handle aggregated values
-    consequences = []
-    for part in str(consequence_str).split(","):
-        for cons in part.split("&"):
-            cons = cons.strip()
-            if cons:
-                consequences.append(cons)
-
-    if not consequences:
-        return 9999
-
-    # Return the lowest priority number (highest priority consequence)
-    return min(get_consequence_priority(cons) for cons in consequences)
-
-
-def get_highest_consequence_term(consequence_str: str) -> str:
-    """Get the highest-priority consequence term from a comma/ampersand-separated string."""
-    if not consequence_str:
-        return "Unknown"
-    consequences = []
-    for part in str(consequence_str).split(","):
-        for cons in part.split("&"):
-            cons = cons.strip()
-            if cons:
-                consequences.append(cons)
-    if not consequences:
-        return "Unknown"
-    return min(consequences, key=lambda c: VEP_CONSEQUENCE_PRIORITY.get(c, 9999))
-
-
-def get_consequence_color(consequence: str) -> str:
-    """Get color for a consequence term."""
-    return VEP_CONSEQUENCES.get(consequence, ("MODIFIER", "#636363"))[1]
-
-
-def format_consequence_display(consequence: str) -> str:
-    """Format consequence for display: remove _variant suffix and replace _ with space."""
-    display = consequence.replace("_variant", "").replace("_", " ")
-    return display
-
-
-# Load ClinVar significance colors from YAML
-def _load_clinvar_colors() -> Dict[str, str]:
-    """Load ClinVar colors from YAML config file."""
-    config_path = (
-        Path(__file__).parent.parent.parent.parent / "config" / "clinvar_colors.yaml"
-    )
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
-
-
-CLINVAR_COLORS = _load_clinvar_colors()
-
-
-# Load view presets from YAML
-def _load_view_presets() -> List[Dict[str, Any]]:
-    """Load view presets from YAML config file."""
-    config_path = (
-        Path(__file__).parent.parent.parent.parent / "config" / "view_presets.yaml"
-    )
-    with open(config_path, "r") as f:
-        data = yaml.safe_load(f)
-    return data.get("presets", [])
-
-
-VIEW_PRESETS = _load_view_presets()
-
-
-def reload_wombat_configs():
-    """Reload all wombat tab configurations from YAML files."""
-    global VEP_CONSEQUENCES, CLINVAR_COLORS, VIEW_PRESETS
-    VEP_CONSEQUENCES = _load_vep_consequences()
-    CLINVAR_COLORS = _load_clinvar_colors()
-    VIEW_PRESETS = _load_view_presets()
-
-
-def select_preset_for_config(config_name: str, presets: List[Dict]) -> Dict:
-    """Select the first preset whose keywords contain the config_name,
-    or return the first preset if none match."""
-    config_lower = config_name.lower()
-
-    for preset in presets:
-        keywords = preset.get("keywords", [])
-        if any(keyword.lower() in config_lower for keyword in keywords):
-            return preset
-
-    # Return first preset as default
-    return presets[0] if presets else {"name": "Default", "columns": []}
-
-
-def get_clinvar_color(significance: str) -> str:
-    """Get color for a ClinVar significance term (case-insensitive)."""
-    if not significance:
-        return "#757575"  # Default to gray
-    # Case-insensitive lookup
-    sig_lower = significance.lower()
-    for key, color in CLINVAR_COLORS.items():
-        if key.lower() == sig_lower:
-            return color
-    return "#757575"  # Default to gray if not found
-
-
-def format_clinvar_display(significance: str) -> str:
-    """Format ClinVar significance for display: replace _ with space."""
-    return significance.replace("_", " ")
-
-
-# Table slot template for wombat data with view button and validation icons
-WOMBAT_TABLE_SLOT = r"""
-    <q-tr :props="props">
-        <q-td key="actions" :props="props">
-            <div style="display: flex; align-items: center; gap: 4px;">
-                <q-btn 
-                    flat 
-                    dense 
-                    size="sm" 
-                    icon="visibility" 
-                    color="blue"
-                    @click="$parent.$emit('view_variant', props.row)"
-                >
-                    <q-tooltip>View in IGV</q-tooltip>
-                </q-btn>
-                <q-badge 
-                    v-if="props.row.n_grouped && props.row.n_grouped > 1"
-                    :label="props.row.n_grouped.toString()"
-                    color="orange"
-                    style="font-size: 11px;"
-                >
-                    <q-tooltip>
-                        {{ props.row.n_grouped }} transcripts collapsed
-                        <span v-if="props.row.VEP_SYMBOL"> for genes: {{ props.row.VEP_SYMBOL }}</span>
-                    </q-tooltip>
-                </q-badge>
-            </div>
-        </q-td>
-        <q-td v-for="col in props.cols.filter(c => c.name !== 'actions')" :key="col.name" :props="props">
-            <template v-if="col.name === 'Validation'">
-                <span v-if="col.value === 'present' || col.value === 'in phase MNV'" style="display: flex; align-items: center; gap: 4px;">
-                    <q-icon name="check_circle" color="green" size="sm">
-                        <q-tooltip>Validated as {{ col.value }}</q-tooltip>
-                    </q-icon>
-                    <span v-if="props.row.ValidationInheritance === 'de novo'" style="font-weight: bold;">dnm</span>
-                    <span v-else-if="props.row.ValidationInheritance === 'homozygous'" style="font-weight: bold;">hom</span>
-                    <span v-if="col.value === 'in phase MNV'" style="font-size: 0.75em; color: #666;">MNV</span>
-                </span>
-                <q-icon v-else-if="col.value === 'absent'" name="cancel" color="red" size="sm">
-                    <q-tooltip>Validated as absent</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'uncertain' || col.value === 'different'" name="help" color="orange" size="sm">
-                    <q-tooltip>Validation uncertain or different</q-tooltip>
-                </q-icon>
-                <q-icon v-else-if="col.value === 'conflicting'" name="bolt" color="amber-9" size="sm">
-                    <q-tooltip>Conflicting validations</q-tooltip>
-                </q-icon>
-            </template>
-            <template v-else-if="col.name === 'VEP_Consequence'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ConsequenceBadges || [])" :key="idx" 
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_CLIN_SIG'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.ClinVarBadges || [])" :key="idx" 
-                             :style="'background-color: ' + badge.color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        {{ badge.label }}
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_SYMBOL'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.GeneBadges || [])" :key="idx" 
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else-if="col.name === 'VEP_Gene'">
-                <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-                    <q-badge v-for="(badge, idx) in (props.row.VEP_Gene_badges || [])" :key="idx" 
-                             :label="badge.label"
-                             :style="'background-color: ' + badge.color + '; color: ' + (badge.color === '#ffffff' ? 'black' : 'white') + '; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ badge.tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-            </template>
-            <template v-else>
-                <!-- Check for score badges dynamically -->
-                <div v-if="props.row[col.name + '_badge']" style="display: inline-block;">
-                    <q-badge
-                        :label="props.row[col.name + '_badge'].value"
-                        :style="'background-color: ' + props.row[col.name + '_badge'].color + '; color: white; font-size: 0.875em; padding: 4px 8px;'">
-                        <q-tooltip>{{ props.row[col.name + '_badge'].tooltip }}</q-tooltip>
-                    </q-badge>
-                </div>
-                <span v-else>{{ col.value }}</span>
-            </template>
-        </q-td>
-    </q-tr>
-"""
-
-
-def get_wombat_display_label(col: str) -> str:
-    """Get display label for wombat column, removing VEP_ prefix and renaming gnomAD columns."""
-    if col == "fafmax_faf95_max_genomes":
-        return "gnomAD 4.1 WGS"
-    elif col == "nhomalt_genomes":
-        return "gnomAD 4.1 nhomalt WGS"
-    elif col == "VEP_CLIN_SIG":
-        return "ClinVar"
-    elif col.startswith("VEP_"):
-        return col[4:]  # Remove VEP_ prefix
-    else:
-        return col
 
 
 def render_wombat_tab(
@@ -382,9 +124,9 @@ def render_wombat_tab(
         for wf in wombat_files:
             subtab_refs[wf["wombat_config"]] = ui.tab(wf["wombat_config"])
 
-    with ui.tab_panels(wombat_subtabs, value=list(subtab_refs.values())[0]).classes(
-        "w-full"
-    ):
+    with ui.tab_panels(wombat_subtabs, value=list(subtab_refs.values())[0]).props(
+        "keep-alive"
+    ).classes("w-full"):
         for wf in wombat_files:
             with ui.tab_panel(subtab_refs[wf["wombat_config"]]):
                 config_name = wf["wombat_config"]
@@ -407,9 +149,13 @@ def render_wombat_tab(
                     df = pl.read_csv(
                         wf["file_path"],
                         separator="\t",
-                        infer_schema_length=100,
+                        infer_schema_length=10000,
+                        schema_overrides=get_schema_overrides(),
                         null_values=[".", ""],
                     )
+                    _drop = get_dropped_columns() & set(df.columns)
+                    if _drop:
+                        df = df.drop(list(_drop))
 
                     # Group by variant and sample, aggregating other columns
                     grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
@@ -595,7 +341,7 @@ def render_wombat_tab(
                                     badge_info = get_score_color(col_name, value)
                                     if badge_info:
                                         row[f"{col_name}_badge"] = {
-                                            "value": f"{value:.3f}",
+                                            "label": f"{value:.3f}",
                                             "color": badge_info["color"],
                                             "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})"
                                         }
@@ -622,7 +368,7 @@ def render_wombat_tab(
                         )
 
                     # All available columns (add Variant and Validation columns, exclude n_grouped from display)
-                    all_columns = (
+                    all_columns = reorder_columns_by_group(
                         ["Variant"]
                         + [
                             col
@@ -666,6 +412,7 @@ def render_wombat_tab(
                     # Mutable containers for UI element references
                     # (populated during filter panel construction, used by handlers)
                     wombat_data[config_name]["_refresh"] = {"fn": None}
+                    wombat_data[config_name]["_table_state"] = {"sorting": [], "page": 0}
                     wombat_data[config_name]["_geneset_cbs"] = {}
                     wombat_data[config_name]["_impact_cbs"] = {}
 
@@ -1341,29 +1088,53 @@ def render_wombat_tab(
                                     )
                                 ]
 
-                            def make_columns(visible_cols):
-                                cols = [
+                            def make_columns():
+                                cols: List[Dict[str, Any]] = [
                                     {
-                                        "name": "actions",
-                                        "label": "",
-                                        "field": "actions",
+                                        "id": "actions",
+                                        "header": "",
+                                        "cellType": "action",
+                                        "actionName": "view_variant",
+                                        "actionIcon": "visibility",
+                                        "actionColor": "#1976d2",
+                                        "actionTooltip": "View in IGV",
                                         "sortable": False,
-                                        "align": "center",
                                     }
                                 ]
-                                for col in visible_cols:
-                                    col_def = {
-                                        "name": col,
-                                        "label": get_wombat_display_label(col),
-                                        "field": col,
+                                for col in all_columns_local:
+                                    col_def: Dict[str, Any] = {
+                                        "id": col,
+                                        "header": get_display_label(col),
+                                        "group": get_column_group(col),
+                                        "sorting": get_column_sorting(col),
                                         "sortable": True,
-                                        "align": "left",
                                     }
-                                    # Use custom sort field for VEP_Consequence based on priority
-                                    if col == "VEP_Consequence":
-                                        col_def["field"] = "_consequence_priority"
+                                    if col == "Validation":
+                                        col_def["cellType"] = "validation"
+                                    elif col == "VEP_Consequence":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ConsequenceBadges"
+                                        col_def["sortField"] = "_consequence_priority"
+                                    elif col == "VEP_CLIN_SIG":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "ClinVarBadges"
+                                    elif col == "VEP_SYMBOL":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "GeneBadges"
+                                    elif col == "VEP_Gene":
+                                        col_def["cellType"] = "gene_badge"
+                                        col_def["badgesField"] = "VEP_Gene_badges"
+                                    else:
+                                        col_def["cellType"] = "score_badge"
+                                    apply_width_constraints(col_def, col)
                                     cols.append(col_def)
                                 return cols
+
+                            def _apply_col_visibility():
+                                """Push current column selection to JS table."""
+                                if data.get("_dt"):
+                                    visible = ["actions"] + list(selected_cols_local["value"])
+                                    data["_dt"].set_column_visibility(visible)
 
                             with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
                                 row_label = (
@@ -1384,56 +1155,22 @@ def render_wombat_tab(
 
                                 ui.space()  # Push remaining items to the right
 
-                                # Compact column selector button
-                                with ui.button(
-                                    "+ column", icon="view_column"
-                                ).props("outline color=blue size=sm"):
-                                    with ui.menu():
-                                        ui.label("Show/Hide Columns:").classes(
-                                            "px-4 py-2 font-semibold text-sm"
-                                        )
-                                        ui.separator()
-
-                                        with ui.column().classes("p-2"):
-                                            with ui.row().classes("gap-2 mb-2"):
-                                                checkboxes: Dict[str, Any] = {}
-
-                                                def select_all():
-                                                    selected_cols_local["value"] = list(
-                                                        all_columns_local
-                                                    )
-                                                    update_table()
-
-                                                def select_none():
-                                                    selected_cols_local["value"] = []
-                                                    update_table()
-
-                                                ui.button(
-                                                    "All", on_click=select_all
-                                                ).props("size=sm flat dense").classes(
-                                                    "text-xs"
-                                                )
-                                                ui.button(
-                                                    "None", on_click=select_none
-                                                ).props("size=sm flat dense").classes(
-                                                    "text-xs"
-                                                )
-
-                                            ui.separator()
-
-                                            for col in all_columns_local:
-                                                checkboxes[col] = ui.checkbox(
-                                                    col,
-                                                    value=col
-                                                    in selected_cols_local["value"],
-                                                    on_change=lambda e,
-                                                    c=col: handle_col_change(
-                                                        c, e.value
-                                                    ),
-                                                ).classes("text-sm")
+                                # Column selector dialog
+                                col_dialog, _sync_col_selector = build_column_selector(
+                                    all_columns=all_columns_local,
+                                    selected_cols=selected_cols_local,
+                                    on_visibility_change=_apply_col_visibility,
+                                    presets=VIEW_PRESETS,
+                                )
+                                ui.button(
+                                    "Columns", icon="view_column",
+                                    on_click=col_dialog.open,
+                                ).props("outline color=blue size=sm")
 
                                 # Stats button
                                 def show_stats_dialog(current_rows=rows):
+                                    from collections import Counter
+
                                     # Deduplicate by (#CHROM, POS, REF, ALT) for unique variants
                                     seen = set()
                                     unique_variants = []
@@ -1448,415 +1185,355 @@ def render_wombat_tab(
                                             seen.add(key)
                                             unique_variants.append(r)
 
-                                    # Chromosome distribution
-                                    chrom_order = [str(i) for i in range(1, 23)] + ["X", "Y", "MT"]
-                                    chrom_counts: Dict[str, int] = {c: 0 for c in chrom_order}
+                                    # Classify variant type
                                     for r in unique_variants:
-                                        chrom = str(r.get("#CHROM", "")).replace("chr", "").upper()
-                                        if chrom == "M":
-                                            chrom = "MT"
-                                        if chrom in chrom_counts:
-                                            chrom_counts[chrom] += 1
+                                        ref = str(r.get("REF", ""))
+                                        alt = str(r.get("ALT", ""))
+                                        r["_is_snv"] = len(ref) == 1 and len(alt) == 1
 
-                                    # Consequence distribution (highest per variant)
-                                    from collections import Counter
+                                    # Use shared constants from cytobands module
+                                    chrom_order = CHROM_ORDER
+                                    chrom_sizes_mb = CHROM_SIZES_MB
+                                    validation_colors = VALIDATION_COLORS
 
-                                    consequence_counts = Counter(
-                                        get_highest_consequence_term(
-                                            str(r.get("VEP_Consequence", ""))
-                                        )
-                                        for r in unique_variants
-                                    )
-
-                                    # Validation distribution
-                                    validation_counts = Counter(
-                                        r.get("Validation", "") or "TODO"
-                                        for r in unique_variants
-                                    )
-
-                                    # Chromosome sizes (hg38, in Mb) for ideogram
-                                    chrom_sizes_mb = {
-                                        "1": 249, "2": 242, "3": 198, "4": 190, "5": 182,
-                                        "6": 171, "7": 159, "8": 145, "9": 138, "10": 134,
-                                        "11": 135, "12": 133, "13": 114, "14": 107, "15": 102,
-                                        "16": 90, "17": 83, "18": 80, "19": 59, "20": 64,
-                                        "21": 47, "22": 51, "X": 156, "Y": 57, "MT": 1,
-                                    }
-
-                                    # Scatter data for ideogram: [position_mb, chromosome]
-                                    scatter_data = []
-                                    for r in unique_variants:
-                                        chrom = str(r.get("#CHROM", "")).replace("chr", "").upper()
-                                        if chrom == "M":
-                                            chrom = "MT"
-                                        pos = r.get("POS", 0)
-                                        try:
-                                            pos_mb = round(float(pos) / 1_000_000, 2)
-                                        except (ValueError, TypeError):
-                                            continue
-                                        if chrom in chrom_sizes_mb:
-                                            scatter_data.append([pos_mb, chrom])
+                                    # Filter state (persists across refreshes)
+                                    type_filter = {"snv": True, "indel": True}
+                                    show_ideogram = {"value": False}
+                                    _containers: Dict[str, Any] = {"charts": None, "ideo": None}
 
                                     with ui.dialog().props(
                                         "full-width"
-                                    ) as stats_dialog, ui.card().classes(
-                                        "w-full"
-                                    ):
+                                    ) as stats_dialog, ui.card().classes("w-full"):
                                         with ui.column().classes("w-full p-4"):
-                                            # Header with toggle and close
-                                            show_ideogram = {"value": False}
-
+                                            # Header
                                             with ui.row().classes(
                                                 "items-center justify-between w-full mb-2"
                                             ):
-                                                with ui.row().classes(
-                                                    "items-center gap-3"
-                                                ):
-                                                    with ui.column().classes(
-                                                        "gap-0"
-                                                    ):
-                                                        ui.label(
-                                                            "Variant Statistics"
-                                                        ).classes(
-                                                            "text-xl font-bold text-blue-900"
-                                                        )
-                                                        ui.label(
-                                                            f"Based on {len(unique_variants)} unique variants "
-                                                            "(deduplicated by #CHROM / POS / REF / ALT)"
-                                                        ).classes(
-                                                            "text-sm text-gray-500"
-                                                        )
+                                                with ui.row().classes("items-center gap-3"):
+                                                    ui.label("Variant Statistics").classes(
+                                                        "text-xl font-bold text-blue-900"
+                                                    )
+                                                    subtitle_label = ui.label("").classes(
+                                                        "text-sm text-gray-500"
+                                                    )
                                                     ideogram_btn = ui.button(
                                                         "Ideogram",
                                                     ).props(
                                                         "outline color=blue size=sm dense no-caps"
                                                     )
+                                                    snv_cb = ui.checkbox(
+                                                        "SNVs", value=True
+                                                    ).props("dense").classes("text-sm")
+                                                    indel_cb = ui.checkbox(
+                                                        "Indels", value=True
+                                                    ).props("dense").classes("text-sm")
                                                 ui.button(
                                                     icon="close",
                                                     on_click=lambda: stats_dialog.close(),
                                                 ).props("flat round")
 
-                                            # Charts container (visible by default)
-                                            charts_container = ui.column().classes(
-                                                "w-full"
-                                            )
-                                            with charts_container:
-                                                # Chromosome bar chart
-                                                ui.label(
-                                                    "Variants per Chromosome"
-                                                ).classes(
-                                                    "text-lg font-semibold text-gray-800 mt-2"
+                                            @ui.refreshable
+                                            def render_stats_content():
+                                                # Filter variants by type
+                                                filtered = [
+                                                    r for r in unique_variants
+                                                    if (type_filter["snv"] and r["_is_snv"])
+                                                    or (type_filter["indel"] and not r["_is_snv"])
+                                                ]
+                                                snv_n = sum(1 for r in filtered if r["_is_snv"])
+                                                indel_n = len(filtered) - snv_n
+                                                subtitle_label.text = (
+                                                    f"{len(filtered)} unique variants "
+                                                    f"({snv_n} SNVs, {indel_n} Indels)"
                                                 )
-                                                ui.echart(
-                                                    {
-                                                        "tooltip": {},
-                                                        "xAxis": {
-                                                            "type": "category",
-                                                            "data": chrom_order,
-                                                            "name": "Chromosome",
-                                                        },
-                                                        "yAxis": {
-                                                            "type": "value",
-                                                            "name": "Count",
-                                                        },
-                                                        "series": [
-                                                            {
-                                                                "type": "bar",
-                                                                "data": [
-                                                                    chrom_counts[c]
-                                                                    for c in chrom_order
-                                                                ],
-                                                                "itemStyle": {
-                                                                    "color": "#3b82f6"
-                                                                },
-                                                            }
-                                                        ],
-                                                    }
-                                                ).classes("w-full h-64")
 
-                                                # Pie charts side by side
-                                                with ui.row().classes(
-                                                    "w-full gap-4 flex-wrap mt-4"
-                                                ):
-                                                    # Consequence pie chart
-                                                    with ui.column().classes(
-                                                        "flex-1 min-w-[400px]"
-                                                    ):
-                                                        ui.label(
-                                                            "Consequence Distribution (highest per variant)"
-                                                        ).classes(
-                                                            "text-lg font-semibold text-gray-800"
+                                                # Chromosome distribution stacked by validation
+                                                chrom_validation: Dict[str, Dict[str, int]] = {
+                                                    c: {} for c in chrom_order
+                                                }
+                                                for r in filtered:
+                                                    chrom = norm_chrom(r.get("#CHROM", ""))
+                                                    status = r.get("Validation", "") or "TODO"
+                                                    if chrom in chrom_validation:
+                                                        chrom_validation[chrom][status] = (
+                                                            chrom_validation[chrom].get(status, 0) + 1
                                                         )
-                                                        cons_data = [
-                                                            {
-                                                                "name": format_consequence_display(
-                                                                    cons
-                                                                ),
-                                                                "value": count,
-                                                                "itemStyle": {
-                                                                    "color": VEP_CONSEQUENCES.get(
-                                                                        cons,
-                                                                        (
-                                                                            "",
-                                                                            "#6b7280",
-                                                                        ),
-                                                                    )[1]
-                                                                },
-                                                            }
-                                                            for cons, count in consequence_counts.most_common()
-                                                        ]
-                                                        ui.echart(
-                                                            {
-                                                                "tooltip": {
-                                                                    "trigger": "item"
-                                                                },
-                                                                "series": [
-                                                                    {
+                                                all_statuses: List[str] = []
+                                                for c in chrom_order:
+                                                    for s in chrom_validation[c]:
+                                                        if s not in all_statuses:
+                                                            all_statuses.append(s)
+
+                                                # Consequence distribution
+                                                consequence_counts = Counter(
+                                                    get_highest_consequence_term(
+                                                        str(r.get("VEP_Consequence", ""))
+                                                    )
+                                                    for r in filtered
+                                                )
+                                                # Validation distribution
+                                                validation_counts = Counter(
+                                                    r.get("Validation", "") or "TODO"
+                                                    for r in filtered
+                                                )
+
+                                                # Scatter data for ideogram
+                                                scatter_data: List[List[Any]] = []
+                                                for r in filtered:
+                                                    chrom = norm_chrom(r.get("#CHROM", ""))
+                                                    pos = r.get("POS", 0)
+                                                    try:
+                                                        pos_mb = round(float(pos) / 1_000_000, 2)
+                                                    except (ValueError, TypeError):
+                                                        continue
+                                                    if chrom in chrom_sizes_mb:
+                                                        status = r.get("Validation", "") or "TODO"
+                                                        scatter_data.append([pos_mb, chrom, status])
+
+                                                # --- Charts container ---
+                                                _containers["charts"] = ui.column().classes("w-full")
+                                                _containers["charts"].set_visibility(not show_ideogram["value"])
+                                                with _containers["charts"]:
+                                                    ui.label("Variants per Chromosome").classes(
+                                                        "text-lg font-semibold text-gray-800 mt-2"
+                                                    )
+                                                    stacked_series = [
+                                                        {
+                                                            "name": status,
+                                                            "type": "bar",
+                                                            "stack": "total",
+                                                            "data": [
+                                                                chrom_validation[c].get(status, 0)
+                                                                for c in chrom_order
+                                                            ],
+                                                            "itemStyle": {
+                                                                "color": validation_colors.get(
+                                                                    status, "#94a3b8"
+                                                                )
+                                                            },
+                                                        }
+                                                        for status in all_statuses
+                                                    ]
+                                                    ui.echart(
+                                                        {
+                                                            "tooltip": {
+                                                                "trigger": "axis",
+                                                                "axisPointer": {"type": "shadow"},
+                                                            },
+                                                            "legend": {"data": all_statuses, "top": 0},
+                                                            "grid": {"top": 30},
+                                                            "xAxis": {
+                                                                "type": "category",
+                                                                "data": chrom_order,
+                                                                "name": "Chromosome",
+                                                            },
+                                                            "yAxis": {"type": "value", "name": "Count"},
+                                                            "series": stacked_series,
+                                                        }
+                                                    ).classes("w-full h-64")
+
+                                                    with ui.row().classes("w-full gap-4 flex-wrap mt-4"):
+                                                        # Consequence pie chart
+                                                        with ui.column().classes("flex-1 min-w-[400px]"):
+                                                            ui.label(
+                                                                "Consequence Distribution (highest per variant)"
+                                                            ).classes("text-lg font-semibold text-gray-800")
+                                                            cons_data = [
+                                                                {
+                                                                    "name": format_consequence_display(cons),
+                                                                    "value": count,
+                                                                    "itemStyle": {
+                                                                        "color": VEP_CONSEQUENCES.get(
+                                                                            cons, ("", "#6b7280")
+                                                                        )[1]
+                                                                    },
+                                                                }
+                                                                for cons, count in consequence_counts.most_common()
+                                                            ]
+                                                            ui.echart(
+                                                                {
+                                                                    "tooltip": {"trigger": "item"},
+                                                                    "series": [{
                                                                         "type": "pie",
                                                                         "radius": "70%",
                                                                         "data": cons_data,
-                                                                        "label": {
-                                                                            "formatter": "{b}: {c} ({d}%)"
-                                                                        },
-                                                                    }
-                                                                ],
-                                                            }
-                                                        ).classes("w-full h-80")
+                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
+                                                                    }],
+                                                                }
+                                                            ).classes("w-full h-80")
 
-                                                    # Validation pie chart
-                                                    with ui.column().classes(
-                                                        "flex-1 min-w-[400px]"
-                                                    ):
-                                                        ui.label(
-                                                            "Validation Status Distribution"
-                                                        ).classes(
-                                                            "text-lg font-semibold text-gray-800"
-                                                        )
-                                                        validation_colors = {
-                                                            "present": "#22c55e",
-                                                            "absent": "#ef4444",
-                                                            "uncertain": "#f59e0b",
-                                                            "conflicting": "#fbbf24",
-                                                            "TODO": "#6b7280",
-                                                        }
-                                                        val_data = [
-                                                            {
-                                                                "name": status,
-                                                                "value": count,
-                                                                "itemStyle": {
-                                                                    "color": validation_colors.get(
-                                                                        status,
-                                                                        "#6b7280",
-                                                                    )
-                                                                },
-                                                            }
-                                                            for status, count in validation_counts.most_common()
-                                                        ]
-                                                        ui.echart(
-                                                            {
-                                                                "tooltip": {
-                                                                    "trigger": "item"
-                                                                },
-                                                                "series": [
-                                                                    {
+                                                        # Validation pie chart
+                                                        with ui.column().classes("flex-1 min-w-[400px]"):
+                                                            ui.label(
+                                                                "Validation Status Distribution"
+                                                            ).classes("text-lg font-semibold text-gray-800")
+                                                            val_data = [
+                                                                {
+                                                                    "name": st,
+                                                                    "value": cnt,
+                                                                    "itemStyle": {
+                                                                        "color": validation_colors.get(st, "#6b7280")
+                                                                    },
+                                                                }
+                                                                for st, cnt in validation_counts.most_common()
+                                                            ]
+                                                            ui.echart(
+                                                                {
+                                                                    "tooltip": {"trigger": "item"},
+                                                                    "series": [{
                                                                         "type": "pie",
                                                                         "radius": "70%",
                                                                         "data": val_data,
-                                                                        "label": {
-                                                                            "formatter": "{b}: {c} ({d}%)"
-                                                                        },
-                                                                    }
-                                                                ],
-                                                            }
-                                                        ).classes("w-full h-80")
+                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
+                                                                    }],
+                                                                }
+                                                            ).classes("w-full h-80")
 
-                                            # Ideogram container (hidden by default)
-                                            ideo_container = ui.column().classes(
-                                                "w-full"
-                                            )
-                                            ideo_container.set_visibility(False)
-                                            with ideo_container:
-                                                # Build SVG ideogram with cytobands
-                                                svg_w = 1800
-                                                lbl_w = 50
-                                                plot_w = svg_w - lbl_w - 20
-                                                row_h = 24
-                                                row_gap = 6
-                                                svg_h = (
-                                                    len(chrom_order)
-                                                    * (row_h + row_gap)
-                                                    + 40
-                                                )
-                                                max_mb = max(
-                                                    chrom_sizes_mb.values()
-                                                )
+                                                # --- Ideogram container ---
+                                                _containers["ideo"] = ui.column().classes("w-full")
+                                                _containers["ideo"].set_visibility(show_ideogram["value"])
+                                                with _containers["ideo"]:
+                                                    svg_w = 1800
+                                                    lbl_w = 50
+                                                    plot_w = svg_w - lbl_w - 20
+                                                    row_h = 16
+                                                    tri_h = 6
+                                                    row_gap = tri_h + 4
+                                                    svg_h = len(chrom_order) * (row_h + row_gap) + 60
+                                                    max_mb = max(chrom_sizes_mb.values())
 
-                                                svg_parts = [
-                                                    f'<svg viewBox="0 0 {svg_w} {svg_h}" '
-                                                    f'xmlns="http://www.w3.org/2000/svg" '
-                                                    f'preserveAspectRatio="xMinYMin meet" '
-                                                    f'style="font-family: sans-serif; width: 100%; height: auto;">'
-                                                ]
+                                                    svg_parts = [
+                                                        f'<svg viewBox="0 0 {svg_w} {svg_h}" '
+                                                        f'xmlns="http://www.w3.org/2000/svg" '
+                                                        f'preserveAspectRatio="xMinYMin meet" '
+                                                        f'style="font-family: sans-serif; width: 100%; height: auto;">'
+                                                    ]
 
-                                                # Grid lines and x-axis labels
-                                                axis_y = len(chrom_order) * (
-                                                    row_h + row_gap
-                                                )
-                                                for mb_val in range(0, 260, 50):
-                                                    gx = (
-                                                        lbl_w
-                                                        + (mb_val / max_mb)
-                                                        * plot_w
-                                                    )
-                                                    svg_parts.append(
-                                                        f'<line x1="{gx:.1f}" y1="0" '
-                                                        f'x2="{gx:.1f}" y2="{axis_y}" '
-                                                        f'stroke="#e5e7eb" stroke-width="0.5" '
-                                                        f'stroke-dasharray="3,3"/>'
-                                                    )
-                                                    svg_parts.append(
-                                                        f'<text x="{gx:.1f}" y="{axis_y + 14}" '
-                                                        f'text-anchor="middle" font-size="12" '
-                                                        f'fill="#6b7280">{mb_val}</text>'
-                                                    )
-                                                svg_parts.append(
-                                                    f'<text x="{svg_w / 2}" y="{axis_y + 32}" '
-                                                    f'text-anchor="middle" font-size="13" '
-                                                    f'fill="#6b7280">Position (Mb)</text>'
-                                                )
-
-                                                for ci, chrom in enumerate(
-                                                    chrom_order
-                                                ):
-                                                    cy = ci * (row_h + row_gap)
-                                                    bands = CYTOBANDS.get(
-                                                        chrom, []
-                                                    )
-                                                    cs = chrom_sizes_mb.get(
-                                                        chrom, 0
-                                                    )
-                                                    total_w = (
-                                                        cs / max_mb
-                                                    ) * plot_w
-
-                                                    # Chromosome label
-                                                    svg_parts.append(
-                                                        f'<text x="{lbl_w - 6}" y="{cy + row_h * 0.7}" '
-                                                        f'text-anchor="end" font-size="13" '
-                                                        f'fill="#374151">{chrom}</text>'
-                                                    )
-
-                                                    # Cytoband rectangles
-                                                    for band in bands:
-                                                        bx = (
-                                                            lbl_w
-                                                            + (
-                                                                band["start"]
-                                                                / max_mb
-                                                            )
-                                                            * plot_w
-                                                        )
-                                                        bw = max(
-                                                            (
-                                                                (
-                                                                    band["end"]
-                                                                    - band[
-                                                                        "start"
-                                                                    ]
-                                                                )
-                                                                / max_mb
-                                                            )
-                                                            * plot_w,
-                                                            0.5,
-                                                        )
-                                                        color = (
-                                                            GIESTAIN_COLORS.get(
-                                                                band["stain"],
-                                                                "#e5e7eb",
-                                                            )
-                                                        )
-                                                        # Same height for all bands including centromeres
+                                                    axis_y = len(chrom_order) * (row_h + row_gap)
+                                                    for mb_val in range(0, 260, 50):
+                                                        gx = lbl_w + (mb_val / max_mb) * plot_w
                                                         svg_parts.append(
-                                                            f'<rect x="{bx:.1f}" y="{cy}" '
-                                                            f'width="{bw:.1f}" height="{row_h}" '
-                                                            f'fill="{color}"/>'
+                                                            f'<line x1="{gx:.1f}" y1="0" '
+                                                            f'x2="{gx:.1f}" y2="{axis_y}" '
+                                                            f'stroke="#e5e7eb" stroke-width="0.5" '
+                                                            f'stroke-dasharray="3,3"/>'
+                                                        )
+                                                        svg_parts.append(
+                                                            f'<text x="{gx:.1f}" y="{axis_y + 14}" '
+                                                            f'text-anchor="middle" font-size="12" '
+                                                            f'fill="#6b7280">{mb_val}</text>'
+                                                        )
+                                                    svg_parts.append(
+                                                        f'<text x="{svg_w / 2}" y="{axis_y + 32}" '
+                                                        f'text-anchor="middle" font-size="13" '
+                                                        f'fill="#6b7280">Position (Mb)</text>'
+                                                    )
+
+                                                    for ci, chrom in enumerate(chrom_order):
+                                                        bar_y = ci * (row_h + row_gap) + tri_h
+                                                        bands = CYTOBANDS.get(chrom, [])
+                                                        cs = chrom_sizes_mb.get(chrom, 0)
+                                                        total_w = (cs / max_mb) * plot_w
+
+                                                        svg_parts.append(
+                                                            f'<text x="{lbl_w - 6}" y="{bar_y + row_h * 0.75}" '
+                                                            f'text-anchor="end" font-size="12" '
+                                                            f'fill="#374151">{chrom}</text>'
+                                                        )
+                                                        for band in bands:
+                                                            bx = lbl_w + (band["start"] / max_mb) * plot_w
+                                                            bw = max(
+                                                                ((band["end"] - band["start"]) / max_mb) * plot_w,
+                                                                0.5,
+                                                            )
+                                                            color = GIESTAIN_COLORS.get(band["stain"], "#e5e7eb")
+                                                            svg_parts.append(
+                                                                f'<rect x="{bx:.1f}" y="{bar_y}" '
+                                                                f'width="{bw:.1f}" height="{row_h}" '
+                                                                f'fill="{color}"/>'
+                                                            )
+                                                        svg_parts.append(
+                                                            f'<rect x="{lbl_w}" y="{bar_y}" '
+                                                            f'width="{total_w:.1f}" height="{row_h}" '
+                                                            f'fill="none" stroke="#9ca3af" '
+                                                            f'stroke-width="0.5" rx="3"/>'
                                                         )
 
-                                                    # Chromosome outline
-                                                    svg_parts.append(
-                                                        f'<rect x="{lbl_w}" y="{cy}" '
-                                                        f'width="{total_w:.1f}" height="{row_h}" '
-                                                        f'fill="none" stroke="#9ca3af" '
-                                                        f'stroke-width="0.5" rx="4"/>'
-                                                    )
+                                                    for sd in scatter_data:
+                                                        v_mb, v_chrom, v_status = sd
+                                                        if v_chrom not in chrom_order:
+                                                            continue
+                                                        v_idx = chrom_order.index(v_chrom)
+                                                        bar_y = v_idx * (row_h + row_gap) + tri_h
+                                                        vx = lbl_w + (v_mb / max_mb) * plot_w
+                                                        v_color = validation_colors.get(v_status, "#94a3b8")
+                                                        tw = 5
+                                                        svg_parts.append(
+                                                            f'<polygon points="{vx - tw:.1f},{bar_y - tri_h} '
+                                                            f'{vx + tw:.1f},{bar_y - tri_h} '
+                                                            f'{vx:.1f},{bar_y}" '
+                                                            f'fill="{v_color}" opacity="0.9"/>'
+                                                        )
+                                                        svg_parts.append(
+                                                            f'<line x1="{vx:.1f}" y1="{bar_y}" '
+                                                            f'x2="{vx:.1f}" y2="{bar_y + row_h}" '
+                                                            f'stroke="{v_color}" stroke-width="1.5" '
+                                                            f'opacity="0.85"/>'
+                                                        )
 
-                                                # Variant markers (blue triangles)
-                                                for sd in scatter_data:
-                                                    v_mb, v_chrom = (
-                                                        sd[0],
-                                                        sd[1],
-                                                    )
-                                                    if (
-                                                        v_chrom
-                                                        not in chrom_order
-                                                    ):
-                                                        continue
-                                                    v_idx = chrom_order.index(
-                                                        v_chrom
-                                                    )
-                                                    vy = v_idx * (
-                                                        row_h + row_gap
-                                                    )
-                                                    vx = (
-                                                        lbl_w
-                                                        + (v_mb / max_mb)
-                                                        * plot_w
-                                                    )
-                                                    svg_parts.append(
-                                                        f'<line x1="{vx:.1f}" y1="{vy - 2}" '
-                                                        f'x2="{vx:.1f}" y2="{vy + row_h + 2}" '
-                                                        f'stroke="#2563eb" stroke-width="1.5" '
-                                                        f'opacity="0.8"/>'
-                                                    )
+                                                    legend_y = axis_y + 40
+                                                    legend_x = lbl_w
+                                                    for v_status in all_statuses:
+                                                        v_color = validation_colors.get(v_status, "#94a3b8")
+                                                        svg_parts.append(
+                                                            f'<rect x="{legend_x}" y="{legend_y}" '
+                                                            f'width="12" height="12" rx="2" fill="{v_color}"/>'
+                                                        )
+                                                        svg_parts.append(
+                                                            f'<text x="{legend_x + 16}" y="{legend_y + 10}" '
+                                                            f'font-size="12" fill="#374151">{v_status}</text>'
+                                                        )
+                                                        legend_x += len(v_status) * 8 + 32
 
-                                                svg_parts.append("</svg>")
-                                                ui.html(
-                                                    "\n".join(svg_parts),
-                                                    sanitize=False,
-                                                ).classes("w-full")
+                                                    svg_parts.append("</svg>")
+                                                    ui.html(
+                                                        "\n".join(svg_parts),
+                                                        sanitize=False,
+                                                    ).classes("w-full")
 
-                                            # Toggle handler
-                                            def toggle_ideogram(
-                                                _e=None,
-                                                _charts=charts_container,
-                                                _ideo=ideo_container,
-                                                _btn=ideogram_btn,
-                                                _state=show_ideogram,
-                                            ):
-                                                _state["value"] = not _state[
-                                                    "value"
-                                                ]
-                                                _charts.set_visibility(
-                                                    not _state["value"]
-                                                )
-                                                _ideo.set_visibility(
-                                                    _state["value"]
-                                                )
-                                                if _state["value"]:
-                                                    _btn.props(
-                                                        remove="outline",
-                                                        add="unelevated",
+                                            render_stats_content()
+
+                                            # Toggle ideogram/charts view
+                                            def toggle_ideogram(_e=None):
+                                                show_ideogram["value"] = not show_ideogram["value"]
+                                                if _containers["charts"]:
+                                                    _containers["charts"].set_visibility(
+                                                        not show_ideogram["value"]
+                                                    )
+                                                if _containers["ideo"]:
+                                                    _containers["ideo"].set_visibility(
+                                                        show_ideogram["value"]
+                                                    )
+                                                if show_ideogram["value"]:
+                                                    ideogram_btn.props(
+                                                        remove="outline", add="unelevated"
                                                     )
                                                 else:
-                                                    _btn.props(
-                                                        remove="unelevated",
-                                                        add="outline",
+                                                    ideogram_btn.props(
+                                                        remove="unelevated", add="outline"
                                                     )
-                                                _btn.update()
+                                                ideogram_btn.update()
 
-                                            ideogram_btn.on_click(
-                                                toggle_ideogram
-                                            )
+                                            ideogram_btn.on_click(toggle_ideogram)
+
+                                            # SNV / Indel filter handler
+                                            def on_type_filter_change(_e=None):
+                                                type_filter["snv"] = snv_cb.value
+                                                type_filter["indel"] = indel_cb.value
+                                                render_stats_content.refresh()
+
+                                            snv_cb.on_value_change(on_type_filter_change)
+                                            indel_cb.on_value_change(on_type_filter_change)
 
                                     stats_dialog.open()
 
@@ -1864,78 +1541,114 @@ def render_wombat_tab(
                                     "Stats", icon="bar_chart", on_click=show_stats_dialog
                                 ).props("outline color=blue size=sm")
 
-                            with ui.card().classes("w-full"):
-                                data_table = (
-                                    ui.table(
-                                        columns=make_columns(
-                                            selected_cols_local["value"]
-                                        ),
-                                        rows=rows,
-                                        pagination={
-                                            "rowsPerPage": 10,
-                                            "sortBy": "VEP_Consequence",
-                                            "descending": False,
-                                        },
+                            def on_view_variant(e):
+                                row_data = e.get("row", {})
+                                chrom = row_data.get("#CHROM", "")
+                                pos = row_data.get("POS", "")
+                                ref = row_data.get("REF", "")
+                                alt = row_data.get("ALT", "")
+                                sample_val = row_data.get("sample", "")
+
+                                # Callback to update the Validation column in the table
+                                # NOTE: use data["all_rows"] and data["_refresh"]["fn"]
+                                # instead of bare `all_rows` / `render_data_table.refresh`
+                                # to avoid late-binding closure over the loop variable.
+                                def on_save(validation_status: str):
+                                    # Reload validation data from file
+                                    validation_file = (
+                                        store.data_dir / "validations" / "snvs.tsv"
                                     )
-                                    .classes("w-full")
-                                    .props("dense flat")
+                                    validation_map = load_validation_map(
+                                        validation_file, family_id
+                                    )
+                                    # Re-add validation status to all rows
+                                    for row in data["all_rows"]:
+                                        chrom = row.get("#CHROM", "")
+                                        pos = row.get("POS", "")
+                                        ref = row.get("REF", "")
+                                        alt = row.get("ALT", "")
+                                        sample_id = row.get("sample", "")
+                                        variant_key = f"{chrom}:{pos}:{ref}:{alt}"
+                                        add_validation_status_to_row(
+                                            row,
+                                            validation_map,
+                                            variant_key,
+                                            sample_id,
+                                        )
+                                    # Refresh the table using the captured client context
+                                    refresh_fn = data["_refresh"]["fn"]
+                                    with page_client:
+                                        ui.timer(
+                                            0.1,
+                                            refresh_fn,
+                                            once=True,
+                                        )
+
+                                # Show dialog
+                                show_variant_dialog(
+                                    cohort_name=cohort_name,
+                                    family_id=family_id,
+                                    chrom=chrom,
+                                    pos=pos,
+                                    ref=ref,
+                                    alt=alt,
+                                    sample=sample_val,
+                                    variant_data=row_data,
+                                    on_save_callback=on_save,
                                 )
 
-                                data_table.add_slot("body", WOMBAT_TABLE_SLOT)
+                            # Restore table state (sorting / page) across refreshes
+                            table_state = data["_table_state"]
+                            saved_sorting = table_state.get("sorting", [])
 
-                                def on_view_variant(e):
-                                    row_data = e.args
-                                    chrom = row_data.get("#CHROM", "")
-                                    pos = row_data.get("POS", "")
-                                    ref = row_data.get("REF", "")
-                                    alt = row_data.get("ALT", "")
-                                    sample_val = row_data.get("sample", "")
-
-                                    # Callback to update the Validation column in the table
-                                    def on_save(validation_status: str):
-                                        # Reload validation data from file
-                                        validation_file = (
-                                            store.data_dir / "validations" / "snvs.tsv"
-                                        )
-                                        validation_map = load_validation_map(
-                                            validation_file, family_id
-                                        )
-                                        # Re-add validation status to all rows
-                                        for row in all_rows:
-                                            chrom = row.get("#CHROM", "")
-                                            pos = row.get("POS", "")
-                                            ref = row.get("REF", "")
-                                            alt = row.get("ALT", "")
-                                            sample_id = row.get("sample", "")
-                                            variant_key = f"{chrom}:{pos}:{ref}:{alt}"
-                                            add_validation_status_to_row(
-                                                row,
-                                                validation_map,
-                                                variant_key,
-                                                sample_id,
-                                            )
-                                        # Refresh the table using the captured client context
-                                        with page_client:
-                                            ui.timer(
-                                                0.1,
-                                                render_data_table.refresh,
-                                                once=True,
-                                            )
-
-                                    # Show dialog
-                                    show_variant_dialog(
-                                        cohort_name=cohort_name,
-                                        family_id=family_id,
-                                        chrom=chrom,
-                                        pos=pos,
-                                        ref=ref,
-                                        alt=alt,
-                                        sample=sample_val,
-                                        variant_data=row_data,
-                                        on_save_callback=on_save,
+                            # Pre-sort rows using saved sorting so JS gets them in order
+                            if saved_sorting:
+                                col_id = saved_sorting[0]["id"]
+                                desc = saved_sorting[0].get("desc", False)
+                                col_def = next(
+                                    (c for c in make_columns() if c.get("id") == col_id), {}
+                                )
+                                sort_field = col_def.get("sortField", col_id)
+                                sort_type = col_def.get("sorting", "")
+                                if sort_type == "genomic":
+                                    from genetics_viz.utils.column_names import genomic_sort_key
+                                    rows.sort(
+                                        key=lambda r: (
+                                            r.get(sort_field) is None,
+                                            genomic_sort_key(r.get(sort_field, "")),
+                                        ),
+                                        reverse=desc,
+                                    )
+                                elif sort_type == "numerical":
+                                    def _num_key(r):
+                                        v = r.get(sort_field)
+                                        if v is None:
+                                            return (True, 0.0)
+                                        try:
+                                            return (False, float(v))
+                                        except (ValueError, TypeError):
+                                            return (True, 0.0)
+                                    rows.sort(key=_num_key, reverse=desc)
+                                else:
+                                    rows.sort(
+                                        key=lambda r: (
+                                            r.get(sort_field) is None,
+                                            r.get(sort_field, ""),
+                                        ),
+                                        reverse=desc,
                                     )
 
-                                data_table.on("view_variant", on_view_variant)
+                            data["_dt"] = DataTable(
+                                columns=make_columns(),
+                                rows=rows,
+                                row_key="Variant",
+                                pagination={"rowsPerPage": 10},
+                                visible_columns=["actions"] + list(selected_cols_local["value"]),
+                                on_row_action=on_view_variant,
+                                initial_sorting=saved_sorting,
+                                initial_page=table_state.get("page", 0),
+                                state_holder=table_state,
+                            )
 
                             def on_preset_change(e):
                                 """Handle preset selection change."""
@@ -1952,42 +1665,11 @@ def render_wombat_tab(
 
                                 selected_cols_local["value"] = available
                                 data["selected_preset"]["name"] = preset_name
-                                update_table()
+                                _apply_col_visibility()
+                                _sync_col_selector()
 
                             # Connect preset change handler
                             preset_select.on_value_change(on_preset_change)
-
-                            def handle_col_change(col_name, is_checked):
-                                if (
-                                    is_checked
-                                    and col_name not in selected_cols_local["value"]
-                                ):
-                                    selected_cols_local["value"].append(col_name)
-                                elif (
-                                    not is_checked
-                                    and col_name in selected_cols_local["value"]
-                                ):
-                                    selected_cols_local["value"].remove(col_name)
-
-                                # Reorder to match all_columns_local order
-                                selected_cols_local["value"] = [
-                                    col for col in all_columns_local
-                                    if col in selected_cols_local["value"]
-                                ]
-
-                                update_table()
-
-                            def update_table():
-                                visible = [
-                                    c
-                                    for c in all_columns_local
-                                    if c in selected_cols_local["value"]
-                                ]
-                                data_table.columns = make_columns(visible)
-                                data_table.update()
-
-                                for col, checkbox in checkboxes.items():
-                                    checkbox.value = col in selected_cols_local["value"]
 
                         # Store refresh reference for filter callbacks
                         wombat_data[config_name]["_refresh"]["fn"] = render_data_table.refresh

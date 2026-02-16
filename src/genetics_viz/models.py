@@ -28,9 +28,8 @@ class Sample:
     @property
     def is_founder(self) -> bool:
         """Check if this sample is a founder (no parents in pedigree)."""
-        return (
-            self.father_id is None or self.father_id == "0" or self.father_id == ""
-        ) and (self.mother_id is None or self.mother_id == "0" or self.mother_id == "")
+        missing = {None, "", "0", "-9"}
+        return self.father_id in missing and self.mother_id in missing
 
 
 @dataclass
@@ -161,7 +160,7 @@ class Cohort:
             sample_id = str(row[sample_col])
 
             def get_value(
-                col: str | None, treat_zero_as_null: bool = False
+                col: str | None, treat_missing_as_null: bool = False
             ) -> str | None:
                 if col is None:
                     return None
@@ -169,16 +168,16 @@ class Cohort:
                 # Check for None or empty string
                 if val is None or val == "":
                     return None
-                # For father/mother fields, "0" means no parent (founder)
-                if treat_zero_as_null and val == "0":
+                # For father/mother fields, "0" and "-9" mean no parent
+                if treat_missing_as_null and val in ("0", "-9"):
                     return None
                 return str(val)
 
             sample = Sample(
                 sample_id=sample_id,
                 family_id=family_id,
-                father_id=get_value(father_col, treat_zero_as_null=True),
-                mother_id=get_value(mother_col, treat_zero_as_null=True),
+                father_id=get_value(father_col, treat_missing_as_null=True),
+                mother_id=get_value(mother_col, treat_missing_as_null=True),
                 sex=get_value(sex_col),
                 phenotype=get_value(phenotype_col),
             )
