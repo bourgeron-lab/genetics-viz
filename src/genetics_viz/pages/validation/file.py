@@ -1,6 +1,7 @@
 """Validation file page - displays a specific to_validate file."""
 
 import csv
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -135,11 +136,47 @@ def validation_file_page(filename: str) -> None:
         nicegui_app.add_static_files("/data", str(store.data_dir))
 
         with ui.column().classes("w-full px-6 py-6"):
-            # Title
-            with ui.row().classes("items-center gap-4 mb-6"):
+            # Title row with trash button on the right
+            with ui.row().classes("items-center w-full mb-6"):
                 ui.label(f"🔍 Validating: {filename}").classes(
                     "text-3xl font-bold text-blue-900"
                 )
+                ui.space()
+
+                # Trash file button with confirmation dialog
+                trash_dialog = ui.dialog()
+                with trash_dialog, ui.card().classes("p-4"):
+                    ui.label("Trash this file?").classes("text-lg font-semibold mb-2")
+                    ui.label(f"{filename}.tsv will be moved to the trash folder.").classes(
+                        "text-sm text-gray-600 mb-4"
+                    )
+                    with ui.row().classes("justify-end gap-2 w-full"):
+                        ui.button("Cancel", on_click=trash_dialog.close).props("flat")
+
+                        def _confirm_trash():
+                            trash_dir = to_validate_dir / "trash"
+                            trash_dir.mkdir(parents=True, exist_ok=True)
+                            dest = trash_dir / f"{filename}.tsv"
+                            counter = 1
+                            while dest.exists():
+                                dest = trash_dir / f"{filename}_{counter}.tsv"
+                                counter += 1
+                            shutil.move(str(file_path), str(dest))
+                            trash_dialog.close()
+                            ui.notify(
+                                f"{filename}.tsv moved to trash",
+                                type="positive",
+                                position="top",
+                            )
+                            ui.navigate.to("/validation/all")
+
+                        ui.button("Trash", on_click=_confirm_trash).props(
+                            "color=red unelevated"
+                        ).classes("text-white")
+
+                ui.button(icon="delete", on_click=trash_dialog.open).props(
+                    "flat round color=red"
+                ).tooltip("Move file to trash")
 
             if not file_path.exists():
                 ui.label(f"File not found: {filename}.tsv").classes(

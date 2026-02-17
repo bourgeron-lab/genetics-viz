@@ -206,7 +206,7 @@ VEP_SYMBOL:
   name: "symbol"
   group: "VEP"
   min_width: 100
-  max_width: 100
+  max_width: 250
 VEP_SYMBOL_SOURCE:
   name: "symbol_source"
   group: "VEP"
@@ -334,14 +334,25 @@ Variant:
   name: "Variant"
   sorting: genomic
   group: ""
-  min_width: 150
-  max_width: 150
+  min_width: 175
+  max_width: 175
 "chr:pos:ref:alt":
   name: "Variant"
   sorting: genomic
   group: ""
-  min_width: 150
-  max_width: 150
-actions:
-  name: ""
+  min_width: 175
+  max_width: 175
+zscore:
+  name: "z-score"
+  group: "WisecondorX"
+ratio:
+  name: "ratio"
+  group: "WisecondorX"
+type:
+  name: "type"
+  group: "WisecondorX"
+gene:
+  name: "gene"
   group: ""
+  min_width: 400
+  max_width: 400

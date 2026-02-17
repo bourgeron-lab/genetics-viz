@@ -14,6 +14,7 @@ NiceGUI-based web application for genetics cohort data visualization. Uses TanSt
 - **Format**: `uv run ruff format .`
 - **Compile check**: `uv run python -m py_compile src/genetics_viz/path/to/file.py`
 - **Always use `uv run`** to execute Python commands, never bare `python`.
+- **Always use `uv add`** to add dependencies, never bare `pip install`.
 
 ## Project Structure
 

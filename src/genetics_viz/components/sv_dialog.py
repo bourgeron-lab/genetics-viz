@@ -1005,6 +1005,41 @@ def show_sv_dialog(
                 roi_end = int(curated_end) if curated_end else int(end)
                 roi_coords = {"start": roi_start, "end": roi_end}
 
+                def _update_roi():
+                    """Update ROI in both IGV instances from roi_coords."""
+                    call_value = sv_data.get("call", "")
+                    roi_color = (
+                        "rgba(255,0,0,0.2)"
+                        if "GAIN" not in str(call_value).upper()
+                        else "rgba(0,128,0,0.2)"
+                    )
+                    roi_description = f"{chrom}:{roi_coords['start']}-{roi_coords['end']} - {call_value}"
+                    update_roi_script = f"""
+                    const roiConfig = [
+                        {{
+                            name: "{roi_description}",
+                            color: "{roi_color}",
+                            features: [
+                                {{
+                                    chr: "{chrom}",
+                                    start: {roi_coords["start"]},
+                                    end: {roi_coords["end"]},
+                                    name: "{call_value}"
+                                }}
+                            ]
+                        }}
+                    ];
+                    if (window.igvBrowser) {{
+                        window.igvBrowser.clearROIs();
+                        window.igvBrowser.loadROI(roiConfig);
+                    }}
+                    if (window.igvCramBrowser) {{
+                        window.igvCramBrowser.clearROIs();
+                        window.igvCramBrowser.loadROI(roiConfig);
+                    }}
+                    """
+                    ui.run_javascript(update_roi_script)
+
                 # Buttons for new start/end positions
                 async def on_new_start_click():
                     """Handle New Start button click - show current loci."""
@@ -1034,39 +1069,7 @@ def show_sv_dialog(
 
                                     # Update ROI in both IGV instances
                                     roi_coords["start"] = mean_pos
-                                    call_value = sv_data.get("call", "")
-                                    roi_color = (
-                                        "rgba(255,0,0,0.2)"
-                                        if "GAIN" not in str(call_value).upper()
-                                        else "rgba(0,128,0,0.2)"
-                                    )
-                                    roi_description = f"{chrom}:{roi_coords['start']}-{roi_coords['end']} - {call_value}"
-
-                                    update_roi_script = f"""
-                                    const roiConfig = [
-                                        {{
-                                            name: "{roi_description}",
-                                            color: "{roi_color}",
-                                            features: [
-                                                {{
-                                                    chr: "{chrom}",
-                                                    start: {roi_coords["start"]},
-                                                    end: {roi_coords["end"]},
-                                                    name: "{call_value}"
-                                                }}
-                                            ]
-                                        }}
-                                    ];
-                                    if (window.igvBrowser) {{
-                                        window.igvBrowser.clearROIs();
-                                        window.igvBrowser.loadROI(roiConfig);
-                                    }}
-                                    if (window.igvCramBrowser) {{
-                                        window.igvCramBrowser.clearROIs();
-                                        window.igvCramBrowser.loadROI(roiConfig);
-                                    }}
-                                    """
-                                    ui.run_javascript(update_roi_script)
+                                    _update_roi()
 
                                     ui.notify(f"New Start - {mean_pos}", type="info")
                                 else:
@@ -1106,39 +1109,7 @@ def show_sv_dialog(
 
                                     # Update ROI in both IGV instances
                                     roi_coords["end"] = mean_pos
-                                    call_value = sv_data.get("call", "")
-                                    roi_color = (
-                                        "rgba(255,0,0,0.2)"
-                                        if "GAIN" not in str(call_value).upper()
-                                        else "rgba(0,128,0,0.2)"
-                                    )
-                                    roi_description = f"{chrom}:{roi_coords['start']}-{roi_coords['end']} - {call_value}"
-
-                                    update_roi_script = f"""
-                                    const roiConfig = [
-                                        {{
-                                            name: "{roi_description}",
-                                            color: "{roi_color}",
-                                            features: [
-                                                {{
-                                                    chr: "{chrom}",
-                                                    start: {roi_coords["start"]},
-                                                    end: {roi_coords["end"]},
-                                                    name: "{call_value}"
-                                                }}
-                                            ]
-                                        }}
-                                    ];
-                                    if (window.igvBrowser) {{
-                                        window.igvBrowser.clearROIs();
-                                        window.igvBrowser.loadROI(roiConfig);
-                                    }}
-                                    if (window.igvCramBrowser) {{
-                                        window.igvCramBrowser.clearROIs();
-                                        window.igvCramBrowser.loadROI(roiConfig);
-                                    }}
-                                    """
-                                    ui.run_javascript(update_roi_script)
+                                    _update_roi()
 
                                     ui.notify(f"New End - {mean_pos}", type="info")
                                 else:
@@ -1242,6 +1213,48 @@ def show_sv_dialog(
                             .classes("w-48")
                         )
                         curated_inputs["end"] = curated_end_input
+
+                        def _refresh_roi_from_curated():
+                            """Update ROI from curated position inputs."""
+                            new_start = (
+                                curated_start_input.value.strip()
+                                if curated_start_input.value
+                                else ""
+                            )
+                            new_end = (
+                                curated_end_input.value.strip()
+                                if curated_end_input.value
+                                else ""
+                            )
+                            if not new_start and not new_end:
+                                ui.notify(
+                                    "Enter curated start and/or end first",
+                                    type="warning",
+                                )
+                                return
+                            try:
+                                if new_start:
+                                    roi_coords["start"] = int(new_start)
+                                if new_end:
+                                    roi_coords["end"] = int(new_end)
+                            except ValueError:
+                                ui.notify(
+                                    "Curated positions must be integers",
+                                    type="warning",
+                                )
+                                return
+                            _update_roi()
+                            ui.notify(
+                                f"ROI updated: {chrom}:{roi_coords['start']}-{roi_coords['end']}",
+                                type="positive",
+                            )
+
+                        ui.button(
+                            icon="refresh",
+                            on_click=_refresh_roi_from_curated,
+                        ).props(
+                            "flat round dense size=sm color=blue"
+                        ).tooltip("Refresh IGV ROI to curated coordinates")
 
                     with ui.row().classes("items-center gap-4 w-full"):
                         ui.label("Comment:").classes("font-semibold")

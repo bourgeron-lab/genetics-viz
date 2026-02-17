@@ -284,6 +284,11 @@ def render_wisecondorx_subtab(
                 ).alias("chr:start-end")
             )
 
+            # Compute svlen (end - start) before dropping coordinate columns
+            df = df.with_columns(
+                (pl.col("end").cast(pl.Int64) - pl.col("start").cast(pl.Int64)).alias("svlen")
+            )
+
             # Drop the temporary and original columns
             df = df.drop(["chr_prefixed", "chr", "start", "end"])
 
@@ -418,7 +423,8 @@ def render_wisecondorx_subtab(
                 # Reset to original locus and clear curated flags
                 if "_original_locus" in row:
                     row["chr:start-end"] = row["_original_locus"]
-                row.pop("IsCurated", None)
+                row["IsCurated"] = False
+                row["_curated_tooltip"] = ""
                 row.pop("OriginalLocus", None)
 
                 # For SVs, variant_key is the original chr:start-end format
@@ -498,6 +504,15 @@ def render_wisecondorx_subtab(
                                 # Update the display value and mark as curated
                                 row["chr:start-end"] = f"{chrom}:{new_start}-{new_end}"
                                 row["IsCurated"] = True
+                                row["_curated_tooltip"] = (
+                                    f"Original: {variant_key}\n"
+                                    f"Curated: {row['chr:start-end']}"
+                                )
+                                # Recompute svlen from curated boundaries
+                                try:
+                                    row["svlen"] = int(new_end) - int(new_start)
+                                except (ValueError, TypeError):
+                                    pass
 
             # Add gene badge information for all rows
             gene_scorer = get_gene_scorer()
@@ -685,7 +700,11 @@ def render_wisecondorx_subtab(
                             "sorting": get_column_sorting(col),
                             "sortable": True,
                         }
-                        if col == "Validation":
+                        if col == "chr:start-end":
+                            col_def["cellType"] = "curated_locus"
+                            col_def["curatedField"] = "IsCurated"
+                            col_def["tooltipField"] = "_curated_tooltip"
+                        elif col == "Validation":
                             col_def["cellType"] = "validation"
                         elif col == "call":
                             col_def["cellType"] = "cnv_call"

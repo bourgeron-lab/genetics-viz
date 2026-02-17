@@ -628,6 +628,7 @@ class DataTable {
             case 'color_scale': return this._renderColorScaleCell(value, meta, rowData);
             case 'score_badge': return this._renderScoreBadgeCell(value, meta, rowData);
             case 'cnv_call': return this._renderCnvCallCell(value, meta);
+            case 'curated_locus': return this._renderCuratedLocusCell(value, meta, rowData);
             case 'number': return this._renderNumberCell(value);
             default: return this._renderTextCell(value);
         }
@@ -816,6 +817,21 @@ class DataTable {
                 + this._escapeHtml(String(value)) + '</span>';
         }
         return '<span class="text-grey-6">' + this._escapeHtml(String(value)) + '</span>';
+    }
+
+    _renderCuratedLocusCell(value, meta, rowData) {
+        if (value === null || value === undefined || value === '') return '';
+        var escaped = this._escapeHtml(String(value));
+        var curatedField = meta.curatedField || 'IsCurated';
+        var tooltipField = meta.tooltipField || '_curated_tooltip';
+        if (rowData[curatedField]) {
+            var tooltip = rowData[tooltipField] || '';
+            var html = '<span style="color: #2e7d32; font-weight: bold;"';
+            if (tooltip) html += ' data-tooltip="' + this._escapeAttr(tooltip) + '"';
+            html += '>' + escaped + '</span>';
+            return html;
+        }
+        return escaped;
     }
 
     // ---- Pagination ----

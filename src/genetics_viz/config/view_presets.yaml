@@ -64,3 +64,29 @@ presets:
       - father_gt
       - mother_gt
       - Validation
+
+  - name: "Mix View"
+    keywords: ["default", "standard"]
+    columns:
+      - Variant
+      - VEP_Consequence
+      - VEP_SYMBOL
+      - svlen
+      - sample
+      - sample_gt
+      - father_gt
+      - mother_gt
+      - FID
+      - wisecondorX
+      - Validation
+
+  - name: "SV View"
+    keywords: ["sv", "wisecondorx"]
+    columns:
+      - Variant
+      - gene
+      - svlen
+      - sample
+      - FID
+      - wisecondorX
+      - Validation
