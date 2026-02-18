@@ -1,5 +1,6 @@
 """Validation all page - displays all validations from validations/snvs.tsv and svs.tsv."""
 
+import asyncio
 import csv
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -17,7 +18,7 @@ from genetics_viz.utils.validation_badges import build_validation_badge
 
 
 @ui.page("/validation/all")
-def validation_all_page() -> None:
+async def validation_all_page() -> None:
     """Render all validations from validations/snvs.tsv."""
     create_header()
 
@@ -220,8 +221,8 @@ def validation_all_page() -> None:
 
                 return validations_data
 
-            # Load initial data
-            validations_data = load_and_aggregate_validations()
+            # Load initial data (offloaded to thread)
+            validations_data = await asyncio.to_thread(load_and_aggregate_validations)
 
             if not validations_data:
                 ui.label("No validations found").classes("text-gray-500 text-lg italic")

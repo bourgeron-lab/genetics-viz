@@ -1,7 +1,10 @@
 """Search page for cohort-wide variant search."""
 
 import asyncio
+import csv
+import io
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -11,7 +14,10 @@ from nicegui import app as nicegui_app
 from nicegui import context, ui
 
 from genetics_viz.components.column_selector import build_column_selector
+from genetics_viz.components.search_stats import show_stats_dialog
 from genetics_viz.components.filters import create_validation_filter_menu
+from genetics_viz.utils.locus import filter_bed_dataframe, filter_dataframe, parse_locus_query
+from genetics_viz.utils.wisecondorx import parse_wisecondorx_bed
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
@@ -31,6 +37,7 @@ from genetics_viz.utils.column_names import (
     reorder_columns_by_group,
 )
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.genesets import load_genesets
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.clinvar import (
@@ -38,24 +45,49 @@ from genetics_viz.utils.clinvar import (
     format_clinvar_display,
     get_clinvar_color,
 )
-from genetics_viz.utils.cytobands import (
-    CHROM_ORDER,
-    CHROM_SIZES_MB,
-    CYTOBANDS,
-    GIESTAIN_COLORS,
-    VALIDATION_COLORS,
-    norm_chrom,
-)
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
     format_consequence_display,
     get_consequence_color,
     get_consequence_impact,
-    get_highest_consequence_term,
 )
 
 
 
+
+
+# Keys that are internal/display-only and should never appear in TSV exports
+_INTERNAL_KEYS = {
+    "_source_type",
+    "_cohort_name",
+    "_is_snv",
+    "_original_locus",
+    "_curated_tooltip",
+    "IsCurated",
+    "ConsequenceBadges",
+    "ClinVarBadges",
+    "GeneBadges",
+    "VEP_Gene_badges",
+}
+
+
+def _is_export_column(key: str) -> bool:
+    """Return True if the key should be included in a TSV export."""
+    if key in _INTERNAL_KEYS:
+        return False
+    if key.endswith("_badge") or key.endswith("_badges"):
+        return False
+    return True
+
+
+def _generate_tsv(rows: List[Dict[str, Any]], columns: List[str]) -> str:
+    """Generate TSV content string from rows using only the specified columns."""
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter="\t")
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([row.get(col, "") for col in columns])
+    return output.getvalue()
 
 
 def _build_gene_badges(symbols: List[str], gene_scorer) -> List[Dict[str, Any]]:
@@ -165,310 +197,6 @@ def _infer_sv_type(row: Dict[str, Any]) -> str:
         return "dup" if ratio_val > 0 else "del"
     except (ValueError, TypeError):
         return "del"
-
-
-def parse_locus_query(query: str) -> Dict[str, Any]:
-    """Parse locus query into filter parameters.
-
-    Returns dict with 'type' and relevant filter parameters.
-    """
-    query = query.strip()
-
-    # chr1:10000:A:GC - exact variant
-    variant_pattern = r"^(chr)?(\w+):(\d+):([ACGT]+):([ACGT]+)$"
-    match = re.match(variant_pattern, query, re.IGNORECASE)
-    if match:
-        return {
-            "type": "exact_variant",
-            "chrom": f"chr{match.group(2)}"
-            if not match.group(1)
-            else match.group(1) + match.group(2),
-            "pos": int(match.group(3)),
-            "ref": match.group(4).upper(),
-            "alt": match.group(5).upper(),
-        }
-
-    # chr1:10000-10100 - range
-    range_pattern = r"^(chr)?(\w+):(\d+)-(\d+)$"
-    match = re.match(range_pattern, query, re.IGNORECASE)
-    if match:
-        return {
-            "type": "range",
-            "chrom": f"chr{match.group(2)}"
-            if not match.group(1)
-            else match.group(1) + match.group(2),
-            "start": int(match.group(3)),
-            "end": int(match.group(4)),
-        }
-
-    # chr1:10000 - exact position
-    pos_pattern = r"^(chr)?(\w+):(\d+)$"
-    match = re.match(pos_pattern, query, re.IGNORECASE)
-    if match:
-        return {
-            "type": "exact_position",
-            "chrom": f"chr{match.group(2)}"
-            if not match.group(1)
-            else match.group(1) + match.group(2),
-            "pos": int(match.group(3)),
-        }
-
-    # ENSG00000164099 - gene ID
-    if re.match(r"^ENSG\d+$", query, re.IGNORECASE):
-        return {
-            "type": "gene_id",
-            "gene_id": query.upper(),
-        }
-
-    # SHANK* - wildcard gene
-    if "*" in query:
-        return {
-            "type": "gene_wildcard",
-            "pattern": query.replace("*", "").upper(),
-        }
-
-    # SHANK3 - exact gene
-    return {
-        "type": "gene_name",
-        "gene_name": query.upper(),
-    }
-
-
-def filter_dataframe(df: pl.DataFrame, query_params: Dict[str, Any]) -> pl.DataFrame:
-    """Filter dataframe based on parsed query parameters."""
-    query_type = query_params["type"]
-
-    if query_type == "exact_variant":
-        return df.filter(
-            (pl.col("#CHROM") == query_params["chrom"])
-            & (pl.col("POS") == query_params["pos"])
-            & (pl.col("REF") == query_params["ref"])
-            & (pl.col("ALT") == query_params["alt"])
-        )
-
-    elif query_type == "range":
-        return df.filter(
-            (pl.col("#CHROM") == query_params["chrom"])
-            & (pl.col("POS") >= query_params["start"])
-            & (pl.col("POS") <= query_params["end"])
-        )
-
-    elif query_type == "exact_position":
-        return df.filter(
-            (pl.col("#CHROM") == query_params["chrom"])
-            & (pl.col("POS") == query_params["pos"])
-        )
-
-    elif query_type == "gene_id":
-        # VEP_Gene can contain multiple genes separated by &
-        gene_id = query_params["gene_id"]
-        return df.filter(pl.col("VEP_Gene").str.to_uppercase().str.contains(gene_id))
-
-    elif query_type == "gene_wildcard":
-        # VEP_SYMBOL can contain multiple symbols
-        pattern = query_params["pattern"]
-        return df.filter(pl.col("VEP_SYMBOL").str.to_uppercase().str.contains(pattern))
-
-    elif query_type == "gene_name":
-        # Exact match in VEP_SYMBOL (case-insensitive, as part of the field)
-        gene_name = query_params["gene_name"]
-        return df.filter(
-            pl.col("VEP_SYMBOL").str.to_uppercase().str.contains(gene_name)
-        )
-
-    return df
-
-
-def _parse_wisecondorx_bed(file_path: Path) -> Optional[pl.DataFrame]:
-    """Parse a WisecondorX BED file into a Polars DataFrame.
-
-    Keeps chr, start, end as separate columns for overlap filtering,
-    and also creates the chr:start-end combined column and the
-    wisecondorX CNV call classification column.
-    Adapted from svs_tab.py but retains coordinate columns.
-    """
-    with open(file_path, "r") as f:
-        lines = f.readlines()
-
-    if not lines:
-        return None
-
-    # Parse tab-separated header
-    header = lines[0].strip().split("\t")
-
-    # Parse data rows
-    data = []
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        parts = line.strip().split("\t")
-        if len(parts) >= 7:
-            while len(parts) < len(header):
-                parts.append("")
-            data.append(parts[: len(header)])
-
-    if not data:
-        return None
-
-    df = pl.DataFrame(
-        {
-            col: [row[i] if i < len(row) else "" for row in data]
-            for i, col in enumerate(header)
-        }
-    )
-
-    # Convert numeric columns
-    for col in ["start", "end", "ratio", "zscore"]:
-        if col in df.columns:
-            df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False))
-
-    # Rename barcode column to sample if it exists
-    if "barcode" in df.columns:
-        df = df.rename({"barcode": "sample"})
-
-    # Normalize chr prefix
-    if "chr" in df.columns:
-        df = df.with_columns(
-            pl.when(pl.col("chr").cast(pl.Utf8).str.starts_with("chr"))
-            .then(pl.col("chr").cast(pl.Utf8))
-            .otherwise(pl.lit("chr") + pl.col("chr").cast(pl.Utf8))
-            .alias("chr")
-        )
-
-    # Create chr:start-end combined column (keep chr, start, end for filtering)
-    if all(c in df.columns for c in ["chr", "start", "end"]):
-        df = df.with_columns(
-            (
-                pl.col("chr")
-                + ":"
-                + pl.col("start").cast(pl.Int64).cast(pl.Utf8)
-                + "-"
-                + pl.col("end").cast(pl.Int64).cast(pl.Utf8)
-            ).alias("chr:start-end")
-        )
-
-    # Add wisecondorX CNV call classification (same logic as svs_tab.py "call" column)
-    if "ratio" in df.columns and "zscore" in df.columns:
-        import yaml
-
-        config_path = (
-            Path(__file__).parent.parent / "config" / "wisecondorx_thresholds.yaml"
-        )
-        with open(config_path, "r") as f:
-            wcx_config = yaml.safe_load(f)
-
-        def classify_cnv(ratio, zscore):
-            """Classify CNV based on ratio (log2) and zscore thresholds."""
-            try:
-                r = float(ratio) if ratio and str(ratio) != "" else 0
-                z = float(zscore) if zscore and str(zscore) != "" else 0
-
-                # Robust calls checked first
-                rl = wcx_config["robust_loss"]
-                if r <= rl["ratio_threshold"] and z <= rl["zscore_threshold"]:
-                    return rl["label"]
-                rg = wcx_config["robust_gain"]
-                if r >= rg["ratio_threshold"] and z >= rg["zscore_threshold"]:
-                    return rg["label"]
-                # Permissive calls (fallback)
-                pl_ = wcx_config["permissive_loss"]
-                if r <= pl_["ratio_threshold"] and z <= pl_["zscore_threshold"]:
-                    return pl_["label"]
-                pg = wcx_config["permissive_gain"]
-                if r >= pg["ratio_threshold"] and z >= pg["zscore_threshold"]:
-                    return pg["label"]
-                return "Below threshold"
-            except Exception:
-                return "N/A"
-
-        df = df.with_columns(
-            pl.struct(["ratio", "zscore"])
-            .map_elements(
-                lambda row: classify_cnv(row["ratio"], row["zscore"]),
-                return_dtype=pl.Utf8,
-            )
-            .alias("wisecondorX")
-        )
-
-    return df
-
-
-def filter_bed_dataframe(
-    df: pl.DataFrame, query_params: Dict[str, Any], exonic: bool = False
-) -> pl.DataFrame:
-    """Filter WisecondorX BED dataframe based on parsed query parameters.
-
-    Uses chr/start/end for coordinate queries (overlap logic) and
-    genic_symbol/genic_ensg (or exonic_symbol/exonic_ensg when exonic=True)
-    for gene queries.
-    """
-    query_type = query_params["type"]
-    symbol_col = "exonic_symbol" if exonic else "genic_symbol"
-    ensg_col = "exonic_ensg" if exonic else "genic_ensg"
-
-    if query_type == "exact_variant":
-        # No REF/ALT in BED files — fall back to position overlap
-        chrom = query_params["chrom"]
-        pos = float(query_params["pos"])
-        return df.filter(
-            (pl.col("chr") == chrom)
-            & (pl.col("start") <= pos)
-            & (pl.col("end") >= pos)
-        )
-
-    elif query_type == "range":
-        chrom = query_params["chrom"]
-        q_start = float(query_params["start"])
-        q_end = float(query_params["end"])
-        return df.filter(
-            (pl.col("chr") == chrom)
-            & (pl.col("start") <= q_end)
-            & (pl.col("end") >= q_start)
-        )
-
-    elif query_type == "exact_position":
-        chrom = query_params["chrom"]
-        pos = float(query_params["pos"])
-        return df.filter(
-            (pl.col("chr") == chrom)
-            & (pl.col("start") <= pos)
-            & (pl.col("end") >= pos)
-        )
-
-    elif query_type == "gene_id":
-        gene_id = query_params["gene_id"]
-        if ensg_col in df.columns:
-            return df.filter(
-                pl.col(ensg_col)
-                .cast(pl.Utf8)
-                .str.to_uppercase()
-                .str.contains(gene_id)
-            )
-        return df.head(0)
-
-    elif query_type == "gene_wildcard":
-        pattern = query_params["pattern"]
-        if symbol_col in df.columns:
-            return df.filter(
-                pl.col(symbol_col)
-                .cast(pl.Utf8)
-                .str.to_uppercase()
-                .str.contains(pattern)
-            )
-        return df.head(0)
-
-    elif query_type == "gene_name":
-        gene_name = query_params["gene_name"]
-        if symbol_col in df.columns:
-            return df.filter(
-                pl.col(symbol_col)
-                .cast(pl.Utf8)
-                .str.to_uppercase()
-                .str.contains(gene_name)
-            )
-        return df.head(0)
-
-    return df
 
 
 # Values that represent "unknown/missing" in pedigree files
@@ -599,21 +327,7 @@ def search_cohort_page(cohort_name: str) -> None:
             )
 
             # Load genesets from params/genesets
-            genesets_dir = store.data_dir / "params" / "genesets"
-            available_genesets = {}
-            if genesets_dir.exists():
-                for geneset_file in genesets_dir.glob("*.tsv"):
-                    geneset_name = geneset_file.stem
-                    genes = set()
-                    with open(geneset_file, "r") as f:
-                        # Skip header line
-                        next(f, None)
-                        for line in f:
-                            gene = line.strip()
-                            if gene:
-                                genes.add(gene.upper())
-                    if genes:
-                        available_genesets[geneset_name] = genes
+            available_genesets = load_genesets(store.data_dir)
 
             # Separate source lists by type for UI
             wombat_sources = [sf for sf in source_files if sf["source_type"] == "wombat"]
@@ -1243,7 +957,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                 all_wombat_dfs.append(df)
 
                         elif comp["type"] == "wisecondorx":
-                            df = await asyncio.to_thread(_parse_wisecondorx_bed, sf["file_path"])
+                            df = await asyncio.to_thread(parse_wisecondorx_bed, sf["file_path"])
                             if df is None or len(df) == 0:
                                 continue
                             # Locus filter (use exonic columns if exonic_only is checked)
@@ -1851,383 +1565,120 @@ def search_cohort_page(cohort_name: str) -> None:
                                 ).props("outline color=blue size=sm")
 
                                 # --- Stats button + dialog ---
-                                def show_stats_dialog(current_rows=rows):
-                                    from collections import Counter
-
-                                    # Skip SVS rows (they lack #CHROM/POS/REF/ALT)
-                                    snv_rows = [
-                                        r for r in current_rows
-                                        if r.get("_source_type") != "wisecondorx"
-                                    ]
-
-                                    # Deduplicate by (#CHROM, POS, REF, ALT)
-                                    seen: set = set()
-                                    unique_variants: list = []
-                                    for r in snv_rows:
-                                        key = (
-                                            r.get("#CHROM", ""),
-                                            r.get("POS", ""),
-                                            r.get("REF", ""),
-                                            r.get("ALT", ""),
-                                        )
-                                        if key not in seen:
-                                            seen.add(key)
-                                            unique_variants.append(r)
-
-                                    # Classify variant type
-                                    for r in unique_variants:
-                                        ref = str(r.get("REF", ""))
-                                        alt = str(r.get("ALT", ""))
-                                        r["_is_snv"] = len(ref) == 1 and len(alt) == 1
-
-                                    chrom_order = CHROM_ORDER
-                                    chrom_sizes_mb = CHROM_SIZES_MB
-                                    validation_colors = VALIDATION_COLORS
-
-                                    # Filter state
-                                    type_filter = {"snv": True, "indel": True}
-                                    show_ideogram: Dict[str, bool] = {"value": False}
-                                    _containers: Dict[str, Any] = {"charts": None, "ideo": None}
-
-                                    with ui.dialog().props(
-                                        "full-width"
-                                    ) as stats_dialog, ui.card().classes("w-full"):
-                                        with ui.column().classes("w-full p-4"):
-                                            # Header
-                                            with ui.row().classes(
-                                                "items-center justify-between w-full mb-2"
-                                            ):
-                                                with ui.row().classes("items-center gap-3"):
-                                                    ui.label("Variant Statistics").classes(
-                                                        "text-xl font-bold text-blue-900"
-                                                    )
-                                                    subtitle_label = ui.label("").classes(
-                                                        "text-sm text-gray-500"
-                                                    )
-                                                    ideogram_btn = ui.button(
-                                                        "Ideogram",
-                                                    ).props(
-                                                        "outline color=blue size=sm dense no-caps"
-                                                    )
-                                                    snv_cb = ui.checkbox(
-                                                        "SNVs", value=True
-                                                    ).props("dense").classes("text-sm")
-                                                    indel_cb = ui.checkbox(
-                                                        "Indels", value=True
-                                                    ).props("dense").classes("text-sm")
-                                                ui.button(
-                                                    icon="close",
-                                                    on_click=lambda: stats_dialog.close(),
-                                                ).props("flat round")
-
-                                            @ui.refreshable
-                                            def render_stats_content():
-                                                # Filter variants by type
-                                                filtered = [
-                                                    r for r in unique_variants
-                                                    if (type_filter["snv"] and r["_is_snv"])
-                                                    or (type_filter["indel"] and not r["_is_snv"])
-                                                ]
-                                                snv_n = sum(1 for r in filtered if r["_is_snv"])
-                                                indel_n = len(filtered) - snv_n
-                                                subtitle_label.text = (
-                                                    f"{len(filtered)} unique variants "
-                                                    f"({snv_n} SNVs, {indel_n} Indels)"
-                                                )
-
-                                                # Chromosome distribution stacked by validation
-                                                chrom_validation: Dict[str, Dict[str, int]] = {
-                                                    c: {} for c in chrom_order
-                                                }
-                                                for r in filtered:
-                                                    chrom = norm_chrom(r.get("#CHROM", ""))
-                                                    status = r.get("Validation", "") or "TODO"
-                                                    if chrom in chrom_validation:
-                                                        chrom_validation[chrom][status] = (
-                                                            chrom_validation[chrom].get(status, 0) + 1
-                                                        )
-                                                all_statuses: List[str] = []
-                                                for c in chrom_order:
-                                                    for s in chrom_validation[c]:
-                                                        if s not in all_statuses:
-                                                            all_statuses.append(s)
-
-                                                # Consequence distribution
-                                                consequence_counts = Counter(
-                                                    get_highest_consequence_term(
-                                                        str(r.get("VEP_Consequence", ""))
-                                                    )
-                                                    for r in filtered
-                                                )
-                                                # Validation distribution
-                                                validation_counts = Counter(
-                                                    r.get("Validation", "") or "TODO"
-                                                    for r in filtered
-                                                )
-
-                                                # Scatter data for ideogram
-                                                scatter_data: List[List[Any]] = []
-                                                for r in filtered:
-                                                    chrom = norm_chrom(r.get("#CHROM", ""))
-                                                    pos = r.get("POS", 0)
-                                                    try:
-                                                        pos_mb = round(float(pos) / 1_000_000, 2)
-                                                    except (ValueError, TypeError):
-                                                        continue
-                                                    if chrom in chrom_sizes_mb:
-                                                        status = r.get("Validation", "") or "TODO"
-                                                        scatter_data.append([pos_mb, chrom, status])
-
-                                                # --- Charts container ---
-                                                _containers["charts"] = ui.column().classes("w-full")
-                                                _containers["charts"].set_visibility(not show_ideogram["value"])
-                                                with _containers["charts"]:
-                                                    ui.label("Variants per Chromosome").classes(
-                                                        "text-lg font-semibold text-gray-800 mt-2"
-                                                    )
-                                                    stacked_series = [
-                                                        {
-                                                            "name": status,
-                                                            "type": "bar",
-                                                            "stack": "total",
-                                                            "data": [
-                                                                chrom_validation[c].get(status, 0)
-                                                                for c in chrom_order
-                                                            ],
-                                                            "itemStyle": {
-                                                                "color": validation_colors.get(
-                                                                    status, "#94a3b8"
-                                                                )
-                                                            },
-                                                        }
-                                                        for status in all_statuses
-                                                    ]
-                                                    ui.echart(
-                                                        {
-                                                            "tooltip": {
-                                                                "trigger": "axis",
-                                                                "axisPointer": {"type": "shadow"},
-                                                            },
-                                                            "legend": {"data": all_statuses, "top": 0},
-                                                            "grid": {"top": 30},
-                                                            "xAxis": {
-                                                                "type": "category",
-                                                                "data": chrom_order,
-                                                                "name": "Chromosome",
-                                                            },
-                                                            "yAxis": {"type": "value", "name": "Count"},
-                                                            "series": stacked_series,
-                                                        }
-                                                    ).classes("w-full h-64")
-
-                                                    with ui.row().classes("w-full gap-4 flex-wrap mt-4"):
-                                                        # Consequence pie chart
-                                                        with ui.column().classes("flex-1 min-w-[400px]"):
-                                                            ui.label(
-                                                                "Consequence Distribution (highest per variant)"
-                                                            ).classes("text-lg font-semibold text-gray-800")
-                                                            cons_data = [
-                                                                {
-                                                                    "name": format_consequence_display(cons),
-                                                                    "value": count,
-                                                                    "itemStyle": {
-                                                                        "color": VEP_CONSEQUENCES.get(
-                                                                            cons, ("", "#6b7280")
-                                                                        )[1]
-                                                                    },
-                                                                }
-                                                                for cons, count in consequence_counts.most_common()
-                                                            ]
-                                                            ui.echart(
-                                                                {
-                                                                    "tooltip": {"trigger": "item"},
-                                                                    "series": [{
-                                                                        "type": "pie",
-                                                                        "radius": "70%",
-                                                                        "data": cons_data,
-                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
-                                                                    }],
-                                                                }
-                                                            ).classes("w-full h-80")
-
-                                                        # Validation pie chart
-                                                        with ui.column().classes("flex-1 min-w-[400px]"):
-                                                            ui.label(
-                                                                "Validation Status Distribution"
-                                                            ).classes("text-lg font-semibold text-gray-800")
-                                                            val_data = [
-                                                                {
-                                                                    "name": st,
-                                                                    "value": cnt,
-                                                                    "itemStyle": {
-                                                                        "color": validation_colors.get(st, "#6b7280")
-                                                                    },
-                                                                }
-                                                                for st, cnt in validation_counts.most_common()
-                                                            ]
-                                                            ui.echart(
-                                                                {
-                                                                    "tooltip": {"trigger": "item"},
-                                                                    "series": [{
-                                                                        "type": "pie",
-                                                                        "radius": "70%",
-                                                                        "data": val_data,
-                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
-                                                                    }],
-                                                                }
-                                                            ).classes("w-full h-80")
-
-                                                # --- Ideogram container ---
-                                                _containers["ideo"] = ui.column().classes("w-full")
-                                                _containers["ideo"].set_visibility(show_ideogram["value"])
-                                                with _containers["ideo"]:
-                                                    svg_w = 1800
-                                                    lbl_w = 50
-                                                    plot_w = svg_w - lbl_w - 20
-                                                    row_h = 16
-                                                    tri_h = 6
-                                                    row_gap = tri_h + 4
-                                                    svg_h = len(chrom_order) * (row_h + row_gap) + 60
-                                                    max_mb = max(chrom_sizes_mb.values())
-
-                                                    svg_parts = [
-                                                        f'<svg viewBox="0 0 {svg_w} {svg_h}" '
-                                                        f'xmlns="http://www.w3.org/2000/svg" '
-                                                        f'preserveAspectRatio="xMinYMin meet" '
-                                                        f'style="font-family: sans-serif; width: 100%; height: auto;">'
-                                                    ]
-
-                                                    axis_y = len(chrom_order) * (row_h + row_gap)
-                                                    for mb_val in range(0, 260, 50):
-                                                        gx = lbl_w + (mb_val / max_mb) * plot_w
-                                                        svg_parts.append(
-                                                            f'<line x1="{gx:.1f}" y1="0" '
-                                                            f'x2="{gx:.1f}" y2="{axis_y}" '
-                                                            f'stroke="#e5e7eb" stroke-width="0.5" '
-                                                            f'stroke-dasharray="3,3"/>'
-                                                        )
-                                                        svg_parts.append(
-                                                            f'<text x="{gx:.1f}" y="{axis_y + 14}" '
-                                                            f'text-anchor="middle" font-size="12" '
-                                                            f'fill="#6b7280">{mb_val}</text>'
-                                                        )
-                                                    svg_parts.append(
-                                                        f'<text x="{svg_w / 2}" y="{axis_y + 32}" '
-                                                        f'text-anchor="middle" font-size="13" '
-                                                        f'fill="#6b7280">Position (Mb)</text>'
-                                                    )
-
-                                                    for ci, chrom in enumerate(chrom_order):
-                                                        bar_y = ci * (row_h + row_gap) + tri_h
-                                                        bands = CYTOBANDS.get(chrom, [])
-                                                        cs = chrom_sizes_mb.get(chrom, 0)
-                                                        total_w = (cs / max_mb) * plot_w
-
-                                                        svg_parts.append(
-                                                            f'<text x="{lbl_w - 6}" y="{bar_y + row_h * 0.75}" '
-                                                            f'text-anchor="end" font-size="12" '
-                                                            f'fill="#374151">{chrom}</text>'
-                                                        )
-                                                        for band in bands:
-                                                            bx = lbl_w + (band["start"] / max_mb) * plot_w
-                                                            bw = max(
-                                                                ((band["end"] - band["start"]) / max_mb) * plot_w,
-                                                                0.5,
-                                                            )
-                                                            color = GIESTAIN_COLORS.get(band["stain"], "#e5e7eb")
-                                                            svg_parts.append(
-                                                                f'<rect x="{bx:.1f}" y="{bar_y}" '
-                                                                f'width="{bw:.1f}" height="{row_h}" '
-                                                                f'fill="{color}"/>'
-                                                            )
-                                                        svg_parts.append(
-                                                            f'<rect x="{lbl_w}" y="{bar_y}" '
-                                                            f'width="{total_w:.1f}" height="{row_h}" '
-                                                            f'fill="none" stroke="#9ca3af" '
-                                                            f'stroke-width="0.5" rx="3"/>'
-                                                        )
-
-                                                    for sd in scatter_data:
-                                                        v_mb, v_chrom, v_status = sd
-                                                        if v_chrom not in chrom_order:
-                                                            continue
-                                                        v_idx = chrom_order.index(v_chrom)
-                                                        bar_y = v_idx * (row_h + row_gap) + tri_h
-                                                        vx = lbl_w + (v_mb / max_mb) * plot_w
-                                                        v_color = validation_colors.get(v_status, "#94a3b8")
-                                                        tw = 5
-                                                        svg_parts.append(
-                                                            f'<polygon points="{vx - tw:.1f},{bar_y - tri_h} '
-                                                            f'{vx + tw:.1f},{bar_y - tri_h} '
-                                                            f'{vx:.1f},{bar_y}" '
-                                                            f'fill="{v_color}" opacity="0.9"/>'
-                                                        )
-                                                        svg_parts.append(
-                                                            f'<line x1="{vx:.1f}" y1="{bar_y}" '
-                                                            f'x2="{vx:.1f}" y2="{bar_y + row_h}" '
-                                                            f'stroke="{v_color}" stroke-width="1.5" '
-                                                            f'opacity="0.85"/>'
-                                                        )
-
-                                                    legend_y = axis_y + 40
-                                                    legend_x = lbl_w
-                                                    for v_status in all_statuses:
-                                                        v_color = validation_colors.get(v_status, "#94a3b8")
-                                                        svg_parts.append(
-                                                            f'<rect x="{legend_x}" y="{legend_y}" '
-                                                            f'width="12" height="12" rx="2" fill="{v_color}"/>'
-                                                        )
-                                                        svg_parts.append(
-                                                            f'<text x="{legend_x + 16}" y="{legend_y + 10}" '
-                                                            f'font-size="12" fill="#374151">{v_status}</text>'
-                                                        )
-                                                        legend_x += len(v_status) * 8 + 32
-
-                                                    svg_parts.append("</svg>")
-                                                    ui.html(
-                                                        "\n".join(svg_parts),
-                                                        sanitize=False,
-                                                    ).classes("w-full")
-
-                                            render_stats_content()
-
-                                            # Toggle ideogram/charts view
-                                            def toggle_ideogram(_e=None):
-                                                show_ideogram["value"] = not show_ideogram["value"]
-                                                if _containers["charts"]:
-                                                    _containers["charts"].set_visibility(
-                                                        not show_ideogram["value"]
-                                                    )
-                                                if _containers["ideo"]:
-                                                    _containers["ideo"].set_visibility(
-                                                        show_ideogram["value"]
-                                                    )
-                                                if show_ideogram["value"]:
-                                                    ideogram_btn.props(
-                                                        remove="outline", add="unelevated"
-                                                    )
-                                                else:
-                                                    ideogram_btn.props(
-                                                        remove="unelevated", add="outline"
-                                                    )
-                                                ideogram_btn.update()
-
-                                            ideogram_btn.on_click(toggle_ideogram)
-
-                                            # SNV / Indel filter handler
-                                            def on_type_filter_change(_e=None):
-                                                type_filter["snv"] = snv_cb.value
-                                                type_filter["indel"] = indel_cb.value
-                                                render_stats_content.refresh()
-
-                                            snv_cb.on_value_change(on_type_filter_change)
-                                            indel_cb.on_value_change(on_type_filter_change)
-
-                                    stats_dialog.open()
-
                                 ui.button(
-                                    "Stats", icon="bar_chart", on_click=show_stats_dialog
+                                    "Stats", icon="bar_chart",
+                                    on_click=lambda _e=None, r=rows: show_stats_dialog(r),
                                 ).props("outline color=blue size=sm")
+
+                                # --- Save / Download ---
+                                def _save_validation_file(filename: str):
+                                    """Write TSV to to_validate directory."""
+                                    standard_preset = next(
+                                        (p for p in VIEW_PRESETS if p["name"] == "Standard View"),
+                                        VIEW_PRESETS[0],
+                                    )
+                                    save_cols = [
+                                        col
+                                        for col in standard_preset.get("columns", [])
+                                        if col != "Validation"
+                                        and col in all_columns
+                                        and _is_export_column(col)
+                                    ]
+                                    tsv_content = _generate_tsv(rows, save_cols)
+                                    to_validate_dir = store.data_dir / "to_validate"
+                                    to_validate_dir.mkdir(parents=True, exist_ok=True)
+                                    file_path = to_validate_dir / filename
+                                    if file_path.exists():
+                                        ui.notify(
+                                            f"File '{filename}' already exists!",
+                                            type="warning",
+                                        )
+                                        return
+                                    file_path.write_text(tsv_content)
+                                    ui.notify(
+                                        f"Saved {filename} to to_validate/",
+                                        type="positive",
+                                        position="top",
+                                    )
+
+                                def _download_tsv(filename: str):
+                                    """Trigger browser download of TSV with displayed columns."""
+                                    download_cols = [
+                                        col
+                                        for col in selected_cols["value"]
+                                        if _is_export_column(col)
+                                    ]
+                                    tsv_content = _generate_tsv(rows, download_cols)
+                                    ui.download(
+                                        tsv_content.encode("utf-8"),
+                                        filename,
+                                        media_type="text/tab-separated-values",
+                                    )
+
+                                def _build_save_dialog(title, confirm_label, confirm_icon, on_confirm):
+                                    """Pre-build a save/download dialog. Returns (dialog, name_input)."""
+                                    with ui.dialog() as dlg, ui.card().classes("p-4 min-w-[400px]"):
+                                        ui.label(title).classes("text-lg font-semibold mb-2")
+
+                                        with ui.row().classes("items-center w-full gap-1"):
+                                            name_input = ui.input(
+                                                label="Filename",
+                                                value="",
+                                            ).props("outlined dense").classes("flex-grow")
+                                            ui.label(".tsv").classes("text-gray-500 text-sm mt-2")
+
+                                        with ui.row().classes("justify-end gap-2 w-full mt-4"):
+                                            ui.button("Cancel", on_click=dlg.close).props("flat")
+
+                                            def _on_confirm(inp=name_input, d=dlg, cb=on_confirm):
+                                                raw_name = inp.value.strip()
+                                                if not raw_name:
+                                                    ui.notify("Please enter a filename", type="warning")
+                                                    return
+                                                if not raw_name.endswith(".tsv"):
+                                                    raw_name += ".tsv"
+                                                d.close()
+                                                cb(raw_name)
+
+                                            ui.button(
+                                                confirm_label, icon=confirm_icon, on_click=_on_confirm
+                                            ).props("unelevated color=blue")
+                                    return dlg, name_input
+
+                                save_dlg, save_input = _build_save_dialog(
+                                    "Save as validation file", "Save", "save", _save_validation_file,
+                                )
+                                dl_dlg, dl_input = _build_save_dialog(
+                                    "Download TSV", "Download", "download", _download_tsv,
+                                )
+
+                                def _open_dialog(dlg, name_input):
+                                    """Reset filename, open dialog, auto-focus and select text."""
+                                    name_input.value = (
+                                        f"genetics-viz.{datetime.now().strftime('%Y-%m-%d.%H-%M')}"
+                                    )
+                                    dlg.open()
+                                    ui.timer(
+                                        0.2,
+                                        lambda inp=name_input: ui.run_javascript(
+                                            f'var el = getElement({inp.id}).$el.querySelector("input");'
+                                            f"if(el){{el.focus();el.select();}}"
+                                        ),
+                                        once=True,
+                                    )
+
+                                with ui.button(
+                                    "Save", icon="save",
+                                ).props("outline color=blue size=sm"):
+                                    with ui.menu():
+                                        ui.menu_item(
+                                            "Save as validation file",
+                                            on_click=lambda: _open_dialog(save_dlg, save_input),
+                                        )
+                                        ui.menu_item(
+                                            "Download TSV",
+                                            on_click=lambda: _open_dialog(dl_dlg, dl_input),
+                                        )
 
                             # Preset change handler
                             def on_preset_change(e):

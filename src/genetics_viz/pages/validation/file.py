@@ -1,5 +1,6 @@
 """Validation file page - displays a specific to_validate file."""
 
+import asyncio
 import csv
 import shutil
 from pathlib import Path
@@ -8,18 +9,46 @@ from typing import Any, Dict, List
 from nicegui import app as nicegui_app
 from nicegui import ui
 
+from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
+from genetics_viz.components.search_stats import show_stats_dialog
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
+from genetics_viz.utils.column_names import (
+    apply_width_constraints,
+    get_column_group,
+    get_column_sorting,
+    get_display_label,
+)
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.validation_badges import build_validation_badge
+from genetics_viz.utils.clinvar import (
+    format_clinvar_display,
+    get_clinvar_color,
+)
 from genetics_viz.utils.vep import (
-    VEP_CONSEQUENCES,
     format_consequence_display,
     get_consequence_color,
 )
+from genetics_viz.utils.view_presets import VIEW_PRESETS
+
+
+def _read_tsv_file(file_path: Path) -> tuple:
+    """Read TSV file and return (headers, rows) tuple.
+
+    Blocking I/O — intended to be called via asyncio.to_thread().
+    """
+    file_data: List[Dict[str, Any]] = []
+    headers: List[str] = []
+    with open(file_path, "r") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        headers = list(reader.fieldnames or [])
+        for row in reader:
+            file_data.append(dict(row))
+    return headers, file_data
 
 
 def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
@@ -118,7 +147,7 @@ def _add_validation_status_to_rows(
 
 
 @ui.page("/validation/file/{filename}")
-def validation_file_page(filename: str) -> None:
+async def validation_file_page(filename: str) -> None:
     """Render a specific to_validate file."""
     create_header()
 
@@ -184,14 +213,8 @@ def validation_file_page(filename: str) -> None:
                 )
                 return
 
-            # Read TSV file
-            file_data: List[Dict[str, Any]] = []
-            headers: List[str] = []
-            with open(file_path, "r") as f:
-                reader = csv.DictReader(f, delimiter="\t")
-                headers = list(reader.fieldnames or [])
-                for row in reader:
-                    file_data.append(dict(row))
+            # Read TSV file (offloaded to thread to avoid blocking event loop)
+            headers, file_data = await asyncio.to_thread(_read_tsv_file, file_path)
 
             if not file_data:
                 ui.label("No data in selected file").classes("text-gray-500 italic")
@@ -220,68 +243,105 @@ def validation_file_page(filename: str) -> None:
                     f"⚠️ Warning: Missing required columns: {', '.join(missing)}"
                 ).classes("text-orange-600 text-sm mb-2")
 
-            # Load validation data
+            # Load validation data (offloaded to thread)
             validation_file = store.data_dir / "validations" / "snvs.tsv"
-            validation_map = _load_validation_map(validation_file)
+            validation_map = await asyncio.to_thread(_load_validation_map, validation_file)
 
             # Add Validation status to each row
             _add_validation_status_to_rows(
                 file_data, validation_map, fid_col, variant_col, sample_col
             )
 
-            # Add gene badge information for columns containing "symbol" or "gene"
+            # Build badge data for gene, consequence, and ClinVar columns
             gene_scorer = get_gene_scorer()
             for row in file_data:
-                # Check all columns for gene/symbol data
                 for col_name in headers:
-                    if "symbol" in col_name.lower() or (
-                        col_name.lower() == "gene" or "gene" in col_name.lower()
-                    ):
+                    col_lower = col_name.lower()
+
+                    # Gene/symbol columns → gene_badge
+                    if "symbol" in col_lower or "gene" in col_lower:
                         value = row.get(col_name, "")
                         if value and value != "-":
-                            gene_badges = []
-                            # Split by comma for multiple genes
                             genes = [
                                 g.strip() for g in str(value).split(",") if g.strip()
                             ]
-                            for gene in genes:
-                                color = gene_scorer.get_gene_color(gene)
-                                tooltip = gene_scorer.get_gene_tooltip(gene)
-                                gene_badges.append(
-                                    {
-                                        "label": gene,
-                                        "color": color,
-                                        "tooltip": tooltip,
-                                    }
-                                )
-                            row[f"{col_name}_badges"] = gene_badges
+                            row[f"{col_name}_badges"] = [
+                                {
+                                    "label": gene,
+                                    "color": gene_scorer.get_gene_color(gene),
+                                    "tooltip": gene_scorer.get_gene_tooltip(gene),
+                                }
+                                for gene in genes
+                            ]
                         else:
                             row[f"{col_name}_badges"] = []
 
-                # Process Impact columns - create badges with colors from vep_consequences.yaml
-                if "impact" in col_name.lower():
-                    impact_str = row.get(col_name, "")
-                    if impact_str:
-                        # Split by '&' to handle multiple impacts
-                        impacts = [i.strip() for i in str(impact_str).split("&")]
-                        impact_badges = []
-                        seen_badges = set()  # Track unique (label, color) pairs
-                        for impact in impacts:
-                            if impact:
-                                label = format_consequence_display(impact)
-                                color = get_consequence_color(impact)
-                                badge_key = (label, color)
-                                if badge_key not in seen_badges:
-                                    seen_badges.add(badge_key)
-                                    impact_badges.append(
-                                        {
-                                            "label": label,
-                                            "color": color,
-                                        }
+                    # Consequence / impact columns → badge_list
+                    elif "impact" in col_lower or col_name == "VEP_Consequence":
+                        cons_str = row.get(col_name, "")
+                        if cons_str:
+                            terms = [
+                                t.strip()
+                                for t in str(cons_str).split("&")
+                                if t.strip()
+                            ]
+                            badges = []
+                            seen_badges: set = set()
+                            for term in terms:
+                                label = format_consequence_display(term)
+                                color = get_consequence_color(term)
+                                key = (label, color)
+                                if key not in seen_badges:
+                                    seen_badges.add(key)
+                                    badges.append(
+                                        {"label": label, "color": color}
                                     )
-                        row[f"{col_name}_badges"] = impact_badges
-                    else:
-                        row[f"{col_name}_badges"] = []
+                            row[f"{col_name}_badges"] = badges
+                        else:
+                            row[f"{col_name}_badges"] = []
+
+                    # ClinVar column → badge_list
+                    elif col_name == "VEP_CLIN_SIG":
+                        clin_str = row.get(col_name, "")
+                        if clin_str:
+                            sigs = [
+                                s.strip()
+                                for part in str(clin_str).split(",")
+                                for s in part.split("&")
+                                if s.strip() and s.strip() != "."
+                            ]
+                            badges = []
+                            seen_badges = set()
+                            for sig in sigs:
+                                label = format_clinvar_display(sig)
+                                color = get_clinvar_color(sig)
+                                key = (label, color)
+                                if key not in seen_badges:
+                                    seen_badges.add(key)
+                                    badges.append(
+                                        {"label": label, "color": color}
+                                    )
+                            row[f"{col_name}_badges"] = badges
+                        else:
+                            row[f"{col_name}_badges"] = []
+
+                # Continuous score badges (after per-column processing)
+                for col_name, value_str in list(row.items()):
+                    if value_str and value_str != ".":
+                        try:
+                            value = float(value_str)
+                            badge_info = get_score_color(col_name, value)
+                            if badge_info:
+                                row[f"{col_name}_badge"] = {
+                                    "label": f"{value:.3f}",
+                                    "color": badge_info["color"],
+                                    "tooltip": (
+                                        f"{col_name}: {value:.3f}"
+                                        f" ({badge_info['label']})"
+                                    ),
+                                }
+                        except (ValueError, TypeError):
+                            pass
 
             # Filter state - all statuses selected by default
             all_validation_statuses = [
@@ -295,12 +355,40 @@ def validation_file_page(filename: str) -> None:
                 "value": list(all_validation_statuses)
             }
 
-            # Create filter menu first (before table)
-            create_validation_filter_menu(
-                all_statuses=all_validation_statuses,
-                filter_state=filter_validations,
-                on_change=lambda: refresh_table(),
+            # Column visibility state — all columns visible by default
+            all_columns = list(headers) + ["Validation"]
+            selected_cols: Dict[str, Any] = {"value": list(all_columns)}
+            dt_ref: Dict[str, Any] = {"ref": None}
+
+            def _apply_col_visibility():
+                if dt_ref["ref"]:
+                    visible = ["actions"] + list(selected_cols["value"])
+                    dt_ref["ref"].set_column_visibility(visible)
+
+            # Column selector dialog
+            col_dialog, _sync_col_selector = build_column_selector(
+                all_columns=all_columns,
+                selected_cols=selected_cols,
+                on_visibility_change=_apply_col_visibility,
+                presets=VIEW_PRESETS,
             )
+
+            # Toolbar row: validation filter + Columns + Stats buttons
+            with ui.row().classes("items-center gap-2 w-full"):
+                create_validation_filter_menu(
+                    all_statuses=all_validation_statuses,
+                    filter_state=filter_validations,
+                    on_change=lambda: refresh_table(),
+                )
+                ui.space()
+                ui.button(
+                    "Columns", icon="view_column",
+                    on_click=col_dialog.open,
+                ).props("outline color=blue size=sm")
+                ui.button(
+                    "Stats", icon="bar_chart",
+                    on_click=lambda: show_stats_dialog(file_data),
+                ).props("outline color=blue size=sm")
 
             # Table container
             table_container = ui.column().classes("w-full")
@@ -339,7 +427,7 @@ def validation_file_page(filename: str) -> None:
                             "text-sm text-gray-600 mb-2"
                         )
 
-                    # Prepare columns for table
+                    # Prepare columns for table (same pattern as search/wombat pages)
                     columns: List[Dict[str, Any]] = [
                         {
                             "id": "actions",
@@ -352,29 +440,32 @@ def validation_file_page(filename: str) -> None:
                             "sortable": False,
                         }
                     ]
-                    for header in headers:
+                    for col in all_columns:
                         col_def: Dict[str, Any] = {
-                            "id": header,
-                            "header": header,
+                            "id": col,
+                            "header": get_display_label(col),
+                            "group": get_column_group(col),
+                            "sorting": get_column_sorting(col),
                             "sortable": True,
                         }
-                        header_lower = header.lower()
-                        if "symbol" in header_lower or "gene" in header_lower:
+                        col_lower = col.lower()
+                        if col == "Validation":
+                            col_def["cellType"] = "validation"
+                        elif col == "Variant":
+                            col_def["sorting"] = "genomic"
+                        elif "symbol" in col_lower or col_lower == "gene" or "gene" in col_lower:
                             col_def["cellType"] = "gene_badge"
-                            col_def["badgesField"] = f"{header}_badges"
-                        elif "impact" in header_lower:
+                            col_def["badgesField"] = f"{col}_badges"
+                        elif "impact" in col_lower or col == "VEP_Consequence":
                             col_def["cellType"] = "badge_list"
-                            col_def["badgesField"] = f"{header}_badges"
+                            col_def["badgesField"] = f"{col}_badges"
+                        elif col == "VEP_CLIN_SIG":
+                            col_def["cellType"] = "badge_list"
+                            col_def["badgesField"] = f"{col}_badges"
+                        else:
+                            col_def["cellType"] = "score_badge"
+                        apply_width_constraints(col_def, col)
                         columns.append(col_def)
-                    # Add Validation column
-                    columns.append(
-                        {
-                            "id": "Validation",
-                            "header": "Validation",
-                            "cellType": "validation",
-                            "sortable": True,
-                        }
-                    )
 
                     # Handle view button click
                     def on_view_variant(e):
@@ -443,11 +534,12 @@ def validation_file_page(filename: str) -> None:
                         except Exception as ex:
                             ui.notify(f"Error parsing variant: {ex}", type="warning")
 
-                    DataTable(
+                    dt_ref["ref"] = DataTable(
                         columns=columns,
                         rows=filtered_data,
                         row_key=variant_col if has_variant else "Variant",
                         pagination={"rowsPerPage": 50},
+                        visible_columns=["actions"] + list(selected_cols["value"]),
                         on_row_action=on_view_variant,
                     )
 

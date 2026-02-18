@@ -3,8 +3,6 @@
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-import polars as pl
-import yaml
 from nicegui import ui
 
 from genetics_viz.components.sv_dialog import show_sv_dialog
@@ -21,49 +19,15 @@ from genetics_viz.utils.column_names import (
     reorder_columns_by_group,
 )
 from genetics_viz.utils.gene_scoring import get_gene_scorer
-
-
-# Load WisecondorX thresholds and colors from YAML
-def _load_wisecondorx_config():
-    config_path = (
-        Path(__file__).parent.parent.parent.parent
-        / "config"
-        / "wisecondorx_thresholds.yaml"
-    )
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
-
-
-WISECONDORX_CONFIG = _load_wisecondorx_config()
+from genetics_viz.utils.wisecondorx import (
+    WISECONDORX_CONFIG,
+    build_call_colors,
+    build_color_thresholds,
+    parse_wisecondorx_bed_for_display,
+)
 
 
 _GENE_BADGE_COLUMNS = {"genic_symbol", "genic_ensg", "exonic_symbol", "exonic_ensg", "VEP_Gene"}
-
-
-def _build_svs_color_thresholds(metric: str) -> list[dict]:
-    """Build color_scale threshold list for ratio or zscore columns."""
-    robust_loss = WISECONDORX_CONFIG["robust_loss"]
-    permissive_loss = WISECONDORX_CONFIG["permissive_loss"]
-    robust_gain = WISECONDORX_CONFIG["robust_gain"]
-    permissive_gain = WISECONDORX_CONFIG["permissive_gain"]
-
-    key = f"{metric}_threshold"
-    return [
-        {"op": "<=", "value": robust_loss[key], "color": robust_loss["color"], "weight": "bold"},
-        {"op": "<=", "value": permissive_loss[key], "color": permissive_loss["color"], "weight": "600"},
-        {"op": ">=", "value": robust_gain[key], "color": robust_gain["color"], "weight": "bold"},
-        {"op": ">=", "value": permissive_gain[key], "color": permissive_gain["color"], "weight": "600"},
-    ]
-
-
-def _build_svs_call_colors() -> dict[str, str]:
-    """Build call label -> color mapping from WisecondorX config."""
-    return {
-        WISECONDORX_CONFIG["robust_loss"]["label"]: WISECONDORX_CONFIG["robust_loss"]["color"],
-        WISECONDORX_CONFIG["permissive_loss"]["label"]: WISECONDORX_CONFIG["permissive_loss"]["color"],
-        WISECONDORX_CONFIG["robust_gain"]["label"]: WISECONDORX_CONFIG["robust_gain"]["color"],
-        WISECONDORX_CONFIG["permissive_gain"]["label"]: WISECONDORX_CONFIG["permissive_gain"]["color"],
-    }
 
 
 def render_svs_tab(
@@ -218,190 +182,10 @@ def render_wisecondorx_subtab(
 
     # Display BED file content in a table
     try:
-        # Read BED file - the format uses spaces for numeric columns and tabs for gene columns
-        # We need to handle this mixed delimiter format
-        with open(aberrations_file, "r") as f:
-            lines = f.readlines()
-
-        if not lines:
+        df = parse_wisecondorx_bed_for_display(aberrations_file)
+        if df is None or len(df) == 0:
             ui.label("File is empty").classes("text-gray-500 italic")
             return
-
-        # Parse header - split by any whitespace
-        header = lines[0].strip().split()
-
-        # Parse data rows
-        data = []
-        for line in lines[1:]:
-            if not line.strip():
-                continue
-            # Split by whitespace (spaces and tabs)
-            parts = line.strip().split()
-            # Expecting at least 7 columns (chr start end ratio zscore type barcode)
-            # Plus 4 gene columns which may be empty
-            if len(parts) >= 7:
-                # Pad with empty strings if gene columns are missing
-                while len(parts) < len(header):
-                    parts.append("")
-                data.append(parts[: len(header)])
-
-        # Create DataFrame
-        df = pl.DataFrame(
-            {
-                col: [row[i] if i < len(row) else "" for row in data]
-                for i, col in enumerate(header)
-            }
-        )
-
-        # Convert numeric columns
-        numeric_cols = ["start", "end", "ratio", "zscore"]
-        for col in numeric_cols:
-            if col in df.columns:
-                df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False))
-
-        # Rename barcode column to sample if it exists
-        if "barcode" in df.columns:
-            df = df.rename({"barcode": "sample"})
-
-        # Create chr:start-end column if chr, start, and end columns exist
-        if "chr" in df.columns and "start" in df.columns and "end" in df.columns:
-            # Ensure chr column starts with "chr" prefix
-            df = df.with_columns(
-                pl.when(pl.col("chr").cast(pl.Utf8).str.starts_with("chr"))
-                .then(pl.col("chr").cast(pl.Utf8))
-                .otherwise(pl.lit("chr") + pl.col("chr").cast(pl.Utf8))
-                .alias("chr_prefixed")
-            )
-
-            # Create the combined column (cast to int first to avoid .0 decimals)
-            df = df.with_columns(
-                (
-                    pl.col("chr_prefixed")
-                    + ":"
-                    + pl.col("start").cast(pl.Int64).cast(pl.Utf8)
-                    + "-"
-                    + pl.col("end").cast(pl.Int64).cast(pl.Utf8)
-                ).alias("chr:start-end")
-            )
-
-            # Compute svlen (end - start) before dropping coordinate columns
-            df = df.with_columns(
-                (pl.col("end").cast(pl.Int64) - pl.col("start").cast(pl.Int64)).alias("svlen")
-            )
-
-            # Drop the temporary and original columns
-            df = df.drop(["chr_prefixed", "chr", "start", "end"])
-
-        # Create gene column combining genic_symbol and exonic_symbol
-        if "genic_symbol" in df.columns and "exonic_symbol" in df.columns:
-            # For each row, combine genes and mark which are exonic
-            # Format: "gene1:exonic,gene2:genic,gene3:exonic"
-            def create_gene_list(genic, exonic):
-                genic_genes = (
-                    set(str(genic).split(",")) if genic and str(genic) != "" else set()
-                )
-                exonic_genes = (
-                    set(str(exonic).split(","))
-                    if exonic and str(exonic) != ""
-                    else set()
-                )
-
-                # Remove empty strings
-                genic_genes.discard("")
-                exonic_genes.discard("")
-
-                # Create combined list with tags
-                result = []
-                for gene in exonic_genes:
-                    result.append(f"{gene.strip()}:exonic")
-                for gene in genic_genes:
-                    if gene.strip() not in exonic_genes:
-                        result.append(f"{gene.strip()}:genic")
-
-                return ",".join(result) if result else ""
-
-            # Apply the function
-            df = df.with_columns(
-                pl.struct(["genic_symbol", "exonic_symbol"])
-                .map_elements(
-                    lambda row: create_gene_list(
-                        row["genic_symbol"], row["exonic_symbol"]
-                    ),
-                    return_dtype=pl.Utf8,
-                )
-                .alias("gene")
-            )
-
-            # Reorder columns to put chr:start-end and gene first
-            priority_cols = (
-                ["chr:start-end", "gene"] if "chr:start-end" in df.columns else ["gene"]
-            )
-            other_cols = [col for col in df.columns if col not in priority_cols]
-            df = df.select(priority_cols + other_cols)
-        elif "chr:start-end" in df.columns:
-            # Just reorder if no gene columns
-            other_cols = [col for col in df.columns if col != "chr:start-end"]
-            df = df.select(["chr:start-end"] + other_cols)
-
-        # Add CNV call classification based on ratio and zscore
-        if "ratio" in df.columns and "zscore" in df.columns:
-
-            def classify_cnv(ratio, zscore):
-                """Classify CNV based on ratio (log2) and zscore thresholds."""
-                try:
-                    r = float(ratio) if ratio and str(ratio) != "" else 0
-                    z = float(zscore) if zscore and str(zscore) != "" else 0
-
-                    robust_loss = WISECONDORX_CONFIG["robust_loss"]
-                    permissive_loss = WISECONDORX_CONFIG["permissive_loss"]
-                    robust_gain = WISECONDORX_CONFIG["robust_gain"]
-                    permissive_gain = WISECONDORX_CONFIG["permissive_gain"]
-
-                    # Robust calls
-                    if (
-                        r <= robust_loss["ratio_threshold"]
-                        and z <= robust_loss["zscore_threshold"]
-                    ):
-                        return robust_loss["label"]
-                    elif (
-                        r >= robust_gain["ratio_threshold"]
-                        and z >= robust_gain["zscore_threshold"]
-                    ):
-                        return robust_gain["label"]
-                    # Permissive calls
-                    elif (
-                        r <= permissive_loss["ratio_threshold"]
-                        and z <= permissive_loss["zscore_threshold"]
-                    ):
-                        return permissive_loss["label"]
-                    elif (
-                        r >= permissive_gain["ratio_threshold"]
-                        and z >= permissive_gain["zscore_threshold"]
-                    ):
-                        return permissive_gain["label"]
-                    else:
-                        return "Below threshold"
-                except:
-                    return "N/A"
-
-            df = df.with_columns(
-                pl.struct(["ratio", "zscore"])
-                .map_elements(
-                    lambda row: classify_cnv(row["ratio"], row["zscore"]),
-                    return_dtype=pl.Utf8,
-                )
-                .alias("call")
-            )
-
-            # Reorder to put call after chr:start-end and gene
-            if "chr:start-end" in df.columns and "gene" in df.columns:
-                priority_cols = ["chr:start-end", "gene", "call"]
-                other_cols = [col for col in df.columns if col not in priority_cols]
-                df = df.select(priority_cols + other_cols)
-            elif "chr:start-end" in df.columns:
-                priority_cols = ["chr:start-end", "call"]
-                other_cols = [col for col in df.columns if col not in priority_cols]
-                df = df.select(priority_cols + other_cols)
 
         # Convert to list of dicts for NiceGUI table
         all_rows = df.to_dicts()
@@ -675,9 +459,9 @@ def render_wisecondorx_subtab(
                         if r.get("call") in selected_calls["value"]
                     ]
 
-                ratio_thresholds = _build_svs_color_thresholds("ratio")
-                zscore_thresholds = _build_svs_color_thresholds("zscore")
-                call_colors = _build_svs_call_colors()
+                ratio_thresholds = build_color_thresholds("ratio")
+                zscore_thresholds = build_color_thresholds("zscore")
+                call_colors = build_call_colors()
 
                 def make_columns(visible_cols):
                     cols = [

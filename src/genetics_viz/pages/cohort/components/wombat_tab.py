@@ -24,6 +24,7 @@ from genetics_viz.utils.column_names import (
     reorder_columns_by_group,
 )
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.genesets import load_genesets
 from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.clinvar import (
     CLINVAR_COLORS,
@@ -100,20 +101,7 @@ def render_wombat_tab(
         return
 
     # Load genesets from params/genesets (once, shared across all configs)
-    genesets_dir = store.data_dir / "params" / "genesets"
-    available_genesets: Dict[str, set] = {}
-    if genesets_dir.exists():
-        for geneset_file in genesets_dir.glob("*.tsv"):
-            geneset_name = geneset_file.stem
-            genes: set = set()
-            with open(geneset_file, "r") as f:
-                next(f, None)  # Skip header line
-                for line in f:
-                    gene = line.strip()
-                    if gene:
-                        genes.add(gene.upper())
-            if genes:
-                available_genesets[geneset_name] = genes
+    available_genesets = load_genesets(store.data_dir)
 
     # Create dictionaries to store data for each wombat config
     wombat_data: Dict[str, Dict[str, Any]] = {}

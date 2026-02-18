@@ -5,6 +5,26 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-02-18
+
+### Added
+- **Inheritance inference** — variant dialog auto-infers inheritance mode from VCF genotypes
+- **Search TSV export** — download search results as TSV or save as validation file
+- **Validation file stats** — stats dialog (chromosome distribution, consequence/status charts, ideogram) now available on validation file pages
+- **Validation file badges** — gene, consequence, ClinVar, and score badges in validation file tables
+- **Validation file column selector** — column visibility dialog with presets for validation pages
+- **CRAM version check script** — `utils/check_cram_version.sh` checks IGV.js compatibility via magic bytes
+- **FID column** added to all view presets
+
+### Refactored
+- Extracted `utils/locus.py` — centralized locus query parsing and filtering (from search.py)
+- Extracted `utils/genesets.py` — shared geneset loading (was duplicated in 3 places)
+- Extracted `utils/wisecondorx.py` — WisecondorX parsing, CNV classification, and color utilities (from svs_tab.py)
+- Extracted `components/search_stats.py` — reusable stats dialog (from search.py)
+
+### Changed
+- Validation all/statistics pages now async with offloaded I/O
+
 ## [0.3.0] - 2026-02-16
 
 ### Added

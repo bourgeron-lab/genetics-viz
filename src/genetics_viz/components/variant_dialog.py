@@ -90,6 +90,74 @@ def _update_ignore_status(
     return True
 
 
+# Genotype values that indicate the allele is carried (het or hom-alt)
+_GT_CARRIES = {"0/1", "1/0", "1/1"}
+# Genotype value that confirms absence (hom-ref)
+_GT_ABSENT = {"0/0"}
+# Missing / not-tested sentinel values
+_GT_MISSING = {"./.", ".", ""}
+
+
+def _infer_inheritance(sample_gt: str, father_gt: str, mother_gt: str) -> str:
+    """Infer inheritance mode from VCF-style genotype strings.
+
+    Args:
+        sample_gt: Child/sample genotype (e.g. "0/1", "1/1", "0/0")
+        father_gt: Father's genotype
+        mother_gt: Mother's genotype
+
+    Returns:
+        One of the inheritance dropdown values:
+        "unknown", "de novo", "paternal", "maternal",
+        "not paternal", "not maternal", "either", "homozygous"
+    """
+    s = sample_gt.strip() if sample_gt else ""
+    f = father_gt.strip() if father_gt else ""
+    m = mother_gt.strip() if mother_gt else ""
+
+    f_carries = f in _GT_CARRIES
+    f_absent = f in _GT_ABSENT
+    f_missing = f in _GT_MISSING
+
+    m_carries = m in _GT_CARRIES
+    m_absent = m in _GT_ABSENT
+    m_missing = m in _GT_MISSING
+
+    # --- Hom-alt sample (1/1) ---
+    if s == "1/1":
+        # Both parents carry → homozygous (autosomal recessive)
+        if f_carries and m_carries:
+            return "homozygous"
+        return "unknown"
+
+    # --- Het sample (0/1 or 1/0) ---
+    if s in ("0/1", "1/0"):
+        # Both parents known
+        if f_carries and m_carries:
+            return "either"
+        if f_carries and m_absent:
+            return "paternal"
+        if f_absent and m_carries:
+            return "maternal"
+        if f_absent and m_absent:
+            return "de novo"
+
+        # One parent known, other missing
+        if f_carries and m_missing:
+            return "paternal"
+        if m_carries and f_missing:
+            return "maternal"
+        if f_absent and m_missing:
+            return "not paternal"
+        if m_absent and f_missing:
+            return "not maternal"
+
+        return "unknown"
+
+    # --- All other cases (0/0, ./., missing, etc.) ---
+    return "unknown"
+
+
 def show_variant_dialog(
     cohort_name: str,
     family_id: str,
@@ -562,6 +630,11 @@ def show_variant_dialog(
                         user_input.value = default_user
 
                         ui.label("Inheritance:").classes("font-semibold ml-4")
+                        inferred_inheritance = _infer_inheritance(
+                            variant_data.get("sample_gt", ""),
+                            variant_data.get("father_gt", ""),
+                            variant_data.get("mother_gt", ""),
+                        )
                         inheritance_select = (
                             ui.select(
                                 [
@@ -574,7 +647,7 @@ def show_variant_dialog(
                                     "either",
                                     "homozygous",
                                 ],
-                                value="unknown",
+                                value=inferred_inheritance,
                             )
                             .props("outlined dense")
                             .classes("w-40")

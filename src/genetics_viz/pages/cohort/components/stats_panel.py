@@ -9,6 +9,7 @@ import polars as pl
 from nicegui import run, ui
 
 from genetics_viz.models import Cohort, DataStore
+from genetics_viz.utils.genesets import load_genesets
 
 
 
@@ -29,25 +30,6 @@ def _discover_wombat_configs(
         if m:
             configs.add(m.group(2))
     return sorted(configs)
-
-
-def _load_geneset_genes(store: DataStore) -> Dict[str, Set[str]]:
-    """Load geneset gene lists from params/genesets/*.tsv."""
-    genesets_dir = store.data_dir / "params" / "genesets"
-    result: Dict[str, Set[str]] = {}
-    if not genesets_dir.exists():
-        return result
-    for geneset_file in genesets_dir.glob("*.tsv"):
-        genes: Set[str] = set()
-        with open(geneset_file) as f:
-            next(f, None)  # skip header
-            for line in f:
-                gene = line.strip()
-                if gene:
-                    genes.add(gene.upper())
-        if genes:
-            result[geneset_file.stem] = genes
-    return result
 
 
 def _find_wombat_file(
@@ -129,7 +111,7 @@ def render_stats_panel(
         return
 
     # Load geneset gene lists and metadata
-    geneset_genes = _load_geneset_genes(store)
+    geneset_genes = load_genesets(store.data_dir)
     geneset_names = sorted(geneset_genes.keys())
 
     if not geneset_names:

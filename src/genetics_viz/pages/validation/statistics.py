@@ -1,5 +1,6 @@
 """Validation statistics page."""
 
+import asyncio
 import csv
 from collections import Counter
 from datetime import datetime
@@ -12,7 +13,7 @@ from genetics_viz.utils.data import get_data_store
 
 
 @ui.page("/validation/statistics")
-def validation_statistics_page() -> None:
+async def validation_statistics_page() -> None:
     """Render the validation statistics page."""
     create_header()
 
@@ -58,7 +59,9 @@ def validation_statistics_page() -> None:
 
                 return all_validations, ignored_count
 
-            all_validations_data, total_ignored_count = load_all_validations()
+            all_validations_data, total_ignored_count = await asyncio.to_thread(
+                load_all_validations
+            )
 
             if not all_validations_data:
                 ui.label("No validation data available").classes(

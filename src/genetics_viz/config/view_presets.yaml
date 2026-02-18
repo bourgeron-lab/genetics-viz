@@ -11,6 +11,7 @@ presets:
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
       - sample
+      - FID
       - sample_gt
       - father_gt
       - mother_gt
@@ -26,6 +27,7 @@ presets:
       - fafmax_faf95_max_genomes
       - nhomalt_genomes
       - sample
+      - FID
       - sex
       - sample_gt
       - father_gt
@@ -44,6 +46,7 @@ presets:
       - popEVE
       - am_pathogenicity
       - sample
+      - FID
       - sample_gt
       - father_gt
       - mother_gt
@@ -60,6 +63,7 @@ presets:
       - SpliceAI_maxDS
       - SpliceAI_symbol
       - sample
+      - FID
       - sample_gt
       - father_gt
       - mother_gt
