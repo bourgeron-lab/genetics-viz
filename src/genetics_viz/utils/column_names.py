@@ -36,10 +36,7 @@ def get_column_group(col: str) -> str:
 
 def get_dropped_columns() -> set:
     """Return the set of column IDs marked with ``drop: true`` in YAML."""
-    return {
-        col for col, entry in COLUMN_NAMES.items()
-        if entry.get("drop") is True
-    }
+    return {col for col, entry in COLUMN_NAMES.items() if entry.get("drop") is True}
 
 
 _TYPE_MAP: Dict[str, pl.DataType] = {
@@ -60,11 +57,34 @@ def get_schema_overrides() -> Dict[str, pl.DataType]:
     return overrides
 
 
+_NUMERICAL_TYPES = {"int", "float"}
+
+
 def get_column_sorting(col: str) -> str:
-    """Return the sorting strategy for a column. Empty string means default."""
+    """Return the sorting strategy for a column. Empty string means default.
+
+    Columns with ``type: int`` or ``type: float`` in YAML automatically
+    use ``"numerical"`` sorting unless an explicit ``sorting`` field overrides.
+    """
     entry = COLUMN_NAMES.get(col)
     if entry:
-        return entry.get("sorting", "")
+        explicit = entry.get("sorting")
+        if explicit:
+            return explicit
+        if entry.get("type") in _NUMERICAL_TYPES:
+            return "numerical"
+        return ""
+    return ""
+
+
+def get_column_type(col: str) -> str:
+    """Return the YAML type for a column ('int', 'float', 'string', etc.).
+
+    Empty string means no type was specified.
+    """
+    entry = COLUMN_NAMES.get(col)
+    if entry:
+        return entry.get("type", "")
     return ""
 
 

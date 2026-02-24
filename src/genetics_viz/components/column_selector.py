@@ -55,9 +55,7 @@ def build_column_selector(
         _syncing["value"] = False
 
     def _reorder_and_apply():
-        selected_cols["value"] = [
-            c for c in all_columns if c in selected_cols["value"]
-        ]
+        selected_cols["value"] = [c for c in all_columns if c in selected_cols["value"]]
         on_visibility_change()
         _sync_all()
 
@@ -90,33 +88,29 @@ def build_column_selector(
 
     def _make_preset_handler(preset):
         def handler():
-            available = [
-                c for c in preset.get("columns", []) if c in all_columns
-            ]
+            available = [c for c in preset.get("columns", []) if c in all_columns]
             selected_cols["value"] = available
             _reorder_and_apply()
+
         return handler
 
     # --- Build dialog UI ---
-    with ui.dialog() as dialog, ui.card().classes(
-        "w-[900px] max-w-[95vw]"
-    ).style("padding: 12px 16px;"):
+    with (
+        ui.dialog() as dialog,
+        ui.card().classes("w-[900px] max-w-[95vw]").style("padding: 12px 16px;"),
+    ):
         # Header + All/None + presets — single compact row
         with ui.row().classes("w-full items-center gap-2 flex-wrap"):
             ui.label("Columns").classes("text-sm font-semibold mr-1")
-            ui.button("All", on_click=_select_all).props(
-                "size=xs outline dense"
-            )
-            ui.button("None", on_click=_select_none).props(
-                "size=xs outline dense"
-            )
+            ui.button("All", on_click=_select_all).props("size=xs outline dense")
+            ui.button("None", on_click=_select_none).props("size=xs outline dense")
             if presets:
                 ui.separator().props("vertical").classes("h-5")
                 for preset in presets:
                     label = preset["name"].replace(" View", "")
-                    ui.button(
-                        label, on_click=_make_preset_handler(preset)
-                    ).props("size=xs flat dense").classes("text-xs")
+                    ui.button(label, on_click=_make_preset_handler(preset)).props(
+                        "size=xs flat dense"
+                    ).classes("text-xs")
             ui.space()
             ui.button(icon="close", on_click=dialog.close).props(
                 "flat round dense size=xs"
@@ -125,41 +119,43 @@ def build_column_selector(
         ui.separator().classes("my-1")
 
         # Column checkboxes — dense CSS multi-column layout
-        with ui.element("div").style(
-            "column-count: 4; column-gap: 1rem;"
-        ):
+        with ui.element("div").style("column-count: 4; column-gap: 1rem;"):
             # Ungrouped columns
             for col in ungrouped:
-                col_cbs[col] = ui.checkbox(
-                    get_display_label(col),
-                    value=col in selected_cols["value"],
-                    on_change=lambda e, c=col: _handle_col(c, e.value),
-                ).props("dense").classes("text-xs w-full")
+                col_cbs[col] = (
+                    ui.checkbox(
+                        get_display_label(col),
+                        value=col in selected_cols["value"],
+                        on_change=lambda e, c=col: _handle_col(c, e.value),
+                    )
+                    .props("dense")
+                    .classes("text-xs w-full")
+                )
 
             # Grouped columns
             for group_name, group_cols in groups.items():
-                with ui.element("div").style(
-                    "break-inside: avoid;"
-                ).classes("mt-2"):
-                    all_checked = all(
-                        c in selected_cols["value"] for c in group_cols
+                with ui.element("div").style("break-inside: avoid;").classes("mt-2"):
+                    all_checked = all(c in selected_cols["value"] for c in group_cols)
+                    group_cbs[group_name] = (
+                        ui.checkbox(
+                            group_name,
+                            value=all_checked,
+                            on_change=lambda e, g=group_name: _handle_group(g, e.value),
+                        )
+                        .props("dense")
+                        .classes("text-xs font-bold")
                     )
-                    group_cbs[group_name] = ui.checkbox(
-                        group_name,
-                        value=all_checked,
-                        on_change=lambda e, g=group_name: _handle_group(
-                            g, e.value
-                        ),
-                    ).props("dense").classes("text-xs font-bold")
 
                     with ui.column().classes("pl-5 gap-0"):
                         for col in group_cols:
-                            col_cbs[col] = ui.checkbox(
-                                get_display_label(col),
-                                value=col in selected_cols["value"],
-                                on_change=lambda e, c=col: _handle_col(
-                                    c, e.value
-                                ),
-                            ).props("dense").classes("text-xs")
+                            col_cbs[col] = (
+                                ui.checkbox(
+                                    get_display_label(col),
+                                    value=col in selected_cols["value"],
+                                    on_change=lambda e, c=col: _handle_col(c, e.value),
+                                )
+                                .props("dense")
+                                .classes("text-xs")
+                            )
 
     return dialog, _sync_all

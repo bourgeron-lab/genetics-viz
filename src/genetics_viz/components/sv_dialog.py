@@ -1252,9 +1252,9 @@ def show_sv_dialog(
                         ui.button(
                             icon="refresh",
                             on_click=_refresh_roi_from_curated,
-                        ).props(
-                            "flat round dense size=sm color=blue"
-                        ).tooltip("Refresh IGV ROI to curated coordinates")
+                        ).props("flat round dense size=sm color=blue").tooltip(
+                            "Refresh IGV ROI to curated coordinates"
+                        )
 
                     with ui.row().classes("items-center gap-4 w-full"):
                         ui.label("Comment:").classes("font-semibold")

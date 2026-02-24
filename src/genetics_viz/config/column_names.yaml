@@ -356,3 +356,7 @@ gene:
   group: ""
   min_width: 400
   max_width: 400
+svlen:
+  name: "svlen"
+  group: ""
+  type: int

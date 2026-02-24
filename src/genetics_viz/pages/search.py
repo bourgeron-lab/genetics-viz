@@ -16,8 +16,16 @@ from nicegui import context, ui
 from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.search_stats import show_stats_dialog
 from genetics_viz.components.filters import create_validation_filter_menu
-from genetics_viz.utils.locus import filter_bed_dataframe, filter_dataframe, parse_locus_query
-from genetics_viz.utils.wisecondorx import parse_wisecondorx_bed
+from genetics_viz.utils.locus import (
+    filter_bed_dataframe,
+    filter_dataframe,
+    parse_locus_query,
+)
+from genetics_viz.utils.wisecondorx import (
+    WISECONDORX_CONFIG,
+    build_call_colors,
+    parse_wisecondorx_bed,
+)
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
@@ -31,6 +39,7 @@ from genetics_viz.utils.column_names import (
     apply_width_constraints,
     get_column_group,
     get_column_sorting,
+    get_column_type,
     get_display_label,
     get_dropped_columns,
     get_schema_overrides,
@@ -53,9 +62,6 @@ from genetics_viz.utils.vep import (
 )
 
 
-
-
-
 # Keys that are internal/display-only and should never appear in TSV exports
 _INTERNAL_KEYS = {
     "_source_type",
@@ -63,6 +69,7 @@ _INTERNAL_KEYS = {
     "_is_snv",
     "_original_locus",
     "_curated_tooltip",
+    "_wisecondorx_tooltip",
     "IsCurated",
     "ConsequenceBadges",
     "ClinVarBadges",
@@ -161,7 +168,9 @@ def _apply_curated_coordinates(
     row["chr:start-end"] = f"{chrom}:{new_start}-{new_end}"
     row["Variant"] = row["chr:start-end"]
     row["IsCurated"] = True
-    row["_curated_tooltip"] = f"Original: {original_locus}\nCurated: {row['chr:start-end']}"
+    row["_curated_tooltip"] = (
+        f"Original: {original_locus}\nCurated: {row['chr:start-end']}"
+    )
     # Recompute svlen from curated boundaries
     try:
         row["svlen"] = int(new_end) - int(new_start)
@@ -238,6 +247,10 @@ def search_cohort_page(cohort_name: str) -> None:
     ui.add_head_html("""
         <script src="https://cdn.jsdelivr.net/npm/igv@2.15.11/dist/igv.min.js"></script>
     """)
+    ui.add_css("""
+        .exclude-input-wrap .q-field__control:before,
+        .exclude-input-wrap .q-field__control:after { border: none !important; }
+    """)
 
     try:
         store = get_data_store()
@@ -287,7 +300,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     if subdir_name == "wisecondorx":
                         bed_file = subdir / f"{cohort_name}_aberrations.bed"
                         if not bed_file.exists():
-                            bed_file = subdir / f"{cohort_name}_aberrations.annotated.bed"
+                            bed_file = (
+                                subdir / f"{cohort_name}_aberrations.annotated.bed"
+                            )
                         if bed_file.exists():
                             source_files.append(
                                 {
@@ -311,27 +326,27 @@ def search_cohort_page(cohort_name: str) -> None:
 
             # Load pedigree data from the already-parsed Cohort object
             pedigree_data = _pedigree_data_from_cohort(cohort_name)
-            sample_to_family = {
-                sid: ped["FID"] for sid, ped in pedigree_data.items()
-            }
+            sample_to_family = {sid: ped["FID"] for sid, ped in pedigree_data.items()}
 
             # Derive unique sex and phenotype values for individual filters
             # Exclude missing-value sentinels ("", "0", "-9") from the option lists
             available_sex_values = sorted(
-                {v.get("Sex", "") for v in pedigree_data.values()}
-                - _PED_MISSING
+                {v.get("Sex", "") for v in pedigree_data.values()} - _PED_MISSING
             )
             available_phenotype_values = sorted(
-                {v.get("Phenotype", "") for v in pedigree_data.values()}
-                - _PED_MISSING
+                {v.get("Phenotype", "") for v in pedigree_data.values()} - _PED_MISSING
             )
 
             # Load genesets from params/genesets
             available_genesets = load_genesets(store.data_dir)
 
             # Separate source lists by type for UI
-            wombat_sources = [sf for sf in source_files if sf["source_type"] == "wombat"]
-            wcx_sources = [sf for sf in source_files if sf["source_type"] == "wisecondorx"]
+            wombat_sources = [
+                sf for sf in source_files if sf["source_type"] == "wombat"
+            ]
+            wcx_sources = [
+                sf for sf in source_files if sf["source_type"] == "wisecondorx"
+            ]
 
             # WisecondorX call values (from svs_tab.py pattern)
             ALL_CALL_VALUES = [
@@ -353,7 +368,15 @@ def search_cohort_page(cohort_name: str) -> None:
                     "locus": {"value": ""},
                     "genesets": {"value": []},
                     "impacts": {"value": list(VEP_CONSEQUENCES.keys())},
-                    "validations": {"value": ["present", "absent", "uncertain", "conflicting", "TODO"]},
+                    "validations": {
+                        "value": [
+                            "present",
+                            "absent",
+                            "uncertain",
+                            "conflicting",
+                            "TODO",
+                        ]
+                    },
                     "exclude_lcr": {"value": True},
                     "exclude_gnomad": {"value": True},
                     "exclude_gnomad_wgs": {"value": False},
@@ -368,9 +391,19 @@ def search_cohort_page(cohort_name: str) -> None:
                     "source_key": wcx_key,
                     "locus": {"value": ""},
                     "genesets": {"value": []},
-                    "selected_calls": {"value": [c for c in ALL_CALL_VALUES if c != "Below threshold"]},
+                    "selected_calls": {
+                        "value": [c for c in ALL_CALL_VALUES if c != "Below threshold"]
+                    },
                     "exonic_only": {"value": False},
-                    "validations": {"value": ["present", "absent", "uncertain", "conflicting", "TODO"]},
+                    "validations": {
+                        "value": [
+                            "present",
+                            "absent",
+                            "uncertain",
+                            "conflicting",
+                            "TODO",
+                        ]
+                    },
                     "ratio_min": {"value": None},
                     "ratio_max": {"value": None},
                 }
@@ -384,6 +417,7 @@ def search_cohort_page(cohort_name: str) -> None:
             filter_sex: Dict[str, List[str]] = {"value": []}
             filter_phenotype: Dict[str, List[str]] = {"value": []}
             filter_has_parents: Dict[str, bool] = {"value": False}
+            filter_exclude_samples: Dict[str, List[str]] = {"value": []}
 
             # --- Helper: build geneset menu for a component ---
             def _build_geneset_menu(comp: Dict[str, Any]) -> None:
@@ -391,17 +425,20 @@ def search_cohort_page(cohort_name: str) -> None:
                 if not available_genesets:
                     return
                 comp_genesets = comp["genesets"]
-                geneset_btn = (
-                    ui.button("Genesets", icon="list")
-                    .props(
-                        ("outline" if not comp_genesets["value"] else "unelevated color=green")
-                        + " dense size=sm"
+                geneset_btn = ui.button("Genesets", icon="list").props(
+                    (
+                        "outline"
+                        if not comp_genesets["value"]
+                        else "unelevated color=green"
                     )
+                    + " dense size=sm"
                 )
                 btn_ref = {"button": geneset_btn}
                 with geneset_btn:
                     with ui.menu():
-                        ui.label("Select Genesets:").classes("px-4 py-2 font-semibold text-sm")
+                        ui.label("Select Genesets:").classes(
+                            "px-4 py-2 font-semibold text-sm"
+                        )
                         ui.separator()
                         with ui.column().classes("p-2"):
                             gs_cbs: Dict[str, Any] = {}
@@ -409,30 +446,48 @@ def search_cohort_page(cohort_name: str) -> None:
                             def _update_gs_btn():
                                 if btn_ref["button"]:
                                     if comp_genesets["value"]:
-                                        btn_ref["button"].props(remove="outline", add="unelevated color=green")
+                                        btn_ref["button"].props(
+                                            remove="outline",
+                                            add="unelevated color=green",
+                                        )
                                     else:
-                                        btn_ref["button"].props(remove="unelevated color=green", add="outline")
+                                        btn_ref["button"].props(
+                                            remove="unelevated color=green",
+                                            add="outline",
+                                        )
                                     btn_ref["button"].update()
 
                             with ui.row().classes("gap-2 mb-2"):
-                                def _gs_all(cbs=gs_cbs, st=comp_genesets, upd=_update_gs_btn):
+
+                                def _gs_all(
+                                    cbs=gs_cbs, st=comp_genesets, upd=_update_gs_btn
+                                ):
                                     st["value"] = list(available_genesets.keys())
                                     for cb in cbs.values():
                                         cb.value = True
                                     upd()
 
-                                def _gs_none(cbs=gs_cbs, st=comp_genesets, upd=_update_gs_btn):
+                                def _gs_none(
+                                    cbs=gs_cbs, st=comp_genesets, upd=_update_gs_btn
+                                ):
                                     st["value"] = []
                                     for cb in cbs.values():
                                         cb.value = False
                                     upd()
 
-                                ui.button("All", on_click=_gs_all).props("size=sm flat dense").classes("text-xs")
-                                ui.button("None", on_click=_gs_none).props("size=sm flat dense").classes("text-xs")
+                                ui.button("All", on_click=_gs_all).props(
+                                    "size=sm flat dense"
+                                ).classes("text-xs")
+                                ui.button("None", on_click=_gs_none).props(
+                                    "size=sm flat dense"
+                                ).classes("text-xs")
 
                             ui.separator()
                             for gs_name in sorted(available_genesets.keys()):
-                                def make_gs_handler(name, st=comp_genesets, upd=_update_gs_btn):
+
+                                def make_gs_handler(
+                                    name, st=comp_genesets, upd=_update_gs_btn
+                                ):
                                     def handler(e):
                                         if e.value:
                                             if name not in st["value"]:
@@ -441,6 +496,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                             if name in st["value"]:
                                                 st["value"].remove(name)
                                         upd()
+
                                     return handler
 
                                 gs_cbs[gs_name] = ui.checkbox(
@@ -453,55 +509,105 @@ def search_cohort_page(cohort_name: str) -> None:
             def _build_impact_menu(comp: Dict[str, Any]) -> None:
                 """Build an inline impacts dropdown menu for a wombat component."""
                 comp_impacts = comp["impacts"]
-                impact_btn = ui.button("Impacts", icon="filter_list").props("outline dense size=sm")
+                impact_btn = ui.button("Impacts", icon="filter_list").props(
+                    "outline dense size=sm"
+                )
                 btn_ref = {"button": impact_btn}
                 with impact_btn:
                     with ui.menu():
-                        ui.label("Select Impact Types:").classes("px-4 py-2 font-semibold text-sm")
+                        ui.label("Select Impact Types:").classes(
+                            "px-4 py-2 font-semibold text-sm"
+                        )
                         ui.separator()
                         with ui.column().classes("p-2"):
                             imp_cbs: Dict[str, Any] = {}
 
                             def _update_imp_btn():
                                 if btn_ref["button"]:
-                                    if len(comp_impacts["value"]) == len(VEP_CONSEQUENCES):
-                                        btn_ref["button"].props(remove="unelevated color=orange", add="outline")
+                                    if len(comp_impacts["value"]) == len(
+                                        VEP_CONSEQUENCES
+                                    ):
+                                        btn_ref["button"].props(
+                                            remove="unelevated color=orange",
+                                            add="outline",
+                                        )
                                     else:
-                                        btn_ref["button"].props(remove="outline", add="unelevated color=orange")
+                                        btn_ref["button"].props(
+                                            remove="outline",
+                                            add="unelevated color=orange",
+                                        )
                                     btn_ref["button"].update()
 
                             with ui.row().classes("gap-2 mb-2 flex-wrap"):
-                                def _imp_all(cbs=imp_cbs, st=comp_impacts, upd=_update_imp_btn):
+
+                                def _imp_all(
+                                    cbs=imp_cbs, st=comp_impacts, upd=_update_imp_btn
+                                ):
                                     st["value"] = list(VEP_CONSEQUENCES.keys())
                                     for cb in cbs.values():
                                         cb.value = True
                                     upd()
 
-                                def _imp_none(cbs=imp_cbs, st=comp_impacts, upd=_update_imp_btn):
+                                def _imp_none(
+                                    cbs=imp_cbs, st=comp_impacts, upd=_update_imp_btn
+                                ):
                                     st["value"] = []
                                     for cb in cbs.values():
                                         cb.value = False
                                     upd()
 
-                                def _make_level_handler(level, cbs=imp_cbs, st=comp_impacts, upd=_update_imp_btn):
+                                def _make_level_handler(
+                                    level,
+                                    cbs=imp_cbs,
+                                    st=comp_impacts,
+                                    upd=_update_imp_btn,
+                                ):
                                     def handler():
-                                        selected = [c for c, (imp, _) in VEP_CONSEQUENCES.items() if imp == level]
+                                        selected = [
+                                            c
+                                            for c, (imp, _) in VEP_CONSEQUENCES.items()
+                                            if imp == level
+                                        ]
                                         st["value"] = selected
                                         for name, cb in cbs.items():
                                             cb.value = name in selected
                                         upd()
+
                                     return handler
 
-                                ui.button("All", on_click=_imp_all).props("size=sm flat dense").classes("text-xs")
-                                ui.button("None", on_click=_imp_none).props("size=sm flat dense").classes("text-xs")
-                                ui.button("HIGH", on_click=_make_level_handler("HIGH")).props("size=sm flat dense color=red").classes("text-xs")
-                                ui.button("MODERATE", on_click=_make_level_handler("MODERATE")).props("size=sm flat dense color=orange").classes("text-xs")
-                                ui.button("LOW", on_click=_make_level_handler("LOW")).props("size=sm flat dense color=yellow-8").classes("text-xs")
-                                ui.button("MODIFIER", on_click=_make_level_handler("MODIFIER")).props("size=sm flat dense color=grey").classes("text-xs")
+                                ui.button("All", on_click=_imp_all).props(
+                                    "size=sm flat dense"
+                                ).classes("text-xs")
+                                ui.button("None", on_click=_imp_none).props(
+                                    "size=sm flat dense"
+                                ).classes("text-xs")
+                                ui.button(
+                                    "HIGH", on_click=_make_level_handler("HIGH")
+                                ).props("size=sm flat dense color=red").classes(
+                                    "text-xs"
+                                )
+                                ui.button(
+                                    "MODERATE", on_click=_make_level_handler("MODERATE")
+                                ).props("size=sm flat dense color=orange").classes(
+                                    "text-xs"
+                                )
+                                ui.button(
+                                    "LOW", on_click=_make_level_handler("LOW")
+                                ).props("size=sm flat dense color=yellow-8").classes(
+                                    "text-xs"
+                                )
+                                ui.button(
+                                    "MODIFIER", on_click=_make_level_handler("MODIFIER")
+                                ).props("size=sm flat dense color=grey").classes(
+                                    "text-xs"
+                                )
 
                             ui.separator()
                             with ui.column().classes("gap-1"):
-                                def make_imp_handler(cons, st=comp_impacts, upd=_update_imp_btn):
+
+                                def make_imp_handler(
+                                    cons, st=comp_impacts, upd=_update_imp_btn
+                                ):
                                     def handler(e):
                                         if e.value:
                                             if cons not in st["value"]:
@@ -510,12 +616,24 @@ def search_cohort_page(cohort_name: str) -> None:
                                             if cons in st["value"]:
                                                 st["value"].remove(cons)
                                         upd()
+
                                     return handler
 
-                                for impact_level in ["HIGH", "MODERATE", "LOW", "MODIFIER"]:
-                                    consequences = [c for c, (imp, _) in VEP_CONSEQUENCES.items() if imp == impact_level]
+                                for impact_level in [
+                                    "HIGH",
+                                    "MODERATE",
+                                    "LOW",
+                                    "MODIFIER",
+                                ]:
+                                    consequences = [
+                                        c
+                                        for c, (imp, _) in VEP_CONSEQUENCES.items()
+                                        if imp == impact_level
+                                    ]
                                     if consequences:
-                                        ui.label(f"{impact_level}:").classes("text-xs font-bold text-gray-600 mt-2")
+                                        ui.label(f"{impact_level}:").classes(
+                                            "text-xs font-bold text-gray-600 mt-2"
+                                        )
                                         for cons in sorted(consequences):
                                             imp_cbs[cons] = ui.checkbox(
                                                 format_consequence_display(cons),
@@ -527,11 +645,15 @@ def search_cohort_page(cohort_name: str) -> None:
             def _build_call_filter_menu(comp: Dict[str, Any]) -> None:
                 """Build an Impacts dropdown menu for a wisecondorx component."""
                 comp_calls = comp["selected_calls"]
-                call_btn = ui.button("Impacts", icon="filter_list").props("outline dense size=sm")
+                call_btn = ui.button("Impacts", icon="filter_list").props(
+                    "outline dense size=sm"
+                )
                 btn_ref = {"button": call_btn}
                 with call_btn:
                     with ui.menu():
-                        ui.label("Filter by Impact:").classes("px-4 py-2 font-semibold text-sm")
+                        ui.label("Filter by Impact:").classes(
+                            "px-4 py-2 font-semibold text-sm"
+                        )
                         ui.separator()
                         with ui.column().classes("p-2"):
                             call_cbs: Dict[str, Any] = {}
@@ -539,30 +661,48 @@ def search_cohort_page(cohort_name: str) -> None:
                             def _update_call_btn():
                                 if btn_ref["button"]:
                                     if len(comp_calls["value"]) == len(ALL_CALL_VALUES):
-                                        btn_ref["button"].props(remove="unelevated color=orange", add="outline")
+                                        btn_ref["button"].props(
+                                            remove="unelevated color=orange",
+                                            add="outline",
+                                        )
                                     else:
-                                        btn_ref["button"].props(remove="outline", add="unelevated color=orange")
+                                        btn_ref["button"].props(
+                                            remove="outline",
+                                            add="unelevated color=orange",
+                                        )
                                     btn_ref["button"].update()
 
                             with ui.row().classes("gap-2 mb-2"):
-                                def _call_all(cbs=call_cbs, st=comp_calls, upd=_update_call_btn):
+
+                                def _call_all(
+                                    cbs=call_cbs, st=comp_calls, upd=_update_call_btn
+                                ):
                                     st["value"] = list(ALL_CALL_VALUES)
                                     for cb in cbs.values():
                                         cb.value = True
                                     upd()
 
-                                def _call_none(cbs=call_cbs, st=comp_calls, upd=_update_call_btn):
+                                def _call_none(
+                                    cbs=call_cbs, st=comp_calls, upd=_update_call_btn
+                                ):
                                     st["value"] = []
                                     for cb in cbs.values():
                                         cb.value = False
                                     upd()
 
-                                ui.button("All", on_click=_call_all).props("size=sm flat dense").classes("text-xs")
-                                ui.button("None", on_click=_call_none).props("size=sm flat dense").classes("text-xs")
+                                ui.button("All", on_click=_call_all).props(
+                                    "size=sm flat dense"
+                                ).classes("text-xs")
+                                ui.button("None", on_click=_call_none).props(
+                                    "size=sm flat dense"
+                                ).classes("text-xs")
 
                             ui.separator()
                             for call_val in ALL_CALL_VALUES:
-                                def make_call_handler(cv, st=comp_calls, upd=_update_call_btn):
+
+                                def make_call_handler(
+                                    cv, st=comp_calls, upd=_update_call_btn
+                                ):
                                     def handler(e):
                                         if e.value:
                                             if cv not in st["value"]:
@@ -571,6 +711,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                             if cv in st["value"]:
                                                 st["value"].remove(cv)
                                         upd()
+
                                     return handler
 
                                 call_cbs[call_val] = ui.checkbox(
@@ -594,7 +735,9 @@ def search_cohort_page(cohort_name: str) -> None:
                 with ui.row().classes("w-full gap-4 items-start flex-nowrap"):
                     # --- LEFT PANEL: Variants (2/3 width) ---
                     with ui.column().classes("flex-[2]"):
-                        ui.label("Variants").classes("text-sm font-semibold text-gray-600")
+                        ui.label("Variants").classes(
+                            "text-sm font-semibold text-gray-600"
+                        )
 
                         @ui.refreshable
                         def render_component_list():
@@ -612,26 +755,38 @@ def search_cohort_page(cohort_name: str) -> None:
                             # Add buttons row
                             with ui.row().classes("gap-2 mt-1"):
                                 if wombat_sources:
+
                                     def _add_wombat():
-                                        source_components.append(_make_wombat_component())
+                                        source_components.append(
+                                            _make_wombat_component()
+                                        )
                                         render_component_list.refresh()
+
                                     ui.button("+ Wombat", on_click=_add_wombat).props(
                                         "flat dense size=sm color=blue no-caps"
                                     )
                                 if wcx_sources:
+
                                     def _add_wcx():
                                         source_components.append(_make_wcx_component())
                                         render_component_list.refresh()
+
                                     ui.button("+ WisecondorX", on_click=_add_wcx).props(
                                         "flat dense size=sm color=teal no-caps"
                                     )
 
                         def _render_wombat_card(comp: Dict[str, Any]) -> None:
                             """Render a compact wombat source filter card."""
-                            with ui.card().classes("w-full p-2 mb-0").props("flat bordered"):
+                            with (
+                                ui.card()
+                                .classes("w-full p-2 mb-0")
+                                .props("flat bordered")
+                            ):
                                 # Row 1: label + file selector + locus + remove
                                 with ui.row().classes("items-center gap-2 w-full"):
-                                    ui.label("Wombat").classes("text-sm font-semibold text-blue-700")
+                                    ui.label("Wombat").classes(
+                                        "text-sm font-semibold text-blue-700"
+                                    )
                                     wombat_options = {
                                         _source_key(sf): sf["display_name"]
                                         for sf in wombat_sources
@@ -640,7 +795,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                         options=wombat_options,
                                         value=comp["source_key"],
                                         label="Source",
-                                        on_change=lambda e, c=comp: c.update({"source_key": e.value}),
+                                        on_change=lambda e, c=comp: c.update(
+                                            {"source_key": e.value}
+                                        ),
                                     ).props("outlined dense").classes("w-64")
 
                                     loc_input = (
@@ -648,7 +805,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                             label="Locus (optional)",
                                             placeholder="chr1:10000-10100, SHANK3, ENSG...",
                                             value=comp["locus"]["value"],
-                                            on_change=lambda e, c=comp: c["locus"].update({"value": e.value or ""}),
+                                            on_change=lambda e, c=comp: c[
+                                                "locus"
+                                            ].update({"value": e.value or ""}),
                                         )
                                         .props("outlined dense")
                                         .classes("flex-grow")
@@ -659,9 +818,12 @@ def search_cohort_page(cohort_name: str) -> None:
                                     def make_remove_handler(comp_id):
                                         def handler():
                                             source_components[:] = [
-                                                c for c in source_components if c["id"] != comp_id
+                                                c
+                                                for c in source_components
+                                                if c["id"] != comp_id
                                             ]
                                             render_component_list.refresh()
+
                                         return handler
 
                                     ui.button(
@@ -670,11 +832,19 @@ def search_cohort_page(cohort_name: str) -> None:
                                     ).props("flat round dense size=sm color=grey")
 
                                 # Row 2: genesets + impacts + validation + exclude checkboxes
-                                with ui.row().classes("items-center gap-2 w-full flex-wrap"):
+                                with ui.row().classes(
+                                    "items-center gap-2 w-full flex-wrap"
+                                ):
                                     _build_geneset_menu(comp)
                                     _build_impact_menu(comp)
                                     create_validation_filter_menu(
-                                        all_statuses=["present", "absent", "uncertain", "conflicting", "TODO"],
+                                        all_statuses=[
+                                            "present",
+                                            "absent",
+                                            "uncertain",
+                                            "conflicting",
+                                            "TODO",
+                                        ],
                                         filter_state=comp["validations"],
                                         on_change=lambda: None,
                                         label="Validation",
@@ -684,30 +854,44 @@ def search_cohort_page(cohort_name: str) -> None:
                                     ui.checkbox(
                                         "Exclude LCR",
                                         value=comp["exclude_lcr"]["value"],
-                                        on_change=lambda e, c=comp: c["exclude_lcr"].update({"value": e.value}),
+                                        on_change=lambda e, c=comp: c[
+                                            "exclude_lcr"
+                                        ].update({"value": e.value}),
                                     ).props("dense").classes("text-xs")
                                     ui.checkbox(
                                         "Exclude gnomAD filtered",
                                         value=comp["exclude_gnomad"]["value"],
-                                        on_change=lambda e, c=comp: c["exclude_gnomad"].update({"value": e.value}),
+                                        on_change=lambda e, c=comp: c[
+                                            "exclude_gnomad"
+                                        ].update({"value": e.value}),
                                     ).props("dense").classes("text-xs")
                                     ui.checkbox(
                                         "Exclude gnomAD WGS",
                                         value=comp["exclude_gnomad_wgs"]["value"],
-                                        on_change=lambda e, c=comp: c["exclude_gnomad_wgs"].update({"value": e.value}),
+                                        on_change=lambda e, c=comp: c[
+                                            "exclude_gnomad_wgs"
+                                        ].update({"value": e.value}),
                                     ).props("dense").classes("text-xs")
 
                         def _render_wcx_card(comp: Dict[str, Any]) -> None:
                             """Render a compact wisecondorx source filter card."""
-                            with ui.card().classes("w-full p-2 mb-0").props("flat bordered"):
+                            with (
+                                ui.card()
+                                .classes("w-full p-2 mb-0")
+                                .props("flat bordered")
+                            ):
                                 # Row 1: label + exonic only + locus + remove
                                 with ui.row().classes("items-center gap-2 w-full"):
-                                    ui.label("WisecondorX").classes("text-sm font-semibold text-teal-700")
+                                    ui.label("WisecondorX").classes(
+                                        "text-sm font-semibold text-teal-700"
+                                    )
 
                                     ui.checkbox(
                                         "Exonic only",
                                         value=comp["exonic_only"]["value"],
-                                        on_change=lambda e, c=comp: c["exonic_only"].update({"value": e.value}),
+                                        on_change=lambda e, c=comp: c[
+                                            "exonic_only"
+                                        ].update({"value": e.value}),
                                     ).props("dense").classes("text-xs")
 
                                     loc_input = (
@@ -715,7 +899,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                             label="Locus (optional)",
                                             placeholder="chr1:10000-10100, SHANK3, ENSG...",
                                             value=comp["locus"]["value"],
-                                            on_change=lambda e, c=comp: c["locus"].update({"value": e.value or ""}),
+                                            on_change=lambda e, c=comp: c[
+                                                "locus"
+                                            ].update({"value": e.value or ""}),
                                         )
                                         .props("outlined dense")
                                         .classes("flex-grow")
@@ -726,9 +912,12 @@ def search_cohort_page(cohort_name: str) -> None:
                                     def make_remove_handler(comp_id):
                                         def handler():
                                             source_components[:] = [
-                                                c for c in source_components if c["id"] != comp_id
+                                                c
+                                                for c in source_components
+                                                if c["id"] != comp_id
                                             ]
                                             render_component_list.refresh()
+
                                         return handler
 
                                     ui.button(
@@ -737,11 +926,19 @@ def search_cohort_page(cohort_name: str) -> None:
                                     ).props("flat round dense size=sm color=grey")
 
                                 # Row 2: genesets + impacts + validation + ratio filter
-                                with ui.row().classes("items-center gap-2 w-full flex-wrap"):
+                                with ui.row().classes(
+                                    "items-center gap-2 w-full flex-wrap"
+                                ):
                                     _build_geneset_menu(comp)
                                     _build_call_filter_menu(comp)
                                     create_validation_filter_menu(
-                                        all_statuses=["present", "absent", "uncertain", "conflicting", "TODO"],
+                                        all_statuses=[
+                                            "present",
+                                            "absent",
+                                            "uncertain",
+                                            "conflicting",
+                                            "TODO",
+                                        ],
                                         filter_state=comp["validations"],
                                         on_change=lambda: None,
                                         label="Validation",
@@ -749,37 +946,49 @@ def search_cohort_page(cohort_name: str) -> None:
                                         button_props="dense size=sm",
                                     )
 
-                                    ui.label("|ratio|:").classes("text-xs text-gray-600")
+                                    ui.label("|ratio|:").classes(
+                                        "text-xs text-gray-600"
+                                    )
 
                                     def _make_ratio_handler(comp_ref, key):
                                         def handler(e):
                                             raw = (e.value or "").replace(",", ".")
                                             if not raw:
                                                 comp_ref[key].update({"value": None})
-                                                e.sender.props(remove="error")
+                                                e.sender._props["error"] = False
+                                                e.sender.update()
                                                 return
                                             try:
-                                                comp_ref[key].update({"value": float(raw)})
-                                                e.sender.props(remove="error")
+                                                comp_ref[key].update(
+                                                    {"value": float(raw)}
+                                                )
+                                                e.sender._props["error"] = False
+                                                e.sender.update()
                                             except ValueError:
-                                                e.sender.props("error")
+                                                e.sender._props["error"] = True
+                                                e.sender.update()
                                                 ui.notify(
                                                     f"Invalid number: {raw}",
                                                     type="warning",
                                                     position="top",
                                                     timeout=2000,
                                                 )
+
                                         return handler
 
                                     ui.input(
                                         label="Min",
                                         value=str(comp["ratio_min"]["value"] or ""),
-                                        on_change=_make_ratio_handler(comp, "ratio_min"),
+                                        on_change=_make_ratio_handler(
+                                            comp, "ratio_min"
+                                        ),
                                     ).props("outlined dense").classes("w-20")
                                     ui.input(
                                         label="Max",
                                         value=str(comp["ratio_max"]["value"] or ""),
-                                        on_change=_make_ratio_handler(comp, "ratio_max"),
+                                        on_change=_make_ratio_handler(
+                                            comp, "ratio_max"
+                                        ),
                                     ).props("outlined dense").classes("w-20")
 
                         render_component_list()
@@ -787,34 +996,170 @@ def search_cohort_page(cohort_name: str) -> None:
                     ui.separator().props("vertical")
 
                     # --- RIGHT PANEL: Individuals (1/3 width) ---
-                    with ui.column().classes("flex-[1] min-w-0"):
-                        ui.label("Individuals").classes("text-sm font-semibold text-gray-600")
-                        with ui.column().classes("gap-2"):
-                            sex_select = ui.select(
-                                options=available_sex_values,
-                                label="Sex",
-                                value=filter_sex["value"],
-                                multiple=True,
-                                on_change=lambda e: filter_sex.update({"value": e.value or []}),
-                            ).props("outlined dense use-chips").classes("w-full")
-
-                            phenotype_select = ui.select(
-                                options=available_phenotype_values,
-                                label="Phenotype",
-                                value=filter_phenotype["value"],
-                                multiple=True,
-                                on_change=lambda e: filter_phenotype.update({"value": e.value or []}),
-                            ).props("outlined dense use-chips").classes("w-full")
+                    with ui.column().classes("flex-[1] min-w-0 w-full"):
+                        ui.label("Individuals").classes(
+                            "text-sm font-semibold text-gray-600"
+                        )
+                        with ui.column().classes("gap-2 w-full flex-1"):
+                            # Sex + Phenotype on the same row
+                            with ui.row().classes("w-full gap-2"):
+                                sex_select = (
+                                    ui.select(
+                                        options=available_sex_values,
+                                        label="Sex",
+                                        value=filter_sex["value"],
+                                        multiple=True,
+                                        on_change=lambda e: filter_sex.update(
+                                            {"value": e.value or []}
+                                        ),
+                                    )
+                                    .props("outlined dense use-chips")
+                                    .classes("min-w-0")
+                                    .style("flex: 1;")
+                                )
+                                phenotype_select = (
+                                    ui.select(
+                                        options=available_phenotype_values,
+                                        label="Phenotype",
+                                        value=filter_phenotype["value"],
+                                        multiple=True,
+                                        on_change=lambda e: filter_phenotype.update(
+                                            {"value": e.value or []}
+                                        ),
+                                    )
+                                    .props("outlined dense use-chips")
+                                    .classes("min-w-0")
+                                    .style("flex: 2;")
+                                )
 
                             has_parents_cb = ui.checkbox(
                                 "Only samples with both parents",
                                 value=filter_has_parents["value"],
-                                on_change=lambda e: filter_has_parents.update({"value": e.value}),
+                                on_change=lambda e: filter_has_parents.update(
+                                    {"value": e.value}
+                                ),
                             ).props("dense")
+
+                            # Exclude samples — chips + input in a
+                            # bordered container that stretches vertically
+                            ui.label("Exclude samples").classes(
+                                "text-xs text-gray-500 -mb-2"
+                            )
+                            with (
+                                ui.column()
+                                .classes(
+                                    "w-full flex-1 border rounded p-2"
+                                    " gap-1 min-h-[60px]"
+                                )
+                                .style("border-color: #bdbdbd;")
+                            ):
+                                # Chips area (cleared & rebuilt, input
+                                # stays outside so it is never destroyed)
+                                exclude_chips_row = ui.row().classes(
+                                    "w-full gap-1 flex-wrap"
+                                )
+
+                                def _rebuild_exclude_chips():
+                                    """Rebuild chip elements only."""
+                                    exclude_chips_row.clear()
+                                    if filter_exclude_samples["value"]:
+                                        with exclude_chips_row:
+                                            for sid in filter_exclude_samples["value"]:
+
+                                                def make_remove(s):
+                                                    def remove(_):
+                                                        filter_exclude_samples[
+                                                            "value"
+                                                        ] = [
+                                                            x
+                                                            for x in filter_exclude_samples[
+                                                                "value"
+                                                            ]
+                                                            if x != s
+                                                        ]
+                                                        _rebuild_exclude_chips()
+
+                                                    return remove
+
+                                                ui.chip(
+                                                    sid,
+                                                    removable=True,
+                                                    on_value_change=make_remove(sid),
+                                                    color="red",
+                                                ).props("dense outline size=sm")
+
+                                def _commit_exclude_text(
+                                    client_value: str | None = None,
+                                ):
+                                    """Parse input text into chips."""
+                                    raw = (
+                                        client_value
+                                        if client_value is not None
+                                        else (exclude_input.value or "")
+                                    )
+                                    tokens = [
+                                        t.strip()
+                                        for t in re.split(r"[,\s]+", raw)
+                                        if t.strip()
+                                    ]
+                                    if tokens:
+                                        current = filter_exclude_samples["value"]
+                                        for t in tokens:
+                                            if t not in current:
+                                                current.append(t)
+                                        filter_exclude_samples["value"] = current
+                                        exclude_input.value = ""
+                                        _rebuild_exclude_chips()
+
+                                def _on_exclude_key(e):
+                                    val = ""
+                                    if isinstance(e.args, dict):
+                                        val = e.args.get("value", "")
+                                    _commit_exclude_text(val)
+
+                                def _on_exclude_blur(e):
+                                    val = ""
+                                    if isinstance(e.args, dict):
+                                        val = e.args.get("value", "")
+                                    _commit_exclude_text(val)
+
+                                # Persistent input (never destroyed)
+                                exclude_input = (
+                                    ui.input(
+                                        placeholder="Type sample IDs...",
+                                    )
+                                    .props("dense hide-bottom-space")
+                                    .classes("w-full exclude-input-wrap")
+                                )
+                                exclude_input.on(
+                                    "keydown",
+                                    _on_exclude_key,
+                                    js_handler="""(e) => {
+                                        if (e.key === ' ' || e.key === ',' || e.key === 'Enter') {
+                                            e.preventDefault();
+                                            const el = e.target;
+                                            emit({value: el.value || ''});
+                                        }
+                                    }""",
+                                    throttle=0.1,
+                                )
+                                exclude_input.on(
+                                    "blur",
+                                    _on_exclude_blur,
+                                    js_handler="""(e) => {
+                                        const el = e.target;
+                                        const val = el.value || '';
+                                        if (val.trim()) {
+                                            emit({value: val});
+                                        }
+                                    }""",
+                                )
 
                 # Search + Clear buttons centered below both panels
                 with ui.row().classes("justify-center gap-4 mt-2"):
-                    search_button = ui.button("Search", icon="search").props("color=blue dense")
+                    search_button = ui.button("Search", icon="search").props(
+                        "color=blue dense"
+                    )
 
                     def _clear_all():
                         source_components.clear()
@@ -823,12 +1168,17 @@ def search_cohort_page(cohort_name: str) -> None:
                         filter_sex["value"] = []
                         filter_phenotype["value"] = []
                         filter_has_parents["value"] = False
+                        filter_exclude_samples["value"] = []
                         sex_select.value = []
                         phenotype_select.value = []
                         has_parents_cb.value = False
+                        exclude_input.value = ""
+                        _rebuild_exclude_chips()
                         render_component_list.refresh()
 
-                    ui.button("Clear", icon="clear_all", on_click=_clear_all).props("outline dense")
+                    ui.button("Clear", icon="clear_all", on_click=_clear_all).props(
+                        "outline dense"
+                    )
 
             # Results container
             results_container = ui.column().classes("w-full")
@@ -842,7 +1192,9 @@ def search_cohort_page(cohort_name: str) -> None:
 
                 # Show progress indicator while loading
                 with results_container:
-                    with ui.column().classes("items-center gap-4 justify-center py-8 w-full"):
+                    with ui.column().classes(
+                        "items-center gap-4 justify-center py-8 w-full"
+                    ):
                         progress = ui.circular_progress(
                             min=0, max=100, value=0, size="xl", color="blue"
                         )
@@ -900,30 +1252,46 @@ def search_cohort_page(cohort_name: str) -> None:
                             return df
                         combined_genes = set()
                         for gs_name in comp["genesets"]["value"]:
-                            combined_genes.update(available_genesets.get(gs_name, set()))
+                            combined_genes.update(
+                                available_genesets.get(gs_name, set())
+                            )
                         if not combined_genes:
                             return df
 
                         if source_type == "wombat" and "VEP_SYMBOL" in df.columns:
+
                             def matches_gs(symbol_str):
                                 if not symbol_str:
                                     return False
-                                symbols = [s.strip().upper() for s in str(symbol_str).split("&")]
+                                symbols = [
+                                    s.strip().upper()
+                                    for s in str(symbol_str).split("&")
+                                ]
                                 return any(s in combined_genes for s in symbols)
+
                             return df.filter(
-                                pl.col("VEP_SYMBOL").map_elements(matches_gs, return_dtype=pl.Boolean)
+                                pl.col("VEP_SYMBOL").map_elements(
+                                    matches_gs, return_dtype=pl.Boolean
+                                )
                             )
                         elif source_type == "wisecondorx":
                             exonic = comp.get("exonic_only", {}).get("value", False)
                             sym_col = "exonic_symbol" if exonic else "genic_symbol"
                             if sym_col in df.columns:
+
                                 def matches_gs_bed(symbol_str):
                                     if not symbol_str:
                                         return False
-                                    symbols = [s.strip().upper() for s in str(symbol_str).split(",")]
+                                    symbols = [
+                                        s.strip().upper()
+                                        for s in str(symbol_str).split(",")
+                                    ]
                                     return any(s in combined_genes for s in symbols)
+
                                 return df.filter(
-                                    pl.col(sym_col).map_elements(matches_gs_bed, return_dtype=pl.Boolean)
+                                    pl.col(sym_col).map_elements(
+                                        matches_gs_bed, return_dtype=pl.Boolean
+                                    )
                                 )
                         return df
 
@@ -933,7 +1301,11 @@ def search_cohort_page(cohort_name: str) -> None:
 
                     for comp in source_components:
                         sf = next(
-                            (s for s in source_files if _source_key(s) == comp["source_key"]),
+                            (
+                                s
+                                for s in source_files
+                                if _source_key(s) == comp["source_key"]
+                            ),
                             None,
                         )
                         if sf is None:
@@ -945,7 +1317,9 @@ def search_cohort_page(cohort_name: str) -> None:
                             query_params = parse_locus_query(locus_val)
 
                         if comp["type"] == "wombat":
-                            df = await asyncio.to_thread(_load_wombat_file, sf["file_path"])
+                            df = await asyncio.to_thread(
+                                _load_wombat_file, sf["file_path"]
+                            )
                             if df is None or len(df) == 0:
                                 continue
                             # Locus filter
@@ -957,31 +1331,45 @@ def search_cohort_page(cohort_name: str) -> None:
                                 all_wombat_dfs.append(df)
 
                         elif comp["type"] == "wisecondorx":
-                            df = await asyncio.to_thread(parse_wisecondorx_bed, sf["file_path"])
+                            df = await asyncio.to_thread(
+                                parse_wisecondorx_bed, sf["file_path"]
+                            )
                             if df is None or len(df) == 0:
                                 continue
                             # Locus filter (use exonic columns if exonic_only is checked)
                             exonic = comp.get("exonic_only", {}).get("value", False)
                             if query_params:
-                                df = filter_bed_dataframe(df, query_params, exonic=exonic)
+                                df = filter_bed_dataframe(
+                                    df, query_params, exonic=exonic
+                                )
                             # Geneset filter
                             df = _apply_geneset_filter(df, comp, "wisecondorx")
                             # Call filter
-                            if "wisecondorX" in df.columns and comp.get("selected_calls"):
+                            if "wisecondorX" in df.columns and comp.get(
+                                "selected_calls"
+                            ):
                                 selected_calls = comp["selected_calls"]["value"]
                                 if selected_calls:
-                                    df = df.filter(pl.col("wisecondorX").is_in(selected_calls))
+                                    df = df.filter(
+                                        pl.col("wisecondorX").is_in(selected_calls)
+                                    )
                             # Ratio filter (on |ratio|)
                             if "ratio" in df.columns:
                                 ratio_min = comp.get("ratio_min", {}).get("value")
                                 ratio_max = comp.get("ratio_max", {}).get("value")
                                 if ratio_min is not None:
                                     df = df.filter(
-                                        pl.col("ratio").cast(pl.Float64, strict=False).abs() >= ratio_min
+                                        pl.col("ratio")
+                                        .cast(pl.Float64, strict=False)
+                                        .abs()
+                                        >= ratio_min
                                     )
                                 if ratio_max is not None:
                                     df = df.filter(
-                                        pl.col("ratio").cast(pl.Float64, strict=False).abs() <= ratio_max
+                                        pl.col("ratio")
+                                        .cast(pl.Float64, strict=False)
+                                        .abs()
+                                        <= ratio_max
                                     )
                             if df is not None and len(df) > 0:
                                 all_wcx_dfs.append(df)
@@ -996,7 +1384,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     if all_wombat_dfs:
                         combined = pl.concat(all_wombat_dfs, how="diagonal_relaxed")
                         grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
-                        agg_cols = [col for col in combined.columns if col not in grouping_cols]
+                        agg_cols = [
+                            col for col in combined.columns if col not in grouping_cols
+                        ]
                         agg_exprs = [pl.len().alias("n_grouped")]
                         for col in agg_cols:
                             agg_exprs.append(
@@ -1011,13 +1401,19 @@ def search_cohort_page(cohort_name: str) -> None:
                                 .str.join(",")
                                 .alias(col)
                             )
-                        wombat_filtered = combined.group_by(grouping_cols, maintain_order=True).agg(agg_exprs)
+                        wombat_filtered = combined.group_by(
+                            grouping_cols, maintain_order=True
+                        ).agg(agg_exprs)
 
                     # Deduplicate wcx rows across components
                     wcx_filtered = None
                     if all_wcx_dfs:
                         combined = pl.concat(all_wcx_dfs, how="diagonal_relaxed")
-                        dedup_cols = [c for c in ["chr", "start", "end", "type", "sample"] if c in combined.columns]
+                        dedup_cols = [
+                            c
+                            for c in ["chr", "start", "end", "type", "sample"]
+                            if c in combined.columns
+                        ]
                         if dedup_cols:
                             combined = combined.unique(subset=dedup_cols, keep="first")
                         wcx_filtered = combined
@@ -1027,7 +1423,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     status_label.set_text("Processing variants...")
                     await asyncio.sleep(0)
 
-                    wombat_count = len(wombat_filtered) if wombat_filtered is not None else 0
+                    wombat_count = (
+                        len(wombat_filtered) if wombat_filtered is not None else 0
+                    )
                     wcx_count = len(wcx_filtered) if wcx_filtered is not None else 0
 
                     if wombat_count == 0 and wcx_count == 0:
@@ -1046,7 +1444,9 @@ def search_cohort_page(cohort_name: str) -> None:
                     if wombat_filtered is not None:
                         snv_validation_map = load_validation_map(validation_file, None)
                     if wcx_filtered is not None:
-                        sv_validation_map = load_validation_map(sv_validation_file, None)
+                        sv_validation_map = load_validation_map(
+                            sv_validation_file, None
+                        )
 
                     # Yield to event loop before badge processing
                     await asyncio.sleep(0)
@@ -1065,7 +1465,9 @@ def search_cohort_page(cohort_name: str) -> None:
                         # Collect per-component filter state for wombat
                         # Use the first wombat component's filters as baseline
                         # (after dedup, we apply the union of all component filters)
-                        wombat_comps = [c for c in source_components if c["type"] == "wombat"]
+                        wombat_comps = [
+                            c for c in source_components if c["type"] == "wombat"
+                        ]
 
                         for row in wombat_rows:
                             row["_source_type"] = "wombat"
@@ -1150,12 +1552,16 @@ def search_cohort_page(cohort_name: str) -> None:
                                         p = part.strip()
                                         if p and p not in all_symbols:
                                             all_symbols.append(p)
-                                row["GeneBadges"] = _build_gene_badges(all_symbols, gene_scorer)
+                                row["GeneBadges"] = _build_gene_badges(
+                                    all_symbols, gene_scorer
+                                )
                             else:
                                 row["GeneBadges"] = []
                             # Synthetic "gene" column for unified display
                             row["gene"] = ",".join(
-                                b["label"] for b in row["GeneBadges"] if not b["label"].startswith("+")
+                                b["label"]
+                                for b in row["GeneBadges"]
+                                if not b["label"].startswith("+")
                             )
 
                             # Gene badges from VEP_Gene (ENSG IDs)
@@ -1203,7 +1609,9 @@ def search_cohort_page(cohort_name: str) -> None:
                             for wc in comps:
                                 # Impact filter
                                 impacts_ok = True
-                                if set(wc["impacts"]["value"]) != set(VEP_CONSEQUENCES.keys()):
+                                if set(wc["impacts"]["value"]) != set(
+                                    VEP_CONSEQUENCES.keys()
+                                ):
                                     consequence_str = row.get("VEP_Consequence", "")
                                     if consequence_str:
                                         cons_list = []
@@ -1212,13 +1620,19 @@ def search_cohort_page(cohort_name: str) -> None:
                                                 c = c.strip()
                                                 if c:
                                                     cons_list.append(c)
-                                        impacts_ok = any(c in wc["impacts"]["value"] for c in cons_list)
+                                        impacts_ok = any(
+                                            c in wc["impacts"]["value"]
+                                            for c in cons_list
+                                        )
                                     else:
                                         impacts_ok = False
 
                                 # Exclude LCR
                                 if wc["exclude_lcr"]["value"]:
-                                    if row.get("LCR") and "true" in str(row.get("LCR", "")).lower():
+                                    if (
+                                        row.get("LCR")
+                                        and "true" in str(row.get("LCR", "")).lower()
+                                    ):
                                         continue
                                 # Exclude gnomAD filtered
                                 if wc["exclude_gnomad"]["value"]:
@@ -1237,13 +1651,20 @@ def search_cohort_page(cohort_name: str) -> None:
                                 if wc["validations"]["value"]:
                                     if val_status in wc["validations"]["value"]:
                                         return True
-                                    if "TODO" in wc["validations"]["value"] and not val_status:
+                                    if (
+                                        "TODO" in wc["validations"]["value"]
+                                        and not val_status
+                                    ):
                                         return True
                                     continue
                                 return True
                             return False
 
-                        wombat_rows = [r for r in wombat_rows if _wombat_row_passes(r, wombat_comps)]
+                        wombat_rows = [
+                            r
+                            for r in wombat_rows
+                            if _wombat_row_passes(r, wombat_comps)
+                        ]
                         all_rows.extend(wombat_rows)
 
                     # --- Process wisecondorx rows ---
@@ -1257,7 +1678,9 @@ def search_cohort_page(cohort_name: str) -> None:
                             row["_cohort_name"] = cohort_name
                             # Compute svlen from start/end
                             try:
-                                row["svlen"] = int(row.get("end", 0)) - int(row.get("start", 0))
+                                row["svlen"] = int(row.get("end", 0)) - int(
+                                    row.get("start", 0)
+                                )
                             except (ValueError, TypeError):
                                 row["svlen"] = None
 
@@ -1266,6 +1689,16 @@ def search_cohort_page(cohort_name: str) -> None:
                                 "FID", sample_to_family.get(sample_id, "")
                             )
                             row["Phenotype"] = ped_info.get("Phenotype", "")
+
+                            # WisecondorX tooltip (ratio + zscore)
+                            ratio_val = row.get("ratio", "")
+                            zscore_val = row.get("zscore", "")
+                            tooltip_parts = []
+                            if ratio_val not in (None, ""):
+                                tooltip_parts.append(f"ratio: {ratio_val}")
+                            if zscore_val not in (None, ""):
+                                tooltip_parts.append(f"zscore: {zscore_val}")
+                            row["_wisecondorx_tooltip"] = ", ".join(tooltip_parts)
 
                             # No VEP badges for SVS rows
                             row["ConsequenceBadges"] = []
@@ -1279,12 +1712,16 @@ def search_cohort_page(cohort_name: str) -> None:
                                     for s in str(genic_str).split(",")
                                     if s.strip()
                                 ]
-                                row["GeneBadges"] = _build_gene_badges(symbols, gene_scorer)
+                                row["GeneBadges"] = _build_gene_badges(
+                                    symbols, gene_scorer
+                                )
                             else:
                                 row["GeneBadges"] = []
                             # Synthetic "gene" column for unified display
                             row["gene"] = ",".join(
-                                b["label"] for b in row["GeneBadges"] if not b["label"].startswith("+")
+                                b["label"]
+                                for b in row["GeneBadges"]
+                                if not b["label"].startswith("+")
                             )
 
                             row["VEP_Gene_badges"] = []
@@ -1300,7 +1737,9 @@ def search_cohort_page(cohort_name: str) -> None:
                             )
 
                         # Apply per-component WCX filters (validation)
-                        wcx_comps = [c for c in source_components if c["type"] == "wisecondorx"]
+                        wcx_comps = [
+                            c for c in source_components if c["type"] == "wisecondorx"
+                        ]
 
                         def _wcx_row_passes(row, comps):
                             """Check if a WCX row passes at least one component's validation filter."""
@@ -1316,7 +1755,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                 return True
                             return False
 
-                        wcx_rows = [r for r in wcx_rows if _wcx_row_passes(r, wcx_comps)]
+                        wcx_rows = [
+                            r for r in wcx_rows if _wcx_row_passes(r, wcx_comps)
+                        ]
                         all_rows.extend(wcx_rows)
 
                     # Update progress: badge processing complete
@@ -1423,10 +1864,14 @@ def search_cohort_page(cohort_name: str) -> None:
 
                     # Override with preset columns if available
                     preset_columns = initial_preset.get("columns", [])
-                    initial_selected = [col for col in preset_columns if col in all_columns]
+                    initial_selected = [
+                        col for col in preset_columns if col in all_columns
+                    ]
 
                     selected_cols = {
-                        "value": initial_selected if initial_selected else [col for col in default_visible if col in all_columns]
+                        "value": initial_selected
+                        if initial_selected
+                        else [col for col in default_visible if col in all_columns]
                     }
 
                     # Table state for persistence across refreshes
@@ -1435,17 +1880,24 @@ def search_cohort_page(cohort_name: str) -> None:
                     # Apply individual filters (sex, phenotype, has-parents)
                     if filter_sex["value"]:
                         all_rows = [
-                            r for r in all_rows
-                            if pedigree_data.get(r.get("sample", ""), {}).get("Sex", "") in filter_sex["value"]
+                            r
+                            for r in all_rows
+                            if pedigree_data.get(r.get("sample", ""), {}).get("Sex", "")
+                            in filter_sex["value"]
                         ]
 
                     if filter_phenotype["value"]:
                         all_rows = [
-                            r for r in all_rows
-                            if pedigree_data.get(r.get("sample", ""), {}).get("Phenotype", "") in filter_phenotype["value"]
+                            r
+                            for r in all_rows
+                            if pedigree_data.get(r.get("sample", ""), {}).get(
+                                "Phenotype", ""
+                            )
+                            in filter_phenotype["value"]
                         ]
 
                     if filter_has_parents["value"]:
+
                         def _has_parents(ped: Dict[str, str]) -> bool:
                             father = ped.get("Father", "")
                             mother = ped.get("Mother", "")
@@ -1455,8 +1907,18 @@ def search_cohort_page(cohort_name: str) -> None:
                             )
 
                         all_rows = [
-                            r for r in all_rows
+                            r
+                            for r in all_rows
                             if _has_parents(pedigree_data.get(r.get("sample", ""), {}))
+                        ]
+
+                    # Exclude specific samples
+                    if filter_exclude_samples["value"]:
+                        exclude_set = set(filter_exclude_samples["value"])
+                        all_rows = [
+                            r
+                            for r in all_rows
+                            if r.get("sample", "") not in exclude_set
                         ]
 
                     # Impact, exclude, validation filters are now applied per-component
@@ -1476,8 +1938,6 @@ def search_cohort_page(cohort_name: str) -> None:
                             # All per-component filters (impact, exclude, validation, calls)
                             # are already applied — use all_rows directly
                             rows = all_rows.copy()
-
-
 
                             def get_columns():
                                 cols: List[Dict[str, Any]] = [
@@ -1521,11 +1981,21 @@ def search_cohort_page(cohort_name: str) -> None:
                                     elif col == "VEP_Gene":
                                         col_def["cellType"] = "gene_badge"
                                         col_def["badgesField"] = "VEP_Gene_badges"
+                                    elif col == "wisecondorX":
+                                        col_def["cellType"] = "cnv_call"
+                                        col_def["callColors"] = build_call_colors()
+                                        col_def["tooltipField"] = "_wisecondorx_tooltip"
                                     elif col == "FID":
                                         col_def["cellType"] = "link"
-                                        col_def["href"] = "/cohort/{_cohort_name}/family/{FID}"
+                                        col_def["href"] = (
+                                            "/cohort/{_cohort_name}/family/{FID}"
+                                        )
                                     else:
-                                        col_def["cellType"] = "score_badge"
+                                        col_type = get_column_type(col)
+                                        if col_type in ("int", "float"):
+                                            col_def["cellType"] = "number"
+                                        else:
+                                            col_def["cellType"] = "score_badge"
                                     apply_width_constraints(col_def, col)
                                     cols.append(col_def)
                                 return cols
@@ -1538,16 +2008,20 @@ def search_cohort_page(cohort_name: str) -> None:
                                     visible = ["actions"] + list(selected_cols["value"])
                                     search_dt["ref"].set_column_visibility(visible)
 
-                            with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
+                            with ui.row().classes(
+                                "items-center gap-4 mt-4 mb-2 w-full"
+                            ):
                                 ui.label(f"Results ({len(rows)} rows)").classes(
                                     "text-lg font-semibold text-blue-700"
                                 )
 
                                 # Preset dropdown
                                 preset_select = ui.select(
-                                    options={p["name"]: p["name"] for p in VIEW_PRESETS},
+                                    options={
+                                        p["name"]: p["name"] for p in VIEW_PRESETS
+                                    },
                                     value=selected_preset["name"],
-                                    label="Preset"
+                                    label="Preset",
                                 ).classes("w-48")
 
                                 ui.space()  # Push column selector to the right
@@ -1560,30 +2034,57 @@ def search_cohort_page(cohort_name: str) -> None:
                                     presets=VIEW_PRESETS,
                                 )
                                 ui.button(
-                                    "Columns", icon="view_column",
+                                    "Columns",
+                                    icon="view_column",
                                     on_click=col_dialog.open,
                                 ).props("outline color=blue size=sm")
 
                                 # --- Stats button + dialog ---
                                 ui.button(
-                                    "Stats", icon="bar_chart",
-                                    on_click=lambda _e=None, r=rows: show_stats_dialog(r),
+                                    "Stats",
+                                    icon="bar_chart",
+                                    on_click=lambda _e=None, r=rows: show_stats_dialog(
+                                        r
+                                    ),
                                 ).props("outline color=blue size=sm")
 
                                 # --- Save / Download ---
                                 def _save_validation_file(filename: str):
                                     """Write TSV to to_validate directory."""
-                                    standard_preset = next(
-                                        (p for p in VIEW_PRESETS if p["name"] == "Standard View"),
-                                        VIEW_PRESETS[0],
-                                    )
+                                    current_name = selected_preset["name"]
+                                    if current_name in ("SV View", "Mix View"):
+                                        target_preset = next(
+                                            (
+                                                p
+                                                for p in VIEW_PRESETS
+                                                if p["name"] == current_name
+                                            ),
+                                            VIEW_PRESETS[0],
+                                        )
+                                    else:
+                                        target_preset = next(
+                                            (
+                                                p
+                                                for p in VIEW_PRESETS
+                                                if p["name"] == "Standard View"
+                                            ),
+                                            VIEW_PRESETS[0],
+                                        )
                                     save_cols = [
                                         col
-                                        for col in standard_preset.get("columns", [])
+                                        for col in target_preset.get("columns", [])
                                         if col != "Validation"
                                         and col in all_columns
                                         and _is_export_column(col)
                                     ]
+                                    # Auto-include essential SV fields for validation file page
+                                    if current_name in ("SV View", "Mix View"):
+                                        for sv_col in ["ratio", "zscore", "type"]:
+                                            if (
+                                                sv_col in all_columns
+                                                and sv_col not in save_cols
+                                            ):
+                                                save_cols.append(sv_col)
                                     tsv_content = _generate_tsv(rows, save_cols)
                                     to_validate_dir = store.data_dir / "to_validate"
                                     to_validate_dir.mkdir(parents=True, exist_ok=True)
@@ -1615,25 +2116,49 @@ def search_cohort_page(cohort_name: str) -> None:
                                         media_type="text/tab-separated-values",
                                     )
 
-                                def _build_save_dialog(title, confirm_label, confirm_icon, on_confirm):
+                                def _build_save_dialog(
+                                    title, confirm_label, confirm_icon, on_confirm
+                                ):
                                     """Pre-build a save/download dialog. Returns (dialog, name_input)."""
-                                    with ui.dialog() as dlg, ui.card().classes("p-4 min-w-[400px]"):
-                                        ui.label(title).classes("text-lg font-semibold mb-2")
+                                    with (
+                                        ui.dialog() as dlg,
+                                        ui.card().classes("p-4 min-w-[400px]"),
+                                    ):
+                                        ui.label(title).classes(
+                                            "text-lg font-semibold mb-2"
+                                        )
 
-                                        with ui.row().classes("items-center w-full gap-1"):
-                                            name_input = ui.input(
-                                                label="Filename",
-                                                value="",
-                                            ).props("outlined dense").classes("flex-grow")
-                                            ui.label(".tsv").classes("text-gray-500 text-sm mt-2")
+                                        with ui.row().classes(
+                                            "items-center w-full gap-1"
+                                        ):
+                                            name_input = (
+                                                ui.input(
+                                                    label="Filename",
+                                                    value="",
+                                                )
+                                                .props("outlined dense")
+                                                .classes("flex-grow")
+                                            )
+                                            ui.label(".tsv").classes(
+                                                "text-gray-500 text-sm mt-2"
+                                            )
 
-                                        with ui.row().classes("justify-end gap-2 w-full mt-4"):
-                                            ui.button("Cancel", on_click=dlg.close).props("flat")
+                                        with ui.row().classes(
+                                            "justify-end gap-2 w-full mt-4"
+                                        ):
+                                            ui.button(
+                                                "Cancel", on_click=dlg.close
+                                            ).props("flat")
 
-                                            def _on_confirm(inp=name_input, d=dlg, cb=on_confirm):
+                                            def _on_confirm(
+                                                inp=name_input, d=dlg, cb=on_confirm
+                                            ):
                                                 raw_name = inp.value.strip()
                                                 if not raw_name:
-                                                    ui.notify("Please enter a filename", type="warning")
+                                                    ui.notify(
+                                                        "Please enter a filename",
+                                                        type="warning",
+                                                    )
                                                     return
                                                 if not raw_name.endswith(".tsv"):
                                                     raw_name += ".tsv"
@@ -1641,22 +2166,28 @@ def search_cohort_page(cohort_name: str) -> None:
                                                 cb(raw_name)
 
                                             ui.button(
-                                                confirm_label, icon=confirm_icon, on_click=_on_confirm
+                                                confirm_label,
+                                                icon=confirm_icon,
+                                                on_click=_on_confirm,
                                             ).props("unelevated color=blue")
                                     return dlg, name_input
 
                                 save_dlg, save_input = _build_save_dialog(
-                                    "Save as validation file", "Save", "save", _save_validation_file,
+                                    "Save as validation file",
+                                    "Save",
+                                    "save",
+                                    _save_validation_file,
                                 )
                                 dl_dlg, dl_input = _build_save_dialog(
-                                    "Download TSV", "Download", "download", _download_tsv,
+                                    "Download TSV",
+                                    "Download",
+                                    "download",
+                                    _download_tsv,
                                 )
 
                                 def _open_dialog(dlg, name_input):
                                     """Reset filename, open dialog, auto-focus and select text."""
-                                    name_input.value = (
-                                        f"genetics-viz.{datetime.now().strftime('%Y-%m-%d.%H-%M')}"
-                                    )
+                                    name_input.value = f"genetics-viz.{datetime.now().strftime('%Y-%m-%d.%H-%M')}"
                                     dlg.open()
                                     ui.timer(
                                         0.2,
@@ -1668,28 +2199,44 @@ def search_cohort_page(cohort_name: str) -> None:
                                     )
 
                                 with ui.button(
-                                    "Save", icon="save",
+                                    "Save",
+                                    icon="save",
                                 ).props("outline color=blue size=sm"):
-                                    with ui.menu():
+                                    with ui.menu().classes("min-w-[250px]"):
                                         ui.menu_item(
                                             "Save as validation file",
-                                            on_click=lambda: _open_dialog(save_dlg, save_input),
+                                            on_click=lambda: _open_dialog(
+                                                save_dlg, save_input
+                                            ),
                                         )
                                         ui.menu_item(
                                             "Download TSV",
-                                            on_click=lambda: _open_dialog(dl_dlg, dl_input),
+                                            on_click=lambda: _open_dialog(
+                                                dl_dlg, dl_input
+                                            ),
                                         )
 
                             # Preset change handler
                             def on_preset_change(e):
                                 """Handle preset selection change."""
                                 preset_name = e.value
-                                preset = next((p for p in VIEW_PRESETS if p["name"] == preset_name), None)
+                                preset = next(
+                                    (
+                                        p
+                                        for p in VIEW_PRESETS
+                                        if p["name"] == preset_name
+                                    ),
+                                    None,
+                                )
                                 if not preset:
                                     return
 
                                 # Filter columns to only those available in the data
-                                available = [col for col in preset.get("columns", []) if col in all_columns]
+                                available = [
+                                    col
+                                    for col in preset.get("columns", [])
+                                    if col in all_columns
+                                ]
 
                                 selected_cols["value"] = available
                                 selected_preset["name"] = preset_name
@@ -1698,6 +2245,29 @@ def search_cohort_page(cohort_name: str) -> None:
 
                             # Connect preset change handler
                             preset_select.on_value_change(on_preset_change)
+
+                            # CNV calls legend (only when WCX data is present)
+                            if has_wcx_comps:
+                                with ui.row().classes("gap-4 items-center"):
+                                    ui.label("CNV calls:").classes(
+                                        "text-sm font-semibold"
+                                    )
+                                    for _cfg_key in [
+                                        "robust_loss",
+                                        "permissive_loss",
+                                        "robust_gain",
+                                        "permissive_gain",
+                                    ]:
+                                        cfg = WISECONDORX_CONFIG[_cfg_key]
+                                        _op = "≤" if "loss" in _cfg_key else "≥"
+                                        with ui.row().classes("gap-2 items-center"):
+                                            ui.html(
+                                                f'<span class="q-badge" style="background-color: {cfg["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{cfg["label"]}</span>',
+                                                sanitize=False,
+                                            )
+                                            ui.label(
+                                                f"(log2{_op}{cfg['ratio_threshold']} & Z{_op}{cfg['zscore_threshold']})"
+                                            ).classes("text-xs text-gray-600")
 
                             # Handle view variant click
                             def on_view_variant(e):
@@ -1727,15 +2297,23 @@ def search_cohort_page(cohort_name: str) -> None:
                                             chrom = parts[0]
                                             range_parts = parts[1].split("-")
                                             if len(range_parts) == 2:
+
                                                 def on_sv_save():
-                                                    sv_val_updated = load_validation_map(
-                                                        sv_validation_file, None
+                                                    sv_val_updated = (
+                                                        load_validation_map(
+                                                            sv_validation_file, None
+                                                        )
                                                     )
                                                     for row in all_rows:
-                                                        if row.get("_source_type") == "wisecondorx":
+                                                        if (
+                                                            row.get("_source_type")
+                                                            == "wisecondorx"
+                                                        ):
                                                             orig = row.get(
                                                                 "_original_locus",
-                                                                row.get("chr:start-end", ""),
+                                                                row.get(
+                                                                    "chr:start-end", ""
+                                                                ),
                                                             )
                                                             sv_t = _infer_sv_type(row)
                                                             sv_vk = f"{orig}:{sv_t}"
@@ -1743,12 +2321,16 @@ def search_cohort_page(cohort_name: str) -> None:
                                                             row["chr:start-end"] = orig
                                                             row["Variant"] = orig
                                                             add_validation_status_to_row(
-                                                                row, sv_val_updated,
-                                                                sv_vk, row.get("sample", ""),
+                                                                row,
+                                                                sv_val_updated,
+                                                                sv_vk,
+                                                                row.get("sample", ""),
                                                             )
                                                             _apply_curated_coordinates(
-                                                                row, sv_val_updated,
-                                                                sv_vk, row.get("sample", ""),
+                                                                row,
+                                                                sv_val_updated,
+                                                                sv_vk,
+                                                                row.get("sample", ""),
                                                             )
                                                     with page_client:
                                                         ui.timer(
@@ -1793,11 +2375,17 @@ def search_cohort_page(cohort_name: str) -> None:
                                                     validation_file, None
                                                 )
                                                 for row in all_rows:
-                                                    if row.get("_source_type") != "wisecondorx":
+                                                    if (
+                                                        row.get("_source_type")
+                                                        != "wisecondorx"
+                                                    ):
                                                         v_key = row.get("Variant", "")
                                                         s_id = row.get("sample", "")
                                                         add_validation_status_to_row(
-                                                            row, snv_val_updated, v_key, s_id,
+                                                            row,
+                                                            snv_val_updated,
+                                                            v_key,
+                                                            s_id,
                                                         )
                                                 with page_client:
                                                     ui.timer(
@@ -1833,12 +2421,16 @@ def search_cohort_page(cohort_name: str) -> None:
                                 col_id = saved_sorting[0]["id"]
                                 desc = saved_sorting[0].get("desc", False)
                                 col_def = next(
-                                    (c for c in get_columns() if c.get("id") == col_id), {}
+                                    (c for c in get_columns() if c.get("id") == col_id),
+                                    {},
                                 )
                                 sort_field = col_def.get("sortField", col_id)
                                 sort_type = col_def.get("sorting", "")
                                 if sort_type == "genomic":
-                                    from genetics_viz.utils.column_names import genomic_sort_key
+                                    from genetics_viz.utils.column_names import (
+                                        genomic_sort_key,
+                                    )
+
                                     rows.sort(
                                         key=lambda r: (
                                             r.get(sort_field) is None,
@@ -1847,6 +2439,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                         reverse=desc,
                                     )
                                 elif sort_type == "numerical":
+
                                     def _num_key(r):
                                         v = r.get(sort_field)
                                         if v is None:
@@ -1855,6 +2448,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                             return (False, float(v))
                                         except (ValueError, TypeError):
                                             return (True, 0.0)
+
                                     rows.sort(key=_num_key, reverse=desc)
                                 else:
                                     rows.sort(
@@ -1871,7 +2465,8 @@ def search_cohort_page(cohort_name: str) -> None:
                                 rows=rows,
                                 row_key="Variant",
                                 pagination={"rowsPerPage": 50},
-                                visible_columns=["actions"] + list(selected_cols["value"]),
+                                visible_columns=["actions"]
+                                + list(selected_cols["value"]),
                                 on_row_action=on_view_variant,
                                 initial_sorting=saved_sorting,
                                 initial_page=table_state.get("page", 0),

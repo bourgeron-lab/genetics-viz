@@ -2,6 +2,7 @@
 
 import asyncio
 import csv
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List
@@ -13,18 +14,22 @@ from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
 from genetics_viz.components.search_stats import show_stats_dialog
+from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.column_names import (
     apply_width_constraints,
+    genomic_sort_key,
     get_column_group,
     get_column_sorting,
+    get_column_type,
     get_display_label,
 )
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.validation_badges import build_validation_badge
+from genetics_viz.utils.wisecondorx import build_call_colors
 from genetics_viz.utils.clinvar import (
     format_clinvar_display,
     get_clinvar_color,
@@ -34,6 +39,8 @@ from genetics_viz.utils.vep import (
     get_consequence_color,
 )
 from genetics_viz.utils.view_presets import VIEW_PRESETS
+
+_SV_PATTERN = re.compile(r"^chr[^:]+:\d+-\d+$")
 
 
 def _read_tsv_file(file_path: Path) -> tuple:
@@ -49,6 +56,36 @@ def _read_tsv_file(file_path: Path) -> tuple:
         for row in reader:
             file_data.append(dict(row))
     return headers, file_data
+
+
+def _detect_sv_format(file_data: List[Dict[str, Any]], variant_col: str) -> bool:
+    """Check if any variant in the file matches the SV format (chr:start-end)."""
+    return any(_SV_PATTERN.match(row.get(variant_col, "")) for row in file_data)
+
+
+def _infer_sv_type_from_row(row: Dict[str, Any]) -> str:
+    """Infer SV type (dup/del) from row data.
+
+    Checks wisecondorX, call, type columns, then falls back to ratio.
+    """
+    wcx_call = str(row.get("wisecondorX", "")).upper()
+    if "GAIN" in wcx_call:
+        return "dup"
+    if "LOSS" in wcx_call:
+        return "del"
+    call = str(row.get("call", "")).upper()
+    if "GAIN" in call:
+        return "dup"
+    if "LOSS" in call:
+        return "del"
+    raw_type = str(row.get("type", "")).lower()
+    if raw_type in ("dup", "del"):
+        return raw_type
+    try:
+        ratio = float(row.get("ratio", 0))
+        return "dup" if ratio > 0 else "del"
+    except (ValueError, TypeError):
+        return "del"
 
 
 def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
@@ -89,6 +126,7 @@ def _add_validation_status_to_rows(
     fid_col: str,
     variant_col: str,
     sample_col: str,
+    is_sv: bool = False,
 ) -> None:
     """Add Validation status to each row based on validation map."""
     for row in file_data:
@@ -96,7 +134,13 @@ def _add_validation_status_to_rows(
         variant = row.get(variant_col, "")
         sample = row.get(sample_col, "")
 
-        map_key = (fid, variant, sample)
+        if is_sv and _SV_PATTERN.match(variant):
+            sv_type = _infer_sv_type_from_row(row)
+            lookup_variant = f"{variant}:{sv_type}"
+        else:
+            lookup_variant = variant
+
+        map_key = (fid, lookup_variant, sample)
         if map_key in validation_map:
             validations = validation_map[map_key]
             validation_statuses = [v[0] for v in validations]
@@ -118,8 +162,7 @@ def _add_validation_status_to_rows(
                 # Check inheritance - prioritize de novo, then homozygous,
                 # then first non-empty inheritance from present validations
                 present = [
-                    v for v in validations
-                    if v[0] in ("present", "in phase MNV")
+                    v for v in validations if v[0] in ("present", "in phase MNV")
                 ]
                 inh_values = [v[1] for v in present if v[1]]
                 if "de novo" in inh_values:
@@ -176,9 +219,9 @@ async def validation_file_page(filename: str) -> None:
                 trash_dialog = ui.dialog()
                 with trash_dialog, ui.card().classes("p-4"):
                     ui.label("Trash this file?").classes("text-lg font-semibold mb-2")
-                    ui.label(f"{filename}.tsv will be moved to the trash folder.").classes(
-                        "text-sm text-gray-600 mb-4"
-                    )
+                    ui.label(
+                        f"{filename}.tsv will be moved to the trash folder."
+                    ).classes("text-sm text-gray-600 mb-4")
                     with ui.row().classes("justify-end gap-2 w-full"):
                         ui.button("Cancel", on_click=trash_dialog.close).props("flat")
 
@@ -243,13 +286,28 @@ async def validation_file_page(filename: str) -> None:
                     f"⚠️ Warning: Missing required columns: {', '.join(missing)}"
                 ).classes("text-orange-600 text-sm mb-2")
 
+            # Detect SV vs SNV format
+            is_sv_format = (
+                _detect_sv_format(file_data, variant_col) if has_variant else False
+            )
+
             # Load validation data (offloaded to thread)
-            validation_file = store.data_dir / "validations" / "snvs.tsv"
-            validation_map = await asyncio.to_thread(_load_validation_map, validation_file)
+            if is_sv_format:
+                validation_file = store.data_dir / "validations" / "svs.tsv"
+            else:
+                validation_file = store.data_dir / "validations" / "snvs.tsv"
+            validation_map = await asyncio.to_thread(
+                _load_validation_map, validation_file
+            )
 
             # Add Validation status to each row
             _add_validation_status_to_rows(
-                file_data, validation_map, fid_col, variant_col, sample_col
+                file_data,
+                validation_map,
+                fid_col,
+                variant_col,
+                sample_col,
+                is_sv=is_sv_format,
             )
 
             # Build badge data for gene, consequence, and ClinVar columns
@@ -281,9 +339,7 @@ async def validation_file_page(filename: str) -> None:
                         cons_str = row.get(col_name, "")
                         if cons_str:
                             terms = [
-                                t.strip()
-                                for t in str(cons_str).split("&")
-                                if t.strip()
+                                t.strip() for t in str(cons_str).split("&") if t.strip()
                             ]
                             badges = []
                             seen_badges: set = set()
@@ -293,9 +349,7 @@ async def validation_file_page(filename: str) -> None:
                                 key = (label, color)
                                 if key not in seen_badges:
                                     seen_badges.add(key)
-                                    badges.append(
-                                        {"label": label, "color": color}
-                                    )
+                                    badges.append({"label": label, "color": color})
                             row[f"{col_name}_badges"] = badges
                         else:
                             row[f"{col_name}_badges"] = []
@@ -318,9 +372,7 @@ async def validation_file_page(filename: str) -> None:
                                 key = (label, color)
                                 if key not in seen_badges:
                                     seen_badges.add(key)
-                                    badges.append(
-                                        {"label": label, "color": color}
-                                    )
+                                    badges.append({"label": label, "color": color})
                             row[f"{col_name}_badges"] = badges
                         else:
                             row[f"{col_name}_badges"] = []
@@ -359,6 +411,7 @@ async def validation_file_page(filename: str) -> None:
             all_columns = list(headers) + ["Validation"]
             selected_cols: Dict[str, Any] = {"value": list(all_columns)}
             dt_ref: Dict[str, Any] = {"ref": None}
+            table_state: Dict[str, Any] = {"sorting": [], "page": 0}
 
             def _apply_col_visibility():
                 if dt_ref["ref"]:
@@ -382,11 +435,13 @@ async def validation_file_page(filename: str) -> None:
                 )
                 ui.space()
                 ui.button(
-                    "Columns", icon="view_column",
+                    "Columns",
+                    icon="view_column",
                     on_click=col_dialog.open,
                 ).props("outline color=blue size=sm")
                 ui.button(
-                    "Stats", icon="bar_chart",
+                    "Stats",
+                    icon="bar_chart",
                     on_click=lambda: show_stats_dialog(file_data),
                 ).props("outline color=blue size=sm")
 
@@ -453,7 +508,11 @@ async def validation_file_page(filename: str) -> None:
                             col_def["cellType"] = "validation"
                         elif col == "Variant":
                             col_def["sorting"] = "genomic"
-                        elif "symbol" in col_lower or col_lower == "gene" or "gene" in col_lower:
+                        elif (
+                            "symbol" in col_lower
+                            or col_lower == "gene"
+                            or "gene" in col_lower
+                        ):
                             col_def["cellType"] = "gene_badge"
                             col_def["badgesField"] = f"{col}_badges"
                         elif "impact" in col_lower or col == "VEP_Consequence":
@@ -462,8 +521,15 @@ async def validation_file_page(filename: str) -> None:
                         elif col == "VEP_CLIN_SIG":
                             col_def["cellType"] = "badge_list"
                             col_def["badgesField"] = f"{col}_badges"
+                        elif col == "wisecondorX":
+                            col_def["cellType"] = "cnv_call"
+                            col_def["callColors"] = build_call_colors()
                         else:
-                            col_def["cellType"] = "score_badge"
+                            col_type = get_column_type(col)
+                            if col_type in ("int", "float"):
+                                col_def["cellType"] = "number"
+                            else:
+                                col_def["cellType"] = "score_badge"
                         apply_width_constraints(col_def, col)
                         columns.append(col_def)
 
@@ -475,64 +541,134 @@ async def validation_file_page(filename: str) -> None:
                         sample_id = row_data.get(sample_col, "")
 
                         try:
-                            parts = variant_str.split(":")
-                            if len(parts) == 4:
-                                chrom, pos, ref, alt = parts
+                            # Find the cohort from family_id
+                            cohort_name = None
+                            for c_name, cohort in store.cohorts.items():
+                                if family_id in cohort.families:
+                                    cohort_name = c_name
+                                    break
 
-                                # Find the cohort from family_id
-                                cohort_name = None
-                                for c_name, cohort in store.cohorts.items():
-                                    if family_id in cohort.families:
-                                        cohort_name = c_name
-                                        break
+                            if not cohort_name:
+                                ui.notify(
+                                    f"Could not find cohort for family {family_id}",
+                                    type="warning",
+                                )
+                                return
 
-                                if not cohort_name:
-                                    ui.notify(
-                                        f"Could not find cohort for family {family_id}",
-                                        type="warning",
-                                    )
-                                    return
+                            if is_sv_format and _SV_PATTERN.match(variant_str):
+                                # SV variant: chr:start-end
+                                parts = variant_str.split(":")
+                                chrom = parts[0]
+                                range_parts = parts[1].split("-")
+                                start, end = range_parts[0], range_parts[1]
 
-                                # Create variant data dict
-                                variant_data = dict(row_data)
-
-                                # Callback to update the Validation column in the table
-                                def on_save(validation_status: str):
-                                    # Reload validation data from file
-                                    validation_map = _load_validation_map(
-                                        validation_file
-                                    )
-                                    # Re-add validation status to rows
+                                def on_sv_save():
+                                    updated_map = _load_validation_map(validation_file)
                                     _add_validation_status_to_rows(
                                         file_data,
-                                        validation_map,
+                                        updated_map,
                                         fid_col,
                                         variant_col,
                                         sample_col,
+                                        is_sv=True,
                                     )
-                                    # Refresh the table display using the captured client context
                                     with page_client:
                                         ui.timer(0.1, refresh_table, once=True)
 
-                                # Show dialog
-                                show_variant_dialog(
+                                sv_data = dict(row_data)
+                                # Map wisecondorX to call for sv_dialog
+                                if "wisecondorX" in sv_data and "call" not in sv_data:
+                                    sv_data["call"] = sv_data["wisecondorX"]
+
+                                show_sv_dialog(
                                     cohort_name=cohort_name,
                                     family_id=family_id,
                                     chrom=chrom,
-                                    pos=pos,
-                                    ref=ref,
-                                    alt=alt,
+                                    start=start,
+                                    end=end,
                                     sample=sample_id,
-                                    variant_data=variant_data,
-                                    on_save_callback=on_save,
+                                    sv_data=sv_data,
+                                    on_validation_saved=on_sv_save,
                                 )
                             else:
-                                ui.notify(
-                                    "Invalid variant format. Expected chr:pos:ref:alt",
-                                    type="warning",
-                                )
+                                # SNV variant: chr:pos:ref:alt
+                                parts = variant_str.split(":")
+                                if len(parts) == 4:
+                                    chrom, pos, ref, alt = parts
+                                    variant_data = dict(row_data)
+
+                                    def on_save(validation_status: str):
+                                        updated_map = _load_validation_map(
+                                            validation_file
+                                        )
+                                        _add_validation_status_to_rows(
+                                            file_data,
+                                            updated_map,
+                                            fid_col,
+                                            variant_col,
+                                            sample_col,
+                                        )
+                                        with page_client:
+                                            ui.timer(0.1, refresh_table, once=True)
+
+                                    show_variant_dialog(
+                                        cohort_name=cohort_name,
+                                        family_id=family_id,
+                                        chrom=chrom,
+                                        pos=pos,
+                                        ref=ref,
+                                        alt=alt,
+                                        sample=sample_id,
+                                        variant_data=variant_data,
+                                        on_save_callback=on_save,
+                                    )
+                                else:
+                                    ui.notify(
+                                        "Invalid variant format. Expected chr:pos:ref:alt",
+                                        type="warning",
+                                    )
                         except Exception as ex:
                             ui.notify(f"Error parsing variant: {ex}", type="warning")
+
+                    # Restore saved sorting
+                    saved_sorting = table_state.get("sorting", [])
+                    if saved_sorting:
+                        col_id = saved_sorting[0]["id"]
+                        desc = saved_sorting[0].get("desc", False)
+                        col_def = next(
+                            (c for c in columns if c.get("id") == col_id),
+                            {},
+                        )
+                        sort_field = col_def.get("sortField", col_id)
+                        sort_type = col_def.get("sorting", "")
+                        if sort_type == "genomic":
+                            filtered_data.sort(
+                                key=lambda r: (
+                                    r.get(sort_field) is None,
+                                    genomic_sort_key(r.get(sort_field, "")),
+                                ),
+                                reverse=desc,
+                            )
+                        elif sort_type == "numerical":
+
+                            def _num_key(r):
+                                v = r.get(sort_field)
+                                if v is None:
+                                    return (True, 0.0)
+                                try:
+                                    return (False, float(v))
+                                except (ValueError, TypeError):
+                                    return (True, 0.0)
+
+                            filtered_data.sort(key=_num_key, reverse=desc)
+                        else:
+                            filtered_data.sort(
+                                key=lambda r: (
+                                    r.get(sort_field) is None,
+                                    r.get(sort_field, ""),
+                                ),
+                                reverse=desc,
+                            )
 
                     dt_ref["ref"] = DataTable(
                         columns=columns,
@@ -541,6 +677,9 @@ async def validation_file_page(filename: str) -> None:
                         pagination={"rowsPerPage": 50},
                         visible_columns=["actions"] + list(selected_cols["value"]),
                         on_row_action=on_view_variant,
+                        initial_sorting=saved_sorting,
+                        initial_page=table_state.get("page", 0),
+                        state_holder=table_state,
                     )
 
             # Initial render

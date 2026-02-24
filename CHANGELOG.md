@@ -5,6 +5,25 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-02-24
+
+### Added
+- **Exclude samples filter** — search Individuals panel: enter sample IDs (space/comma/blur) as deletable chips to exclude from results
+- **SV support in statistics dialog** — SV deduplication, gain/loss classification in consequence chart, SV checkbox filter, variant type breakdown in subtitle
+- **SV validation file support** — auto-detects SV format in validation files, loads `svs.tsv`, opens SV dialog instead of IGV
+- **SV type inference** — extracts SV type from wisecondorX call, generic call, type column, or ratio sign
+- **WisecondorX tooltips** — CNV call cells show ratio/zscore on hover in search results
+- **Numeric column formatting** — integer columns display with thin-space (U+202F) thousands separator and proper Unicode minus sign
+- **Column type config** — `type: int/float` in `column_names.yaml` auto-infers numerical sorting and number cell rendering
+
+### Changed
+- Sex and Phenotype dropdowns now on same row in search Individuals panel
+- Validation file table preserves sorting and pagination across refreshes
+- Statistics dialog subtitle shows variant type breakdown (SNVs, Indels, SVs)
+
+### Fixed
+- `KeyError: 'error'` on ratio Min/Max input fields — `props(remove="error")` was deleting the key from internal props dict
+
 ## [0.4.1] - 2026-02-18
 
 ### Added

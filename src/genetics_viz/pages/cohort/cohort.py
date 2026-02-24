@@ -86,17 +86,17 @@ def cohort_page(cohort_name: str) -> None:
                         fid_text = (filters.get("FID") or "").strip().lower()
                         if fid_text:
                             filtered = [
-                                ind for ind in filtered
+                                ind
+                                for ind in filtered
                                 if fid_text in ind["FID"].lower()
                             ]
 
                         # Sample ID text filter
-                        sample_text = (
-                            filters.get("Sample ID") or ""
-                        ).strip().lower()
+                        sample_text = (filters.get("Sample ID") or "").strip().lower()
                         if sample_text:
                             filtered = [
-                                ind for ind in filtered
+                                ind
+                                for ind in filtered
                                 if sample_text in ind["Sample ID"].lower()
                             ]
 
@@ -105,8 +105,7 @@ def cohort_page(cohort_name: str) -> None:
                         if sex_vals:
                             selected_sex = set(sex_vals)
                             filtered = [
-                                ind for ind in filtered
-                                if ind["Sex"] in selected_sex
+                                ind for ind in filtered if ind["Sex"] in selected_sex
                             ]
 
                         # Phenotype filter (multiselect)
@@ -114,21 +113,16 @@ def cohort_page(cohort_name: str) -> None:
                         if pheno_vals:
                             selected = set(pheno_vals)
                             filtered = [
-                                ind for ind in filtered
-                                if ind["Phenotype"] in selected
+                                ind for ind in filtered if ind["Phenotype"] in selected
                             ]
 
                         # Has father checkbox
                         if filters.get("Father"):
-                            filtered = [
-                                ind for ind in filtered if ind["Father"] != "-"
-                            ]
+                            filtered = [ind for ind in filtered if ind["Father"] != "-"]
 
                         # Has mother checkbox
                         if filters.get("Mother"):
-                            filtered = [
-                                ind for ind in filtered if ind["Mother"] != "-"
-                            ]
+                            filtered = [ind for ind in filtered if ind["Mother"] != "-"]
 
                         # Update shared filtered state
                         filtered_state["individuals"] = filtered

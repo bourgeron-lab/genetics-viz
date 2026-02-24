@@ -23,7 +23,6 @@ __all__ = [
     "VALIDATION_STATUS_ICONS",
     "get_validation_icon",
     "create_validation_filter_menu",
-
     "load_validation_map",
     "add_validation_status_to_row",
     "show_variant_dialog",

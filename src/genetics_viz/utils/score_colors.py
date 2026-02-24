@@ -32,7 +32,7 @@ def reload_score_configs():
 def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     """Convert hex color to RGB tuple."""
     hex_color = hex_color.lstrip("#")
-    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
 
 
 def rgb_to_hex(r: int, g: int, b: int) -> str:
@@ -90,15 +90,9 @@ def get_score_color(score_name: str, value: float) -> Optional[Dict[str, str]]:
 
     # Handle edge cases
     if value <= points[0]["threshold"]:
-        return {
-            "color": points[0]["color"],
-            "label": points[0]["label"]
-        }
+        return {"color": points[0]["color"], "label": points[0]["label"]}
     if value >= points[-1]["threshold"]:
-        return {
-            "color": points[-1]["color"],
-            "label": points[-1]["label"]
-        }
+        return {"color": points[-1]["color"], "label": points[-1]["label"]}
 
     # Find the two points that frame the value
     for i in range(len(points) - 1):
@@ -119,13 +113,10 @@ def get_score_color(score_name: str, value: float) -> Optional[Dict[str, str]]:
             # Use label of closer point
             label = lower["label"] if ratio < 0.5 else upper["label"]
 
-            return {
-                "color": color,
-                "label": label
-            }
+            return {"color": color, "label": label}
 
     # Fallback (shouldn't reach here)
     return {
         "color": "#757575",  # Gray
-        "label": "Unknown"
+        "label": "Unknown",
     }

@@ -114,10 +114,7 @@ def add_validation_status_to_row(
                 row["Validation"] = "present"
             # Check inheritance - prioritize de novo, then homozygous,
             # then first non-empty inheritance from present validations
-            present = [
-                v for v in validations
-                if v[0] in ("present", "in phase MNV")
-            ]
+            present = [v for v in validations if v[0] in ("present", "in phase MNV")]
             inh_values = [v[1] for v in present if v[1]]
             if "de novo" in inh_values:
                 row["ValidationInheritance"] = "de novo"

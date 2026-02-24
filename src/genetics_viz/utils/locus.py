@@ -136,9 +136,7 @@ def filter_bed_dataframe(
         chrom = query_params["chrom"]
         pos = float(query_params["pos"])
         return df.filter(
-            (pl.col("chr") == chrom)
-            & (pl.col("start") <= pos)
-            & (pl.col("end") >= pos)
+            (pl.col("chr") == chrom) & (pl.col("start") <= pos) & (pl.col("end") >= pos)
         )
 
     elif query_type == "range":
@@ -155,19 +153,14 @@ def filter_bed_dataframe(
         chrom = query_params["chrom"]
         pos = float(query_params["pos"])
         return df.filter(
-            (pl.col("chr") == chrom)
-            & (pl.col("start") <= pos)
-            & (pl.col("end") >= pos)
+            (pl.col("chr") == chrom) & (pl.col("start") <= pos) & (pl.col("end") >= pos)
         )
 
     elif query_type == "gene_id":
         gene_id = query_params["gene_id"]
         if ensg_col in df.columns:
             return df.filter(
-                pl.col(ensg_col)
-                .cast(pl.Utf8)
-                .str.to_uppercase()
-                .str.contains(gene_id)
+                pl.col(ensg_col).cast(pl.Utf8).str.to_uppercase().str.contains(gene_id)
             )
         return df.head(0)
 

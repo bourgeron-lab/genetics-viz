@@ -61,20 +61,48 @@ def build_color_thresholds(metric: str) -> List[Dict[str, Any]]:
 
     key = f"{metric}_threshold"
     return [
-        {"op": "<=", "value": robust_loss[key], "color": robust_loss["color"], "weight": "bold"},
-        {"op": "<=", "value": permissive_loss[key], "color": permissive_loss["color"], "weight": "600"},
-        {"op": ">=", "value": robust_gain[key], "color": robust_gain["color"], "weight": "bold"},
-        {"op": ">=", "value": permissive_gain[key], "color": permissive_gain["color"], "weight": "600"},
+        {
+            "op": "<=",
+            "value": robust_loss[key],
+            "color": robust_loss["color"],
+            "weight": "bold",
+        },
+        {
+            "op": "<=",
+            "value": permissive_loss[key],
+            "color": permissive_loss["color"],
+            "weight": "600",
+        },
+        {
+            "op": ">=",
+            "value": robust_gain[key],
+            "color": robust_gain["color"],
+            "weight": "bold",
+        },
+        {
+            "op": ">=",
+            "value": permissive_gain[key],
+            "color": permissive_gain["color"],
+            "weight": "600",
+        },
     ]
 
 
 def build_call_colors() -> Dict[str, str]:
     """Build call label -> color mapping from WisecondorX config."""
     return {
-        WISECONDORX_CONFIG["robust_loss"]["label"]: WISECONDORX_CONFIG["robust_loss"]["color"],
-        WISECONDORX_CONFIG["permissive_loss"]["label"]: WISECONDORX_CONFIG["permissive_loss"]["color"],
-        WISECONDORX_CONFIG["robust_gain"]["label"]: WISECONDORX_CONFIG["robust_gain"]["color"],
-        WISECONDORX_CONFIG["permissive_gain"]["label"]: WISECONDORX_CONFIG["permissive_gain"]["color"],
+        WISECONDORX_CONFIG["robust_loss"]["label"]: WISECONDORX_CONFIG["robust_loss"][
+            "color"
+        ],
+        WISECONDORX_CONFIG["permissive_loss"]["label"]: WISECONDORX_CONFIG[
+            "permissive_loss"
+        ]["color"],
+        WISECONDORX_CONFIG["robust_gain"]["label"]: WISECONDORX_CONFIG["robust_gain"][
+            "color"
+        ],
+        WISECONDORX_CONFIG["permissive_gain"]["label"]: WISECONDORX_CONFIG[
+            "permissive_gain"
+        ]["color"],
     }
 
 
@@ -261,9 +289,7 @@ def parse_wisecondorx_bed_for_display(file_path: Path) -> Optional[pl.DataFrame]
         df = df.with_columns(
             pl.struct(["genic_symbol", "exonic_symbol"])
             .map_elements(
-                lambda row: create_gene_list(
-                    row["genic_symbol"], row["exonic_symbol"]
-                ),
+                lambda row: create_gene_list(row["genic_symbol"], row["exonic_symbol"]),
                 return_dtype=pl.Utf8,
             )
             .alias("gene")

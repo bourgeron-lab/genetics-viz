@@ -17,6 +17,7 @@ _STATIC_DIR = Path(__file__).parent.parent / "static"
 _JS_PATH = _STATIC_DIR / "js" / "data_table.js"
 _CSS_PATH = _STATIC_DIR / "css" / "data_table.css"
 
+
 def _inject_once() -> None:
     """Inject TanStack CDN + DataTable JS + CSS once per page context."""
     client = ui.context.client
@@ -259,9 +260,7 @@ class DataTable:
             desc = sorting[0].get("desc", False)
 
             # Look up column def for sort metadata
-            col_def = next(
-                (c for c in self.columns if c.get("id") == col_id), {}
-            )
+            col_def = next((c for c in self.columns if c.get("id") == col_id), {})
             sort_field = col_def.get("sortField", col_id)
             sort_type = col_def.get("sorting", "")
 

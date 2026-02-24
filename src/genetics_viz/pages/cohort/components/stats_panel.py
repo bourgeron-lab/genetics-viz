@@ -12,10 +12,7 @@ from genetics_viz.models import Cohort, DataStore
 from genetics_viz.utils.genesets import load_genesets
 
 
-
-def _discover_wombat_configs(
-    store: DataStore, cohort: Cohort
-) -> List[str]:
+def _discover_wombat_configs(store: DataStore, cohort: Cohort) -> List[str]:
     """Scan the cohort wombat directory for available config names."""
     wombat_dir = store.data_dir / "cohorts" / cohort.name / "wombat"
     if not wombat_dir.exists():
@@ -77,9 +74,7 @@ def _count_variants_per_sample(
             .cast(pl.Utf8)
             .fill_null("")
             .str.split(",")
-            .list.eval(
-                pl.element().str.to_uppercase().is_in(list(geneset_genes))
-            )
+            .list.eval(pl.element().str.to_uppercase().is_in(list(geneset_genes)))
             .list.any()
         )
 
@@ -92,10 +87,8 @@ def _count_variants_per_sample(
     )
 
     return {
-        str(row["sample"]): row["count"]
-        for row in variant_counts.iter_rows(named=True)
+        str(row["sample"]): row["count"] for row in variant_counts.iter_rows(named=True)
     }
-
 
 
 def render_stats_panel(
@@ -140,12 +133,16 @@ def render_stats_panel(
         ).classes("w-full mb-2")
 
         # Geneset multiselect
-        geneset_select = ui.select(
-            options=geneset_names,
-            value=[],
-            label="Genesets",
-            multiple=True,
-        ).props("use-chips").classes("w-full mb-2")
+        geneset_select = (
+            ui.select(
+                options=geneset_names,
+                value=[],
+                label="Genesets",
+                multiple=True,
+            )
+            .props("use-chips")
+            .classes("w-full mb-2")
+        )
 
         # Spinner container
         spinner_container = ui.column().classes("w-full items-center")
@@ -164,9 +161,7 @@ def render_stats_panel(
             # Find the wombat file
             tsv_path = _find_wombat_file(store, cohort, config)
             if tsv_path is None:
-                ui.notify(
-                    f"No wombat file found for config: {config}", type="negative"
-                )
+                ui.notify(f"No wombat file found for config: {config}", type="negative")
                 return
 
             # Show spinner, clear previous plots
@@ -188,8 +183,14 @@ def render_stats_panel(
 
             # Phenotype colors
             default_colors = [
-                "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-                "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+                "#1f77b4",
+                "#ff7f0e",
+                "#2ca02c",
+                "#d62728",
+                "#9467bd",
+                "#8c564b",
+                "#e377c2",
+                "#7f7f7f",
             ]
             pheno_colors = {
                 p: default_colors[i % len(default_colors)]
@@ -204,9 +205,7 @@ def render_stats_panel(
 
             for gs_name in genesets:
                 genes = geneset_genes.get(gs_name)
-                counts = await run.io_bound(
-                    _count_variants_per_sample, tsv_path, genes
-                )
+                counts = await run.io_bound(_count_variants_per_sample, tsv_path, genes)
 
                 # Compute per-phenotype lists
                 pheno_counts: Dict[str, List[int]] = {}
@@ -218,9 +217,7 @@ def render_stats_panel(
                     ]
 
                 # Overall median across all samples
-                all_counts = [
-                    c for vals in pheno_counts.values() for c in vals
-                ]
+                all_counts = [c for vals in pheno_counts.values() for c in vals]
                 median_val = statistics.median(all_counts) if all_counts else 0
 
                 if median_val > 1:

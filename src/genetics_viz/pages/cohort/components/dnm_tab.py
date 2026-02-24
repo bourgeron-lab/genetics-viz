@@ -17,6 +17,7 @@ from genetics_viz.utils.column_names import (
     apply_width_constraints,
     get_column_group,
     get_column_sorting,
+    get_column_type,
     get_display_label,
     get_dropped_columns,
     get_schema_overrides,
@@ -54,7 +55,6 @@ def impact_matches_category(impact: str, base_names: Set[str]) -> bool:
         if impact == base or impact == f"{base}_variant":
             return True
     return False
-
 
 
 def render_dnm_tab(
@@ -385,6 +385,10 @@ def render_dnm_tab(
                         }
                         if col == "Validation":
                             col_def["cellType"] = "validation"
+                        else:
+                            col_type = get_column_type(col)
+                            if col_type in ("int", "float"):
+                                col_def["cellType"] = "number"
                         apply_width_constraints(col_def, col)
                         cols.append(col_def)
                     return cols

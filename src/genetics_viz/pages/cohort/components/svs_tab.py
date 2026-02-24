@@ -15,6 +15,7 @@ from genetics_viz.utils.column_names import (
     apply_width_constraints,
     get_column_group,
     get_column_sorting,
+    get_column_type,
     get_display_label,
     reorder_columns_by_group,
 )
@@ -27,7 +28,13 @@ from genetics_viz.utils.wisecondorx import (
 )
 
 
-_GENE_BADGE_COLUMNS = {"genic_symbol", "genic_ensg", "exonic_symbol", "exonic_ensg", "VEP_Gene"}
+_GENE_BADGE_COLUMNS = {
+    "genic_symbol",
+    "genic_ensg",
+    "exonic_symbol",
+    "exonic_ensg",
+    "VEP_Gene",
+}
 
 
 def render_svs_tab(
@@ -424,9 +431,7 @@ def render_wisecondorx_subtab(
         ]
         # Default: all selected except "Below threshold"
         selected_calls = {
-            "value": [
-                call for call in all_call_values if call != "Below threshold"
-            ]
+            "value": [call for call in all_call_values if call != "Below threshold"]
         }
 
         # Create a container for the data table
@@ -453,11 +458,7 @@ def render_wisecondorx_subtab(
 
                 # Filter rows by selected call values if 'call' column exists
                 if "call" in df.columns:
-                    rows = [
-                        r
-                        for r in rows
-                        if r.get("call") in selected_calls["value"]
-                    ]
+                    rows = [r for r in rows if r.get("call") in selected_calls["value"]]
 
                 ratio_thresholds = build_color_thresholds("ratio")
                 zscore_thresholds = build_color_thresholds("zscore")
@@ -505,6 +506,10 @@ def render_wisecondorx_subtab(
                         elif col in _GENE_BADGE_COLUMNS:
                             col_def["cellType"] = "gene_badge"
                             col_def["badgesField"] = f"{col}_badges"
+                        else:
+                            col_type = get_column_type(col)
+                            if col_type in ("int", "float"):
+                                col_def["cellType"] = "number"
                         apply_width_constraints(col_def, col)
                         cols.append(col_def)
                     return cols
@@ -589,9 +594,8 @@ def render_wisecondorx_subtab(
                                     call_checkboxes[call_value] = ui.checkbox(
                                         call_value,
                                         value=call_value in selected_calls["value"],
-                                        on_change=lambda e, c=call_value: handle_call_change(
-                                            c, e.value
-                                        ),
+                                        on_change=lambda e,
+                                        c=call_value: handle_call_change(c, e.value),
                                     ).classes("text-sm")
 
                 def on_view_sv(e):
@@ -600,9 +604,7 @@ def render_wisecondorx_subtab(
                     sample_id = row_data.get("sample", "")
 
                     if not locus or not sample_id:
-                        ui.notify(
-                            "Missing locus or sample information", type="warning"
-                        )
+                        ui.notify("Missing locus or sample information", type="warning")
                         return
 
                     # Parse locus (format: chr:start-end)
@@ -662,8 +664,7 @@ def render_wisecondorx_subtab(
 
                     # Reorder to match all_columns order
                     selected_cols["value"] = [
-                        col for col in all_columns
-                        if col in selected_cols["value"]
+                        col for col in all_columns if col in selected_cols["value"]
                     ]
 
                     render_data_table.refresh()

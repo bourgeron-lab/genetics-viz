@@ -274,9 +274,17 @@ def waves_validation_page() -> None:
 
                             DataTable(
                                 columns=[
-                                    {"id": "sample_id", "header": "Sample ID", "sortable": True},
+                                    {
+                                        "id": "sample_id",
+                                        "header": "Sample ID",
+                                        "sortable": True,
+                                    },
                                     {"id": "validations", "header": "Validations"},
-                                    {"id": "count", "header": "# Validations", "sortable": True},
+                                    {
+                                        "id": "count",
+                                        "header": "# Validations",
+                                        "sortable": True,
+                                    },
                                     {
                                         "id": "category",
                                         "header": "Status",

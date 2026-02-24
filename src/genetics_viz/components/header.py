@@ -41,22 +41,14 @@ def create_header(cohort_name: str | None = None) -> None:
                 ).props("flat color=white")
 
                 # Validation dropdown (always visible)
-                with ui.button("Validation", icon="verified").props(
-                    "flat color=white"
-                ):
+                with ui.button("Validation", icon="verified").props("flat color=white"):
                     with ui.menu():
                         try:
                             store = get_data_store()
                             to_validate_dir = store.data_dir / "to_validate"
-                            if (
-                                to_validate_dir.exists()
-                                and to_validate_dir.is_dir()
-                            ):
+                            if to_validate_dir.exists() and to_validate_dir.is_dir():
                                 tsv_files = sorted(
-                                    [
-                                        f.stem
-                                        for f in to_validate_dir.glob("*.tsv")
-                                    ]
+                                    [f.stem for f in to_validate_dir.glob("*.tsv")]
                                 )
                                 for file_name in tsv_files:
                                     ui.menu_item(
@@ -68,9 +60,7 @@ def create_header(cohort_name: str | None = None) -> None:
                             ui.separator()
                             ui.menu_item(
                                 "See All",
-                                on_click=lambda: ui.navigate.to(
-                                    "/validation/all"
-                                ),
+                                on_click=lambda: ui.navigate.to("/validation/all"),
                             )
                             ui.menu_item(
                                 "Statistics",
@@ -81,9 +71,7 @@ def create_header(cohort_name: str | None = None) -> None:
                             ui.separator()
                             ui.menu_item(
                                 "Waves",
-                                on_click=lambda: ui.navigate.to(
-                                    "/validation/waves"
-                                ),
+                                on_click=lambda: ui.navigate.to("/validation/waves"),
                             )
                         except RuntimeError:
                             ui.menu_item("Loading...", auto_close=False)
@@ -104,18 +92,16 @@ def create_header(cohort_name: str | None = None) -> None:
                     value=cohort_name,
                     label="Project",
                     on_change=on_project_change,
-                ).props(
-                    "outlined dense dark color=white label-color=white"
-                ).classes("w-48")
+                ).props("outlined dense dark color=white label-color=white").classes(
+                    "w-48"
+                )
 
                 # Cohort button (visible only when a project is selected)
                 if cohort_name:
                     ui.button(
                         "Cohort",
                         icon="folder",
-                        on_click=lambda n=cohort_name: ui.navigate.to(
-                            f"/cohort/{n}"
-                        ),
+                        on_click=lambda n=cohort_name: ui.navigate.to(f"/cohort/{n}"),
                     ).props("flat color=white")
 
                 # Search button (visible only when a project is selected)
@@ -123,23 +109,17 @@ def create_header(cohort_name: str | None = None) -> None:
                     ui.button(
                         "Search",
                         icon="search",
-                        on_click=lambda n=cohort_name: ui.navigate.to(
-                            f"/search/{n}"
-                        ),
+                        on_click=lambda n=cohort_name: ui.navigate.to(f"/search/{n}"),
                     ).props("flat color=white")
 
         # Right side - data directory indicator and refresh button
         with ui.row().classes("items-center gap-2"):
             try:
                 store = get_data_store()
-                ui.label(f"📁 {store.data_dir.name}").classes(
-                    "text-sm opacity-75"
-                )
+                ui.label(f"📁 {store.data_dir.name}").classes("text-sm opacity-75")
             except RuntimeError:
                 pass
 
-            ui.button(
-                icon="refresh", on_click=reload_all_configs
-            ).props("flat color=white size=sm round").tooltip(
-                "Reload configuration files"
-            )
+            ui.button(icon="refresh", on_click=reload_all_configs).props(
+                "flat color=white size=sm round"
+            ).tooltip("Reload configuration files")

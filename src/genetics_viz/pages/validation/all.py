@@ -559,8 +559,17 @@ async def validation_all_page() -> None:
                         {"id": "Variant", "header": "Variant", "sortable": True},
                         {"id": "Sample", "header": "Sample", "sortable": True},
                         {"id": "User", "header": "User", "sortable": True},
-                        {"id": "Inheritance", "header": "Inheritance", "sortable": True},
-                        {"id": "Validation", "header": "Validation", "cellType": "validation", "sortable": True},
+                        {
+                            "id": "Inheritance",
+                            "header": "Inheritance",
+                            "sortable": True,
+                        },
+                        {
+                            "id": "Validation",
+                            "header": "Validation",
+                            "cellType": "validation",
+                            "sortable": True,
+                        },
                         {"id": "Timestamp", "header": "Timestamp", "sortable": True},
                     ]
 

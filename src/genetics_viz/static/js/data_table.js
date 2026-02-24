@@ -627,7 +627,7 @@ class DataTable {
             case 'link': return this._renderLinkCell(value, meta, rowData);
             case 'color_scale': return this._renderColorScaleCell(value, meta, rowData);
             case 'score_badge': return this._renderScoreBadgeCell(value, meta, rowData);
-            case 'cnv_call': return this._renderCnvCallCell(value, meta);
+            case 'cnv_call': return this._renderCnvCallCell(value, meta, rowData);
             case 'curated_locus': return this._renderCuratedLocusCell(value, meta, rowData);
             case 'number': return this._renderNumberCell(value);
             default: return this._renderTextCell(value);
@@ -643,7 +643,12 @@ class DataTable {
         if (value === null || value === undefined || value === '') return '';
         var n = Number(value);
         if (isNaN(n)) return this._escapeHtml(String(value));
-        return Number.isInteger(n) ? String(n) : n.toFixed(4);
+        if (Number.isInteger(n)) {
+            var s = String(Math.abs(n));
+            s = s.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F');
+            return n < 0 ? '\u2212' + s : s;
+        }
+        return n.toFixed(4);
     }
 
     _renderActionCell(meta, rowData) {
@@ -808,15 +813,22 @@ class DataTable {
         return this._escapeHtml(String(value));
     }
 
-    _renderCnvCallCell(value, meta) {
+    _renderCnvCallCell(value, meta, rowData) {
         if (value === null || value === undefined || value === '') return '';
         var callColors = meta.callColors || {};
         var color = callColors[String(value)];
+        var tooltipField = meta.tooltipField;
+        var tooltip = tooltipField && rowData ? (rowData[tooltipField] || '') : '';
         if (color) {
-            return '<span class="dt-badge" style="background-color: ' + color + '; color: white;">'
-                + this._escapeHtml(String(value)) + '</span>';
+            var html = '<span class="dt-badge" style="background-color: ' + color + '; color: white;"';
+            if (tooltip) html += ' data-tooltip="' + this._escapeAttr(tooltip) + '"';
+            html += '>' + this._escapeHtml(String(value)) + '</span>';
+            return html;
         }
-        return '<span class="text-grey-6">' + this._escapeHtml(String(value)) + '</span>';
+        var html = '<span class="text-grey-6"';
+        if (tooltip) html += ' data-tooltip="' + this._escapeAttr(tooltip) + '"';
+        html += '>' + this._escapeHtml(String(value)) + '</span>';
+        return html;
     }
 
     _renderCuratedLocusCell(value, meta, rowData) {

@@ -18,6 +18,7 @@ from genetics_viz.utils.column_names import (
     apply_width_constraints,
     get_column_group,
     get_column_sorting,
+    get_column_type,
     get_display_label,
     get_dropped_columns,
     get_schema_overrides,
@@ -48,7 +49,6 @@ from genetics_viz.utils.cytobands import (
     VALIDATION_COLORS,
     norm_chrom,
 )
-
 
 
 def render_wombat_tab(
@@ -112,9 +112,11 @@ def render_wombat_tab(
         for wf in wombat_files:
             subtab_refs[wf["wombat_config"]] = ui.tab(wf["wombat_config"])
 
-    with ui.tab_panels(wombat_subtabs, value=list(subtab_refs.values())[0]).props(
-        "keep-alive"
-    ).classes("w-full"):
+    with (
+        ui.tab_panels(wombat_subtabs, value=list(subtab_refs.values())[0])
+        .props("keep-alive")
+        .classes("w-full")
+    ):
         for wf in wombat_files:
             with ui.tab_panel(subtab_refs[wf["wombat_config"]]):
                 config_name = wf["wombat_config"]
@@ -331,7 +333,7 @@ def render_wombat_tab(
                                         row[f"{col_name}_badge"] = {
                                             "label": f"{value:.3f}",
                                             "color": badge_info["color"],
-                                            "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})"
+                                            "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})",
                                         }
                                 except (ValueError, TypeError):
                                     pass  # Skip invalid values or non-numeric columns
@@ -374,7 +376,9 @@ def render_wombat_tab(
 
                     # Override initial_selected with preset columns (if available)
                     preset_columns = initial_preset.get("columns", [])
-                    initial_selected = [col for col in preset_columns if col in all_columns]
+                    initial_selected = [
+                        col for col in preset_columns if col in all_columns
+                    ]
 
                     selected_cols = {"value": initial_selected}
                     wombat_data[config_name]["selected_cols"] = selected_cols
@@ -400,7 +404,10 @@ def render_wombat_tab(
                     # Mutable containers for UI element references
                     # (populated during filter panel construction, used by handlers)
                     wombat_data[config_name]["_refresh"] = {"fn": None}
-                    wombat_data[config_name]["_table_state"] = {"sorting": [], "page": 0}
+                    wombat_data[config_name]["_table_state"] = {
+                        "sorting": [],
+                        "page": 0,
+                    }
                     wombat_data[config_name]["_geneset_cbs"] = {}
                     wombat_data[config_name]["_impact_cbs"] = {}
 
@@ -413,78 +420,261 @@ def render_wombat_tab(
                     page_client = context.client
 
                     with data_container:
-
                         # Collapsible Filters panel
                         with ui.card().classes("w-full p-0 mt-2"):
-                          with ui.expansion(
-                              "Filters", icon="filter_list", value=False
-                          ).classes("w-full").props(
-                              "header-class='text-lg font-semibold text-blue-700'"
-                          ):
-
-                            with ui.row().classes(
-                                "gap-6 items-start flex-wrap p-2"
+                            with (
+                                ui.expansion("Filters", icon="filter_list", value=False)
+                                .classes("w-full")
+                                .props(
+                                    "header-class='text-lg font-semibold text-blue-700'"
+                                )
                             ):
-                                # Checkbox exclude filters
-                                with ui.column().classes("gap-2"):
-                                    ui.checkbox(
-                                        "Exclude LCR",
-                                        value=wombat_data[config_name][
-                                            "filter_exclude_lcr"
-                                        ]["value"],
-                                        on_change=lambda e, cfg=config_name: (
-                                            wombat_data[cfg][
-                                                "filter_exclude_lcr"
-                                            ].update({"value": e.value}),
-                                            wombat_data[cfg]["_refresh"]["fn"](),
-                                        ),
-                                    )
-
-                                    ui.checkbox(
-                                        "Exclude gnomAD filtered",
-                                        value=wombat_data[config_name][
-                                            "filter_exclude_gnomad"
-                                        ]["value"],
-                                        on_change=lambda e, cfg=config_name: (
-                                            wombat_data[cfg][
-                                                "filter_exclude_gnomad"
-                                            ].update({"value": e.value}),
-                                            wombat_data[cfg]["_refresh"]["fn"](),
-                                        ),
-                                    )
-
-                                    ui.checkbox(
-                                        "Exclude FP due to MNV (mnv_proba > 0.5)",
-                                        value=wombat_data[config_name][
-                                            "filter_exclude_mnv"
-                                        ]["value"],
-                                        on_change=lambda e, cfg=config_name: (
-                                            wombat_data[cfg][
-                                                "filter_exclude_mnv"
-                                            ].update({"value": e.value}),
-                                            wombat_data[cfg]["_refresh"]["fn"](),
-                                        ),
-                                    )
-
-                                # Dropdown menu filters
                                 with ui.row().classes(
-                                    "gap-2 items-center flex-wrap"
+                                    "gap-6 items-start flex-wrap p-2"
                                 ):
-                                    # Genesets filter
-                                    if available_genesets:
-                                        geneset_btn_ref: Dict[str, Any] = {
+                                    # Checkbox exclude filters
+                                    with ui.column().classes("gap-2"):
+                                        ui.checkbox(
+                                            "Exclude LCR",
+                                            value=wombat_data[config_name][
+                                                "filter_exclude_lcr"
+                                            ]["value"],
+                                            on_change=lambda e, cfg=config_name: (
+                                                wombat_data[cfg][
+                                                    "filter_exclude_lcr"
+                                                ].update({"value": e.value}),
+                                                wombat_data[cfg]["_refresh"]["fn"](),
+                                            ),
+                                        )
+
+                                        ui.checkbox(
+                                            "Exclude gnomAD filtered",
+                                            value=wombat_data[config_name][
+                                                "filter_exclude_gnomad"
+                                            ]["value"],
+                                            on_change=lambda e, cfg=config_name: (
+                                                wombat_data[cfg][
+                                                    "filter_exclude_gnomad"
+                                                ].update({"value": e.value}),
+                                                wombat_data[cfg]["_refresh"]["fn"](),
+                                            ),
+                                        )
+
+                                        ui.checkbox(
+                                            "Exclude FP due to MNV (mnv_proba > 0.5)",
+                                            value=wombat_data[config_name][
+                                                "filter_exclude_mnv"
+                                            ]["value"],
+                                            on_change=lambda e, cfg=config_name: (
+                                                wombat_data[cfg][
+                                                    "filter_exclude_mnv"
+                                                ].update({"value": e.value}),
+                                                wombat_data[cfg]["_refresh"]["fn"](),
+                                            ),
+                                        )
+
+                                    # Dropdown menu filters
+                                    with ui.row().classes(
+                                        "gap-2 items-center flex-wrap"
+                                    ):
+                                        # Genesets filter
+                                        if available_genesets:
+                                            geneset_btn_ref: Dict[str, Any] = {
+                                                "button": None
+                                            }
+
+                                            geneset_btn = ui.button(
+                                                "Genesets", icon="list"
+                                            ).props("outline")
+                                            geneset_btn_ref["button"] = geneset_btn
+
+                                            with geneset_btn:
+                                                with ui.menu():
+                                                    ui.label(
+                                                        "Select Genesets:"
+                                                    ).classes(
+                                                        "px-4 py-2 font-semibold text-sm"
+                                                    )
+                                                    ui.separator()
+
+                                                    with ui.column().classes("p-2"):
+                                                        with ui.row().classes(
+                                                            "gap-2 mb-2"
+                                                        ):
+
+                                                            def select_all_genesets(
+                                                                _e=None,
+                                                                cfg=config_name,
+                                                            ):
+                                                                wombat_data[cfg][
+                                                                    "selected_genesets"
+                                                                ]["value"] = list(
+                                                                    available_genesets.keys()
+                                                                )
+                                                                for cb in wombat_data[
+                                                                    cfg
+                                                                ][
+                                                                    "_geneset_cbs"
+                                                                ].values():
+                                                                    cb.value = True
+                                                                if geneset_btn_ref[
+                                                                    "button"
+                                                                ]:
+                                                                    geneset_btn_ref[
+                                                                        "button"
+                                                                    ].props(
+                                                                        remove="outline",
+                                                                        add="unelevated color=green",
+                                                                    )
+                                                                    geneset_btn_ref[
+                                                                        "button"
+                                                                    ].update()
+                                                                wombat_data[cfg][
+                                                                    "_refresh"
+                                                                ]["fn"]()
+
+                                                            def select_no_genesets(
+                                                                _e=None,
+                                                                cfg=config_name,
+                                                            ):
+                                                                wombat_data[cfg][
+                                                                    "selected_genesets"
+                                                                ]["value"] = []
+                                                                for cb in wombat_data[
+                                                                    cfg
+                                                                ][
+                                                                    "_geneset_cbs"
+                                                                ].values():
+                                                                    cb.value = False
+                                                                if geneset_btn_ref[
+                                                                    "button"
+                                                                ]:
+                                                                    geneset_btn_ref[
+                                                                        "button"
+                                                                    ].props(
+                                                                        remove="unelevated color=green",
+                                                                        add="outline",
+                                                                    )
+                                                                    geneset_btn_ref[
+                                                                        "button"
+                                                                    ].update()
+                                                                wombat_data[cfg][
+                                                                    "_refresh"
+                                                                ]["fn"]()
+
+                                                            ui.button(
+                                                                "All",
+                                                                on_click=select_all_genesets,
+                                                            ).props(
+                                                                "size=sm flat dense"
+                                                            ).classes("text-xs")
+                                                            ui.button(
+                                                                "None",
+                                                                on_click=select_no_genesets,
+                                                            ).props(
+                                                                "size=sm flat dense"
+                                                            ).classes("text-xs")
+
+                                                        ui.separator()
+
+                                                        for gs_name in sorted(
+                                                            available_genesets.keys()
+                                                        ):
+
+                                                            def make_geneset_handler(
+                                                                name,
+                                                                cfg=config_name,
+                                                            ):
+                                                                def handler(e):
+                                                                    if e.value:
+                                                                        if (
+                                                                            name
+                                                                            not in wombat_data[
+                                                                                cfg
+                                                                            ][
+                                                                                "selected_genesets"
+                                                                            ]["value"]
+                                                                        ):
+                                                                            wombat_data[
+                                                                                cfg
+                                                                            ][
+                                                                                "selected_genesets"
+                                                                            ][
+                                                                                "value"
+                                                                            ].append(
+                                                                                name
+                                                                            )
+                                                                    else:
+                                                                        if (
+                                                                            name
+                                                                            in wombat_data[
+                                                                                cfg
+                                                                            ][
+                                                                                "selected_genesets"
+                                                                            ]["value"]
+                                                                        ):
+                                                                            wombat_data[
+                                                                                cfg
+                                                                            ][
+                                                                                "selected_genesets"
+                                                                            ][
+                                                                                "value"
+                                                                            ].remove(
+                                                                                name
+                                                                            )
+                                                                    if geneset_btn_ref[
+                                                                        "button"
+                                                                    ]:
+                                                                        if wombat_data[
+                                                                            cfg
+                                                                        ][
+                                                                            "selected_genesets"
+                                                                        ]["value"]:
+                                                                            geneset_btn_ref[
+                                                                                "button"
+                                                                            ].props(
+                                                                                remove="outline",
+                                                                                add="unelevated color=green",
+                                                                            )
+                                                                        else:
+                                                                            geneset_btn_ref[
+                                                                                "button"
+                                                                            ].props(
+                                                                                remove="unelevated color=green",
+                                                                                add="outline",
+                                                                            )
+                                                                        geneset_btn_ref[
+                                                                            "button"
+                                                                        ].update()
+                                                                    wombat_data[cfg][
+                                                                        "_refresh"
+                                                                    ]["fn"]()
+
+                                                                return handler
+
+                                                            wombat_data[config_name][
+                                                                "_geneset_cbs"
+                                                            ][gs_name] = ui.checkbox(
+                                                                f"{gs_name} ({len(available_genesets[gs_name])} genes)",
+                                                                value=False,
+                                                                on_change=make_geneset_handler(
+                                                                    gs_name
+                                                                ),
+                                                            ).classes("text-sm")
+
+                                        # Impacts filter
+                                        impact_btn_ref: Dict[str, Any] = {
                                             "button": None
                                         }
-
-                                        geneset_btn = ui.button(
-                                            "Genesets", icon="list"
+                                        impact_btn = ui.button(
+                                            "Impacts", icon="filter_list"
                                         ).props("outline")
-                                        geneset_btn_ref["button"] = geneset_btn
+                                        impact_btn_ref["button"] = impact_btn
 
-                                        with geneset_btn:
+                                        with impact_btn:
                                             with ui.menu():
                                                 ui.label(
-                                                    "Select Genesets:"
+                                                    "Select Impact Types:"
                                                 ).classes(
                                                     "px-4 py-2 font-semibold text-sm"
                                                 )
@@ -492,464 +682,279 @@ def render_wombat_tab(
 
                                                 with ui.column().classes("p-2"):
                                                     with ui.row().classes(
-                                                        "gap-2 mb-2"
+                                                        "gap-2 mb-2 flex-wrap"
                                                     ):
 
-                                                        def select_all_genesets(
+                                                        def select_all_impacts(
                                                             _e=None,
                                                             cfg=config_name,
                                                         ):
                                                             wombat_data[cfg][
-                                                                "selected_genesets"
+                                                                "selected_impacts"
                                                             ]["value"] = list(
-                                                                available_genesets.keys()
+                                                                VEP_CONSEQUENCES.keys()
                                                             )
-                                                            for (
-                                                                cb
-                                                            ) in wombat_data[cfg]["_geneset_cbs"].values():
+                                                            for cb in wombat_data[cfg][
+                                                                "_impact_cbs"
+                                                            ].values():
                                                                 cb.value = True
-                                                            if geneset_btn_ref[
-                                                                "button"
-                                                            ]:
-                                                                geneset_btn_ref[
+                                                            if impact_btn_ref["button"]:
+                                                                impact_btn_ref[
+                                                                    "button"
+                                                                ].props(
+                                                                    remove="unelevated color=orange",
+                                                                    add="outline",
+                                                                )
+                                                                impact_btn_ref[
+                                                                    "button"
+                                                                ].update()
+                                                            wombat_data[cfg][
+                                                                "_refresh"
+                                                            ]["fn"]()
+
+                                                        def select_none_impacts(
+                                                            _e=None,
+                                                            cfg=config_name,
+                                                        ):
+                                                            wombat_data[cfg][
+                                                                "selected_impacts"
+                                                            ]["value"] = []
+                                                            for cb in wombat_data[cfg][
+                                                                "_impact_cbs"
+                                                            ].values():
+                                                                cb.value = False
+                                                            if impact_btn_ref["button"]:
+                                                                impact_btn_ref[
                                                                     "button"
                                                                 ].props(
                                                                     remove="outline",
-                                                                    add="unelevated color=green",
+                                                                    add="unelevated color=orange",
                                                                 )
-                                                                geneset_btn_ref[
+                                                                impact_btn_ref[
                                                                     "button"
                                                                 ].update()
-                                                            wombat_data[cfg]["_refresh"]["fn"]()
+                                                            wombat_data[cfg][
+                                                                "_refresh"
+                                                            ]["fn"]()
 
-                                                        def select_no_genesets(
-                                                            _e=None,
+                                                        def select_by_impact_level(
+                                                            level: str,
+                                                            *,
                                                             cfg=config_name,
                                                         ):
+                                                            selected = [
+                                                                cons
+                                                                for cons, (
+                                                                    imp,
+                                                                    _,
+                                                                ) in VEP_CONSEQUENCES.items()
+                                                                if imp == level
+                                                            ]
                                                             wombat_data[cfg][
-                                                                "selected_genesets"
-                                                            ]["value"] = []
+                                                                "selected_impacts"
+                                                            ]["value"] = selected
                                                             for (
-                                                                cb
-                                                            ) in wombat_data[cfg]["_geneset_cbs"].values():
+                                                                impact,
+                                                                cb,
+                                                            ) in wombat_data[cfg][
+                                                                "_impact_cbs"
+                                                            ].items():
                                                                 cb.value = (
-                                                                    False
+                                                                    impact in selected
                                                                 )
-                                                            if geneset_btn_ref[
-                                                                "button"
-                                                            ]:
-                                                                geneset_btn_ref[
+                                                            if impact_btn_ref["button"]:
+                                                                impact_btn_ref[
                                                                     "button"
                                                                 ].props(
-                                                                    remove="unelevated color=green",
-                                                                    add="outline",
+                                                                    remove="outline",
+                                                                    add="unelevated color=orange",
                                                                 )
-                                                                geneset_btn_ref[
+                                                                impact_btn_ref[
                                                                     "button"
                                                                 ].update()
-                                                            wombat_data[cfg]["_refresh"]["fn"]()
+                                                            wombat_data[cfg][
+                                                                "_refresh"
+                                                            ]["fn"]()
 
                                                         ui.button(
                                                             "All",
-                                                            on_click=select_all_genesets,
+                                                            on_click=select_all_impacts,
                                                         ).props(
                                                             "size=sm flat dense"
                                                         ).classes("text-xs")
                                                         ui.button(
                                                             "None",
-                                                            on_click=select_no_genesets,
+                                                            on_click=select_none_impacts,
                                                         ).props(
                                                             "size=sm flat dense"
+                                                        ).classes("text-xs")
+                                                        ui.button(
+                                                            "HIGH",
+                                                            on_click=lambda _e=None,
+                                                            fn=select_by_impact_level: fn(
+                                                                "HIGH"
+                                                            ),
+                                                        ).props(
+                                                            "size=sm flat dense color=red"
+                                                        ).classes("text-xs")
+                                                        ui.button(
+                                                            "MODERATE",
+                                                            on_click=lambda _e=None,
+                                                            fn=select_by_impact_level: fn(
+                                                                "MODERATE"
+                                                            ),
+                                                        ).props(
+                                                            "size=sm flat dense color=orange"
+                                                        ).classes("text-xs")
+                                                        ui.button(
+                                                            "LOW",
+                                                            on_click=lambda _e=None,
+                                                            fn=select_by_impact_level: fn(
+                                                                "LOW"
+                                                            ),
+                                                        ).props(
+                                                            "size=sm flat dense color=yellow-8"
+                                                        ).classes("text-xs")
+                                                        ui.button(
+                                                            "MODIFIER",
+                                                            on_click=lambda _e=None,
+                                                            fn=select_by_impact_level: fn(
+                                                                "MODIFIER"
+                                                            ),
+                                                        ).props(
+                                                            "size=sm flat dense color=grey"
                                                         ).classes("text-xs")
 
                                                     ui.separator()
 
-                                                    for gs_name in sorted(
-                                                        available_genesets.keys()
-                                                    ):
+                                                    with ui.column().classes("gap-1"):
 
-                                                        def make_geneset_handler(
-                                                            name,
+                                                        def make_impact_handler(
+                                                            cons,
                                                             cfg=config_name,
                                                         ):
                                                             def handler(e):
                                                                 if e.value:
                                                                     if (
-                                                                        name
+                                                                        cons
                                                                         not in wombat_data[
                                                                             cfg
                                                                         ][
-                                                                            "selected_genesets"
-                                                                        ][
-                                                                            "value"
-                                                                        ]
+                                                                            "selected_impacts"
+                                                                        ]["value"]
                                                                     ):
                                                                         wombat_data[
                                                                             cfg
                                                                         ][
-                                                                            "selected_genesets"
+                                                                            "selected_impacts"
                                                                         ][
                                                                             "value"
-                                                                        ].append(
-                                                                            name
-                                                                        )
+                                                                        ].append(cons)
                                                                 else:
                                                                     if (
-                                                                        name
+                                                                        cons
                                                                         in wombat_data[
                                                                             cfg
                                                                         ][
-                                                                            "selected_genesets"
-                                                                        ][
-                                                                            "value"
-                                                                        ]
+                                                                            "selected_impacts"
+                                                                        ]["value"]
                                                                     ):
                                                                         wombat_data[
                                                                             cfg
                                                                         ][
-                                                                            "selected_genesets"
+                                                                            "selected_impacts"
                                                                         ][
                                                                             "value"
-                                                                        ].remove(
-                                                                            name
-                                                                        )
-                                                                if geneset_btn_ref[
+                                                                        ].remove(cons)
+                                                                if impact_btn_ref[
                                                                     "button"
                                                                 ]:
-                                                                    if wombat_data[
-                                                                        cfg
-                                                                    ][
-                                                                        "selected_genesets"
-                                                                    ][
-                                                                        "value"
-                                                                    ]:
-                                                                        geneset_btn_ref[
+                                                                    if len(
+                                                                        wombat_data[
+                                                                            cfg
+                                                                        ][
+                                                                            "selected_impacts"
+                                                                        ]["value"]
+                                                                    ) == len(
+                                                                        VEP_CONSEQUENCES
+                                                                    ):
+                                                                        impact_btn_ref[
+                                                                            "button"
+                                                                        ].props(
+                                                                            remove="unelevated color=orange",
+                                                                            add="outline",
+                                                                        )
+                                                                    else:
+                                                                        impact_btn_ref[
                                                                             "button"
                                                                         ].props(
                                                                             remove="outline",
-                                                                            add="unelevated color=green",
+                                                                            add="unelevated color=orange",
                                                                         )
-                                                                    else:
-                                                                        geneset_btn_ref[
-                                                                            "button"
-                                                                        ].props(
-                                                                            remove="unelevated color=green",
-                                                                            add="outline",
-                                                                        )
-                                                                    geneset_btn_ref[
+                                                                    impact_btn_ref[
                                                                         "button"
                                                                     ].update()
-                                                                wombat_data[cfg]["_refresh"]["fn"]()
+                                                                wombat_data[cfg][
+                                                                    "_refresh"
+                                                                ]["fn"]()
 
                                                             return handler
 
-                                                        wombat_data[config_name]["_geneset_cbs"][
-                                                            gs_name
-                                                        ] = ui.checkbox(
-                                                            f"{gs_name} ({len(available_genesets[gs_name])} genes)",
-                                                            value=False,
-                                                            on_change=make_geneset_handler(
-                                                                gs_name
-                                                            ),
-                                                        ).classes("text-sm")
-
-                                    # Impacts filter
-                                    impact_btn_ref: Dict[str, Any] = {
-                                        "button": None
-                                    }
-                                    impact_btn = ui.button(
-                                        "Impacts", icon="filter_list"
-                                    ).props("outline")
-                                    impact_btn_ref["button"] = impact_btn
-
-                                    with impact_btn:
-                                        with ui.menu():
-                                            ui.label(
-                                                "Select Impact Types:"
-                                            ).classes(
-                                                "px-4 py-2 font-semibold text-sm"
-                                            )
-                                            ui.separator()
-
-                                            with ui.column().classes("p-2"):
-                                                with ui.row().classes(
-                                                    "gap-2 mb-2 flex-wrap"
-                                                ):
-
-                                                    def select_all_impacts(
-                                                        _e=None,
-                                                        cfg=config_name,
-                                                    ):
-                                                        wombat_data[cfg][
-                                                            "selected_impacts"
-                                                        ]["value"] = list(
-                                                            VEP_CONSEQUENCES.keys()
-                                                        )
-                                                        for (
-                                                            cb
-                                                        ) in wombat_data[cfg]["_impact_cbs"].values():
-                                                            cb.value = True
-                                                        if impact_btn_ref[
-                                                            "button"
+                                                        for impact_level in [
+                                                            "HIGH",
+                                                            "MODERATE",
+                                                            "LOW",
+                                                            "MODIFIER",
                                                         ]:
-                                                            impact_btn_ref[
-                                                                "button"
-                                                            ].props(
-                                                                remove="unelevated color=orange",
-                                                                add="outline",
-                                                            )
-                                                            impact_btn_ref[
-                                                                "button"
-                                                            ].update()
-                                                        wombat_data[cfg]["_refresh"]["fn"]()
-
-                                                    def select_none_impacts(
-                                                        _e=None,
-                                                        cfg=config_name,
-                                                    ):
-                                                        wombat_data[cfg][
-                                                            "selected_impacts"
-                                                        ]["value"] = []
-                                                        for (
-                                                            cb
-                                                        ) in wombat_data[cfg]["_impact_cbs"].values():
-                                                            cb.value = False
-                                                        if impact_btn_ref[
-                                                            "button"
-                                                        ]:
-                                                            impact_btn_ref[
-                                                                "button"
-                                                            ].props(
-                                                                remove="outline",
-                                                                add="unelevated color=orange",
-                                                            )
-                                                            impact_btn_ref[
-                                                                "button"
-                                                            ].update()
-                                                        wombat_data[cfg]["_refresh"]["fn"]()
-
-                                                    def select_by_impact_level(
-                                                        level: str,
-                                                        *,
-                                                        cfg=config_name,
-                                                    ):
-                                                        selected = [
-                                                            cons
-                                                            for cons, (
-                                                                imp,
-                                                                _,
-                                                            ) in VEP_CONSEQUENCES.items()
-                                                            if imp == level
-                                                        ]
-                                                        wombat_data[cfg][
-                                                            "selected_impacts"
-                                                        ]["value"] = selected
-                                                        for (
-                                                            impact,
-                                                            cb,
-                                                        ) in wombat_data[cfg]["_impact_cbs"].items():
-                                                            cb.value = (
-                                                                impact
-                                                                in selected
-                                                            )
-                                                        if impact_btn_ref[
-                                                            "button"
-                                                        ]:
-                                                            impact_btn_ref[
-                                                                "button"
-                                                            ].props(
-                                                                remove="outline",
-                                                                add="unelevated color=orange",
-                                                            )
-                                                            impact_btn_ref[
-                                                                "button"
-                                                            ].update()
-                                                        wombat_data[cfg]["_refresh"]["fn"]()
-
-                                                    ui.button(
-                                                        "All",
-                                                        on_click=select_all_impacts,
-                                                    ).props(
-                                                        "size=sm flat dense"
-                                                    ).classes("text-xs")
-                                                    ui.button(
-                                                        "None",
-                                                        on_click=select_none_impacts,
-                                                    ).props(
-                                                        "size=sm flat dense"
-                                                    ).classes("text-xs")
-                                                    ui.button(
-                                                        "HIGH",
-                                                        on_click=lambda _e=None, fn=select_by_impact_level: fn(
-                                                            "HIGH"
-                                                        ),
-                                                    ).props(
-                                                        "size=sm flat dense color=red"
-                                                    ).classes("text-xs")
-                                                    ui.button(
-                                                        "MODERATE",
-                                                        on_click=lambda _e=None, fn=select_by_impact_level: fn(
-                                                            "MODERATE"
-                                                        ),
-                                                    ).props(
-                                                        "size=sm flat dense color=orange"
-                                                    ).classes("text-xs")
-                                                    ui.button(
-                                                        "LOW",
-                                                        on_click=lambda _e=None, fn=select_by_impact_level: fn(
-                                                            "LOW"
-                                                        ),
-                                                    ).props(
-                                                        "size=sm flat dense color=yellow-8"
-                                                    ).classes("text-xs")
-                                                    ui.button(
-                                                        "MODIFIER",
-                                                        on_click=lambda _e=None, fn=select_by_impact_level: fn(
-                                                            "MODIFIER"
-                                                        ),
-                                                    ).props(
-                                                        "size=sm flat dense color=grey"
-                                                    ).classes("text-xs")
-
-                                                ui.separator()
-
-                                                with ui.column().classes(
-                                                    "gap-1"
-                                                ):
-
-                                                    def make_impact_handler(
-                                                        cons,
-                                                        cfg=config_name,
-                                                    ):
-                                                        def handler(e):
-                                                            if e.value:
-                                                                if (
-                                                                    cons
-                                                                    not in wombat_data[
-                                                                        cfg
-                                                                    ][
-                                                                        "selected_impacts"
-                                                                    ][
-                                                                        "value"
-                                                                    ]
-                                                                ):
-                                                                    wombat_data[
-                                                                        cfg
-                                                                    ][
-                                                                        "selected_impacts"
-                                                                    ][
-                                                                        "value"
-                                                                    ].append(
-                                                                        cons
-                                                                    )
-                                                            else:
-                                                                if (
-                                                                    cons
-                                                                    in wombat_data[
-                                                                        cfg
-                                                                    ][
-                                                                        "selected_impacts"
-                                                                    ][
-                                                                        "value"
-                                                                    ]
-                                                                ):
-                                                                    wombat_data[
-                                                                        cfg
-                                                                    ][
-                                                                        "selected_impacts"
-                                                                    ][
-                                                                        "value"
-                                                                    ].remove(
-                                                                        cons
-                                                                    )
-                                                            if impact_btn_ref[
-                                                                "button"
-                                                            ]:
-                                                                if len(
-                                                                    wombat_data[
-                                                                        cfg
-                                                                    ][
-                                                                        "selected_impacts"
-                                                                    ][
-                                                                        "value"
-                                                                    ]
-                                                                ) == len(
-                                                                    VEP_CONSEQUENCES
-                                                                ):
-                                                                    impact_btn_ref[
-                                                                        "button"
-                                                                    ].props(
-                                                                        remove="unelevated color=orange",
-                                                                        add="outline",
-                                                                    )
-                                                                else:
-                                                                    impact_btn_ref[
-                                                                        "button"
-                                                                    ].props(
-                                                                        remove="outline",
-                                                                        add="unelevated color=orange",
-                                                                    )
-                                                                impact_btn_ref[
-                                                                    "button"
-                                                                ].update()
-                                                            wombat_data[cfg]["_refresh"]["fn"]()
-
-                                                        return handler
-
-                                                    for impact_level in [
-                                                        "HIGH",
-                                                        "MODERATE",
-                                                        "LOW",
-                                                        "MODIFIER",
-                                                    ]:
-                                                        consequences = [
-                                                            cons
-                                                            for cons, (
-                                                                imp,
-                                                                _,
-                                                            ) in VEP_CONSEQUENCES.items()
-                                                            if imp
-                                                            == impact_level
-                                                        ]
-                                                        if consequences:
-                                                            ui.label(
-                                                                f"{impact_level}:"
-                                                            ).classes(
-                                                                "text-xs font-bold text-gray-600 mt-2"
-                                                            )
-                                                            for cons in sorted(
-                                                                consequences
-                                                            ):
-                                                                wombat_data[config_name]["_impact_cbs"][
-                                                                    cons
-                                                                ] = ui.checkbox(
-                                                                    format_consequence_display(
-                                                                        cons
-                                                                    ),
-                                                                    value=True,
-                                                                    on_change=make_impact_handler(
-                                                                        cons
-                                                                    ),
+                                                            consequences = [
+                                                                cons
+                                                                for cons, (
+                                                                    imp,
+                                                                    _,
+                                                                ) in VEP_CONSEQUENCES.items()
+                                                                if imp == impact_level
+                                                            ]
+                                                            if consequences:
+                                                                ui.label(
+                                                                    f"{impact_level}:"
                                                                 ).classes(
-                                                                    "text-sm"
+                                                                    "text-xs font-bold text-gray-600 mt-2"
                                                                 )
+                                                                for cons in sorted(
+                                                                    consequences
+                                                                ):
+                                                                    wombat_data[
+                                                                        config_name
+                                                                    ]["_impact_cbs"][
+                                                                        cons
+                                                                    ] = ui.checkbox(
+                                                                        format_consequence_display(
+                                                                            cons
+                                                                        ),
+                                                                        value=True,
+                                                                        on_change=make_impact_handler(
+                                                                            cons
+                                                                        ),
+                                                                    ).classes("text-sm")
 
-                                    # Validation filter
-                                    create_validation_filter_menu(
-                                        all_statuses=[
-                                            "present",
-                                            "absent",
-                                            "uncertain",
-                                            "conflicting",
-                                            "TODO",
-                                        ],
-                                        filter_state=wombat_data[config_name][
-                                            "selected_validations"
-                                        ],
-                                        on_change=lambda cfg=config_name: wombat_data[cfg]["_refresh"]["fn"](),
-                                        label="Validation",
-                                        button_classes="",
-                                    )
+                                        # Validation filter
+                                        create_validation_filter_menu(
+                                            all_statuses=[
+                                                "present",
+                                                "absent",
+                                                "uncertain",
+                                                "conflicting",
+                                                "TODO",
+                                            ],
+                                            filter_state=wombat_data[config_name][
+                                                "selected_validations"
+                                            ],
+                                            on_change=lambda cfg=config_name: wombat_data[
+                                                cfg
+                                            ]["_refresh"]["fn"](),
+                                            label="Validation",
+                                            button_classes="",
+                                        )
 
                         @ui.refreshable
                         def render_data_table(cfg=config_name):
@@ -978,17 +983,12 @@ def render_wombat_tab(
                                     for r in rows
                                     if not (
                                         r.get("LCR")
-                                        and "true"
-                                        in str(r.get("LCR", "")).lower()
+                                        and "true" in str(r.get("LCR", "")).lower()
                                     )
                                 ]
 
                             if data["filter_exclude_gnomad"]["value"]:
-                                rows = [
-                                    r
-                                    for r in rows
-                                    if not r.get("genomes_filters")
-                                ]
+                                rows = [r for r in rows if not r.get("genomes_filters")]
 
                             if data["filter_exclude_mnv"]["value"]:
 
@@ -1006,11 +1006,7 @@ def render_wombat_tab(
                                                 pass
                                     return False
 
-                                rows = [
-                                    r
-                                    for r in rows
-                                    if not has_high_mnv_proba(r)
-                                ]
+                                rows = [r for r in rows if not has_high_mnv_proba(r)]
 
                             # Apply geneset filter
                             selected_gs = data["selected_genesets"]["value"]
@@ -1025,9 +1021,7 @@ def render_wombat_tab(
                                     for r in rows
                                     if any(
                                         s.strip().upper() in combined_genes
-                                        for s in str(
-                                            r.get("VEP_SYMBOL", "")
-                                        ).split(",")
+                                        for s in str(r.get("VEP_SYMBOL", "")).split(",")
                                         if s.strip()
                                     )
                                 ]
@@ -1039,37 +1033,25 @@ def render_wombat_tab(
                             ):
 
                                 def row_matches_impact(row):
-                                    consequence_str = row.get(
-                                        "VEP_Consequence", ""
-                                    )
+                                    consequence_str = row.get("VEP_Consequence", "")
                                     if not consequence_str:
                                         return False
-                                    for part in str(consequence_str).split(
-                                        ","
-                                    ):
+                                    for part in str(consequence_str).split(","):
                                         for cons in part.split("&"):
                                             cons = cons.strip()
-                                            if (
-                                                cons
-                                                and cons in selected_imps
-                                            ):
+                                            if cons and cons in selected_imps:
                                                 return True
                                     return False
 
-                                rows = [
-                                    r for r in rows if row_matches_impact(r)
-                                ]
+                                rows = [r for r in rows if row_matches_impact(r)]
 
                             # Apply validation filter
-                            selected_vals = data["selected_validations"][
-                                "value"
-                            ]
+                            selected_vals = data["selected_validations"]["value"]
                             if selected_vals:
                                 rows = [
                                     r
                                     for r in rows
-                                    if r.get("Validation", "")
-                                    in selected_vals
+                                    if r.get("Validation", "") in selected_vals
                                     or (
                                         "TODO" in selected_vals
                                         and not r.get("Validation")
@@ -1113,7 +1095,11 @@ def render_wombat_tab(
                                         col_def["cellType"] = "gene_badge"
                                         col_def["badgesField"] = "VEP_Gene_badges"
                                     else:
-                                        col_def["cellType"] = "score_badge"
+                                        col_type = get_column_type(col)
+                                        if col_type in ("int", "float"):
+                                            col_def["cellType"] = "number"
+                                        else:
+                                            col_def["cellType"] = "score_badge"
                                     apply_width_constraints(col_def, col)
                                     cols.append(col_def)
                                 return cols
@@ -1121,10 +1107,14 @@ def render_wombat_tab(
                             def _apply_col_visibility():
                                 """Push current column selection to JS table."""
                                 if data.get("_dt"):
-                                    visible = ["actions"] + list(selected_cols_local["value"])
+                                    visible = ["actions"] + list(
+                                        selected_cols_local["value"]
+                                    )
                                     data["_dt"].set_column_visibility(visible)
 
-                            with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
+                            with ui.row().classes(
+                                "items-center gap-4 mt-4 mb-2 w-full"
+                            ):
                                 row_label = (
                                     f"Data ({len(rows)} / {total_before_filters} rows)"
                                     if len(rows) < total_before_filters
@@ -1136,9 +1126,11 @@ def render_wombat_tab(
 
                                 # Preset selector dropdown
                                 preset_select = ui.select(
-                                    options={p["name"]: p["name"] for p in VIEW_PRESETS},
+                                    options={
+                                        p["name"]: p["name"] for p in VIEW_PRESETS
+                                    },
                                     value=data["selected_preset"]["name"],
-                                    label="Preset"
+                                    label="Preset",
                                 ).classes("w-48")
 
                                 ui.space()  # Push remaining items to the right
@@ -1151,7 +1143,8 @@ def render_wombat_tab(
                                     presets=VIEW_PRESETS,
                                 )
                                 ui.button(
-                                    "Columns", icon="view_column",
+                                    "Columns",
+                                    icon="view_column",
                                     on_click=col_dialog.open,
                                 ).props("outline color=blue size=sm")
 
@@ -1187,34 +1180,48 @@ def render_wombat_tab(
                                     # Filter state (persists across refreshes)
                                     type_filter = {"snv": True, "indel": True}
                                     show_ideogram = {"value": False}
-                                    _containers: Dict[str, Any] = {"charts": None, "ideo": None}
+                                    _containers: Dict[str, Any] = {
+                                        "charts": None,
+                                        "ideo": None,
+                                    }
 
-                                    with ui.dialog().props(
-                                        "full-width"
-                                    ) as stats_dialog, ui.card().classes("w-full"):
+                                    with (
+                                        ui.dialog().props("full-width") as stats_dialog,
+                                        ui.card().classes("w-full"),
+                                    ):
                                         with ui.column().classes("w-full p-4"):
                                             # Header
                                             with ui.row().classes(
                                                 "items-center justify-between w-full mb-2"
                                             ):
-                                                with ui.row().classes("items-center gap-3"):
-                                                    ui.label("Variant Statistics").classes(
+                                                with ui.row().classes(
+                                                    "items-center gap-3"
+                                                ):
+                                                    ui.label(
+                                                        "Variant Statistics"
+                                                    ).classes(
                                                         "text-xl font-bold text-blue-900"
                                                     )
-                                                    subtitle_label = ui.label("").classes(
-                                                        "text-sm text-gray-500"
-                                                    )
+                                                    subtitle_label = ui.label(
+                                                        ""
+                                                    ).classes("text-sm text-gray-500")
                                                     ideogram_btn = ui.button(
                                                         "Ideogram",
                                                     ).props(
                                                         "outline color=blue size=sm dense no-caps"
                                                     )
-                                                    snv_cb = ui.checkbox(
-                                                        "SNVs", value=True
-                                                    ).props("dense").classes("text-sm")
-                                                    indel_cb = ui.checkbox(
-                                                        "Indels", value=True
-                                                    ).props("dense").classes("text-sm")
+                                                    snv_cb = (
+                                                        ui.checkbox("SNVs", value=True)
+                                                        .props("dense")
+                                                        .classes("text-sm")
+                                                    )
+                                                    indel_cb = (
+                                                        ui.checkbox(
+                                                            "Indels", value=True
+                                                        )
+                                                        .props("dense")
+                                                        .classes("text-sm")
+                                                    )
                                                 ui.button(
                                                     icon="close",
                                                     on_click=lambda: stats_dialog.close(),
@@ -1224,11 +1231,20 @@ def render_wombat_tab(
                                             def render_stats_content():
                                                 # Filter variants by type
                                                 filtered = [
-                                                    r for r in unique_variants
-                                                    if (type_filter["snv"] and r["_is_snv"])
-                                                    or (type_filter["indel"] and not r["_is_snv"])
+                                                    r
+                                                    for r in unique_variants
+                                                    if (
+                                                        type_filter["snv"]
+                                                        and r["_is_snv"]
+                                                    )
+                                                    or (
+                                                        type_filter["indel"]
+                                                        and not r["_is_snv"]
+                                                    )
                                                 ]
-                                                snv_n = sum(1 for r in filtered if r["_is_snv"])
+                                                snv_n = sum(
+                                                    1 for r in filtered if r["_is_snv"]
+                                                )
                                                 indel_n = len(filtered) - snv_n
                                                 subtitle_label.text = (
                                                     f"{len(filtered)} unique variants "
@@ -1236,15 +1252,25 @@ def render_wombat_tab(
                                                 )
 
                                                 # Chromosome distribution stacked by validation
-                                                chrom_validation: Dict[str, Dict[str, int]] = {
-                                                    c: {} for c in chrom_order
-                                                }
+                                                chrom_validation: Dict[
+                                                    str, Dict[str, int]
+                                                ] = {c: {} for c in chrom_order}
                                                 for r in filtered:
-                                                    chrom = norm_chrom(r.get("#CHROM", ""))
-                                                    status = r.get("Validation", "") or "TODO"
+                                                    chrom = norm_chrom(
+                                                        r.get("#CHROM", "")
+                                                    )
+                                                    status = (
+                                                        r.get("Validation", "")
+                                                        or "TODO"
+                                                    )
                                                     if chrom in chrom_validation:
-                                                        chrom_validation[chrom][status] = (
-                                                            chrom_validation[chrom].get(status, 0) + 1
+                                                        chrom_validation[chrom][
+                                                            status
+                                                        ] = (
+                                                            chrom_validation[chrom].get(
+                                                                status, 0
+                                                            )
+                                                            + 1
                                                         )
                                                 all_statuses: List[str] = []
                                                 for c in chrom_order:
@@ -1255,7 +1281,9 @@ def render_wombat_tab(
                                                 # Consequence distribution
                                                 consequence_counts = Counter(
                                                     get_highest_consequence_term(
-                                                        str(r.get("VEP_Consequence", ""))
+                                                        str(
+                                                            r.get("VEP_Consequence", "")
+                                                        )
                                                     )
                                                     for r in filtered
                                                 )
@@ -1268,21 +1296,36 @@ def render_wombat_tab(
                                                 # Scatter data for ideogram
                                                 scatter_data: List[List[Any]] = []
                                                 for r in filtered:
-                                                    chrom = norm_chrom(r.get("#CHROM", ""))
+                                                    chrom = norm_chrom(
+                                                        r.get("#CHROM", "")
+                                                    )
                                                     pos = r.get("POS", 0)
                                                     try:
-                                                        pos_mb = round(float(pos) / 1_000_000, 2)
+                                                        pos_mb = round(
+                                                            float(pos) / 1_000_000, 2
+                                                        )
                                                     except (ValueError, TypeError):
                                                         continue
                                                     if chrom in chrom_sizes_mb:
-                                                        status = r.get("Validation", "") or "TODO"
-                                                        scatter_data.append([pos_mb, chrom, status])
+                                                        status = (
+                                                            r.get("Validation", "")
+                                                            or "TODO"
+                                                        )
+                                                        scatter_data.append(
+                                                            [pos_mb, chrom, status]
+                                                        )
 
                                                 # --- Charts container ---
-                                                _containers["charts"] = ui.column().classes("w-full")
-                                                _containers["charts"].set_visibility(not show_ideogram["value"])
+                                                _containers["charts"] = (
+                                                    ui.column().classes("w-full")
+                                                )
+                                                _containers["charts"].set_visibility(
+                                                    not show_ideogram["value"]
+                                                )
                                                 with _containers["charts"]:
-                                                    ui.label("Variants per Chromosome").classes(
+                                                    ui.label(
+                                                        "Variants per Chromosome"
+                                                    ).classes(
                                                         "text-lg font-semibold text-gray-800 mt-2"
                                                     )
                                                     stacked_series = [
@@ -1291,7 +1334,9 @@ def render_wombat_tab(
                                                             "type": "bar",
                                                             "stack": "total",
                                                             "data": [
-                                                                chrom_validation[c].get(status, 0)
+                                                                chrom_validation[c].get(
+                                                                    status, 0
+                                                                )
                                                                 for c in chrom_order
                                                             ],
                                                             "itemStyle": {
@@ -1306,33 +1351,53 @@ def render_wombat_tab(
                                                         {
                                                             "tooltip": {
                                                                 "trigger": "axis",
-                                                                "axisPointer": {"type": "shadow"},
+                                                                "axisPointer": {
+                                                                    "type": "shadow"
+                                                                },
                                                             },
-                                                            "legend": {"data": all_statuses, "top": 0},
+                                                            "legend": {
+                                                                "data": all_statuses,
+                                                                "top": 0,
+                                                            },
                                                             "grid": {"top": 30},
                                                             "xAxis": {
                                                                 "type": "category",
                                                                 "data": chrom_order,
                                                                 "name": "Chromosome",
                                                             },
-                                                            "yAxis": {"type": "value", "name": "Count"},
+                                                            "yAxis": {
+                                                                "type": "value",
+                                                                "name": "Count",
+                                                            },
                                                             "series": stacked_series,
                                                         }
                                                     ).classes("w-full h-64")
 
-                                                    with ui.row().classes("w-full gap-4 flex-wrap mt-4"):
+                                                    with ui.row().classes(
+                                                        "w-full gap-4 flex-wrap mt-4"
+                                                    ):
                                                         # Consequence pie chart
-                                                        with ui.column().classes("flex-1 min-w-[400px]"):
+                                                        with ui.column().classes(
+                                                            "flex-1 min-w-[400px]"
+                                                        ):
                                                             ui.label(
                                                                 "Consequence Distribution (highest per variant)"
-                                                            ).classes("text-lg font-semibold text-gray-800")
+                                                            ).classes(
+                                                                "text-lg font-semibold text-gray-800"
+                                                            )
                                                             cons_data = [
                                                                 {
-                                                                    "name": format_consequence_display(cons),
+                                                                    "name": format_consequence_display(
+                                                                        cons
+                                                                    ),
                                                                     "value": count,
                                                                     "itemStyle": {
                                                                         "color": VEP_CONSEQUENCES.get(
-                                                                            cons, ("", "#6b7280")
+                                                                            cons,
+                                                                            (
+                                                                                "",
+                                                                                "#6b7280",
+                                                                            ),
                                                                         )[1]
                                                                     },
                                                                 }
@@ -1340,46 +1405,69 @@ def render_wombat_tab(
                                                             ]
                                                             ui.echart(
                                                                 {
-                                                                    "tooltip": {"trigger": "item"},
-                                                                    "series": [{
-                                                                        "type": "pie",
-                                                                        "radius": "70%",
-                                                                        "data": cons_data,
-                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
-                                                                    }],
+                                                                    "tooltip": {
+                                                                        "trigger": "item"
+                                                                    },
+                                                                    "series": [
+                                                                        {
+                                                                            "type": "pie",
+                                                                            "radius": "70%",
+                                                                            "data": cons_data,
+                                                                            "label": {
+                                                                                "formatter": "{b}: {c} ({d}%)"
+                                                                            },
+                                                                        }
+                                                                    ],
                                                                 }
                                                             ).classes("w-full h-80")
 
                                                         # Validation pie chart
-                                                        with ui.column().classes("flex-1 min-w-[400px]"):
+                                                        with ui.column().classes(
+                                                            "flex-1 min-w-[400px]"
+                                                        ):
                                                             ui.label(
                                                                 "Validation Status Distribution"
-                                                            ).classes("text-lg font-semibold text-gray-800")
+                                                            ).classes(
+                                                                "text-lg font-semibold text-gray-800"
+                                                            )
                                                             val_data = [
                                                                 {
                                                                     "name": st,
                                                                     "value": cnt,
                                                                     "itemStyle": {
-                                                                        "color": validation_colors.get(st, "#6b7280")
+                                                                        "color": validation_colors.get(
+                                                                            st,
+                                                                            "#6b7280",
+                                                                        )
                                                                     },
                                                                 }
                                                                 for st, cnt in validation_counts.most_common()
                                                             ]
                                                             ui.echart(
                                                                 {
-                                                                    "tooltip": {"trigger": "item"},
-                                                                    "series": [{
-                                                                        "type": "pie",
-                                                                        "radius": "70%",
-                                                                        "data": val_data,
-                                                                        "label": {"formatter": "{b}: {c} ({d}%)"},
-                                                                    }],
+                                                                    "tooltip": {
+                                                                        "trigger": "item"
+                                                                    },
+                                                                    "series": [
+                                                                        {
+                                                                            "type": "pie",
+                                                                            "radius": "70%",
+                                                                            "data": val_data,
+                                                                            "label": {
+                                                                                "formatter": "{b}: {c} ({d}%)"
+                                                                            },
+                                                                        }
+                                                                    ],
                                                                 }
                                                             ).classes("w-full h-80")
 
                                                 # --- Ideogram container ---
-                                                _containers["ideo"] = ui.column().classes("w-full")
-                                                _containers["ideo"].set_visibility(show_ideogram["value"])
+                                                _containers["ideo"] = (
+                                                    ui.column().classes("w-full")
+                                                )
+                                                _containers["ideo"].set_visibility(
+                                                    show_ideogram["value"]
+                                                )
                                                 with _containers["ideo"]:
                                                     svg_w = 1800
                                                     lbl_w = 50
@@ -1387,8 +1475,14 @@ def render_wombat_tab(
                                                     row_h = 16
                                                     tri_h = 6
                                                     row_gap = tri_h + 4
-                                                    svg_h = len(chrom_order) * (row_h + row_gap) + 60
-                                                    max_mb = max(chrom_sizes_mb.values())
+                                                    svg_h = (
+                                                        len(chrom_order)
+                                                        * (row_h + row_gap)
+                                                        + 60
+                                                    )
+                                                    max_mb = max(
+                                                        chrom_sizes_mb.values()
+                                                    )
 
                                                     svg_parts = [
                                                         f'<svg viewBox="0 0 {svg_w} {svg_h}" '
@@ -1397,9 +1491,14 @@ def render_wombat_tab(
                                                         f'style="font-family: sans-serif; width: 100%; height: auto;">'
                                                     ]
 
-                                                    axis_y = len(chrom_order) * (row_h + row_gap)
+                                                    axis_y = len(chrom_order) * (
+                                                        row_h + row_gap
+                                                    )
                                                     for mb_val in range(0, 260, 50):
-                                                        gx = lbl_w + (mb_val / max_mb) * plot_w
+                                                        gx = (
+                                                            lbl_w
+                                                            + (mb_val / max_mb) * plot_w
+                                                        )
                                                         svg_parts.append(
                                                             f'<line x1="{gx:.1f}" y1="0" '
                                                             f'x2="{gx:.1f}" y2="{axis_y}" '
@@ -1417,10 +1516,17 @@ def render_wombat_tab(
                                                         f'fill="#6b7280">Position (Mb)</text>'
                                                     )
 
-                                                    for ci, chrom in enumerate(chrom_order):
-                                                        bar_y = ci * (row_h + row_gap) + tri_h
+                                                    for ci, chrom in enumerate(
+                                                        chrom_order
+                                                    ):
+                                                        bar_y = (
+                                                            ci * (row_h + row_gap)
+                                                            + tri_h
+                                                        )
                                                         bands = CYTOBANDS.get(chrom, [])
-                                                        cs = chrom_sizes_mb.get(chrom, 0)
+                                                        cs = chrom_sizes_mb.get(
+                                                            chrom, 0
+                                                        )
                                                         total_w = (cs / max_mb) * plot_w
 
                                                         svg_parts.append(
@@ -1429,12 +1535,28 @@ def render_wombat_tab(
                                                             f'fill="#374151">{chrom}</text>'
                                                         )
                                                         for band in bands:
-                                                            bx = lbl_w + (band["start"] / max_mb) * plot_w
+                                                            bx = (
+                                                                lbl_w
+                                                                + (
+                                                                    band["start"]
+                                                                    / max_mb
+                                                                )
+                                                                * plot_w
+                                                            )
                                                             bw = max(
-                                                                ((band["end"] - band["start"]) / max_mb) * plot_w,
+                                                                (
+                                                                    (
+                                                                        band["end"]
+                                                                        - band["start"]
+                                                                    )
+                                                                    / max_mb
+                                                                )
+                                                                * plot_w,
                                                                 0.5,
                                                             )
-                                                            color = GIESTAIN_COLORS.get(band["stain"], "#e5e7eb")
+                                                            color = GIESTAIN_COLORS.get(
+                                                                band["stain"], "#e5e7eb"
+                                                            )
                                                             svg_parts.append(
                                                                 f'<rect x="{bx:.1f}" y="{bar_y}" '
                                                                 f'width="{bw:.1f}" height="{row_h}" '
@@ -1451,14 +1573,24 @@ def render_wombat_tab(
                                                         v_mb, v_chrom, v_status = sd
                                                         if v_chrom not in chrom_order:
                                                             continue
-                                                        v_idx = chrom_order.index(v_chrom)
-                                                        bar_y = v_idx * (row_h + row_gap) + tri_h
-                                                        vx = lbl_w + (v_mb / max_mb) * plot_w
-                                                        v_color = validation_colors.get(v_status, "#94a3b8")
+                                                        v_idx = chrom_order.index(
+                                                            v_chrom
+                                                        )
+                                                        bar_y = (
+                                                            v_idx * (row_h + row_gap)
+                                                            + tri_h
+                                                        )
+                                                        vx = (
+                                                            lbl_w
+                                                            + (v_mb / max_mb) * plot_w
+                                                        )
+                                                        v_color = validation_colors.get(
+                                                            v_status, "#94a3b8"
+                                                        )
                                                         tw = 5
                                                         svg_parts.append(
                                                             f'<polygon points="{vx - tw:.1f},{bar_y - tri_h} '
-                                                            f'{vx + tw:.1f},{bar_y - tri_h} '
+                                                            f"{vx + tw:.1f},{bar_y - tri_h} "
                                                             f'{vx:.1f},{bar_y}" '
                                                             f'fill="{v_color}" opacity="0.9"/>'
                                                         )
@@ -1472,7 +1604,9 @@ def render_wombat_tab(
                                                     legend_y = axis_y + 40
                                                     legend_x = lbl_w
                                                     for v_status in all_statuses:
-                                                        v_color = validation_colors.get(v_status, "#94a3b8")
+                                                        v_color = validation_colors.get(
+                                                            v_status, "#94a3b8"
+                                                        )
                                                         svg_parts.append(
                                                             f'<rect x="{legend_x}" y="{legend_y}" '
                                                             f'width="12" height="12" rx="2" fill="{v_color}"/>'
@@ -1481,7 +1615,9 @@ def render_wombat_tab(
                                                             f'<text x="{legend_x + 16}" y="{legend_y + 10}" '
                                                             f'font-size="12" fill="#374151">{v_status}</text>'
                                                         )
-                                                        legend_x += len(v_status) * 8 + 32
+                                                        legend_x += (
+                                                            len(v_status) * 8 + 32
+                                                        )
 
                                                     svg_parts.append("</svg>")
                                                     ui.html(
@@ -1493,9 +1629,13 @@ def render_wombat_tab(
 
                                             # Toggle ideogram/charts view
                                             def toggle_ideogram(_e=None):
-                                                show_ideogram["value"] = not show_ideogram["value"]
+                                                show_ideogram[
+                                                    "value"
+                                                ] = not show_ideogram["value"]
                                                 if _containers["charts"]:
-                                                    _containers["charts"].set_visibility(
+                                                    _containers[
+                                                        "charts"
+                                                    ].set_visibility(
                                                         not show_ideogram["value"]
                                                     )
                                                 if _containers["ideo"]:
@@ -1504,11 +1644,13 @@ def render_wombat_tab(
                                                     )
                                                 if show_ideogram["value"]:
                                                     ideogram_btn.props(
-                                                        remove="outline", add="unelevated"
+                                                        remove="outline",
+                                                        add="unelevated",
                                                     )
                                                 else:
                                                     ideogram_btn.props(
-                                                        remove="unelevated", add="outline"
+                                                        remove="unelevated",
+                                                        add="outline",
                                                     )
                                                 ideogram_btn.update()
 
@@ -1520,13 +1662,19 @@ def render_wombat_tab(
                                                 type_filter["indel"] = indel_cb.value
                                                 render_stats_content.refresh()
 
-                                            snv_cb.on_value_change(on_type_filter_change)
-                                            indel_cb.on_value_change(on_type_filter_change)
+                                            snv_cb.on_value_change(
+                                                on_type_filter_change
+                                            )
+                                            indel_cb.on_value_change(
+                                                on_type_filter_change
+                                            )
 
                                     stats_dialog.open()
 
                                 ui.button(
-                                    "Stats", icon="bar_chart", on_click=show_stats_dialog
+                                    "Stats",
+                                    icon="bar_chart",
+                                    on_click=show_stats_dialog,
                                 ).props("outline color=blue size=sm")
 
                             def on_view_variant(e):
@@ -1594,12 +1742,20 @@ def render_wombat_tab(
                                 col_id = saved_sorting[0]["id"]
                                 desc = saved_sorting[0].get("desc", False)
                                 col_def = next(
-                                    (c for c in make_columns() if c.get("id") == col_id), {}
+                                    (
+                                        c
+                                        for c in make_columns()
+                                        if c.get("id") == col_id
+                                    ),
+                                    {},
                                 )
                                 sort_field = col_def.get("sortField", col_id)
                                 sort_type = col_def.get("sorting", "")
                                 if sort_type == "genomic":
-                                    from genetics_viz.utils.column_names import genomic_sort_key
+                                    from genetics_viz.utils.column_names import (
+                                        genomic_sort_key,
+                                    )
+
                                     rows.sort(
                                         key=lambda r: (
                                             r.get(sort_field) is None,
@@ -1608,6 +1764,7 @@ def render_wombat_tab(
                                         reverse=desc,
                                     )
                                 elif sort_type == "numerical":
+
                                     def _num_key(r):
                                         v = r.get(sort_field)
                                         if v is None:
@@ -1616,6 +1773,7 @@ def render_wombat_tab(
                                             return (False, float(v))
                                         except (ValueError, TypeError):
                                             return (True, 0.0)
+
                                     rows.sort(key=_num_key, reverse=desc)
                                 else:
                                     rows.sort(
@@ -1631,7 +1789,8 @@ def render_wombat_tab(
                                 rows=rows,
                                 row_key="Variant",
                                 pagination={"rowsPerPage": 10},
-                                visible_columns=["actions"] + list(selected_cols_local["value"]),
+                                visible_columns=["actions"]
+                                + list(selected_cols_local["value"]),
                                 on_row_action=on_view_variant,
                                 initial_sorting=saved_sorting,
                                 initial_page=table_state.get("page", 0),
@@ -1643,13 +1802,23 @@ def render_wombat_tab(
                                 preset_name = e.value
 
                                 # Find the selected preset
-                                preset = next((p for p in VIEW_PRESETS if p["name"] == preset_name), None)
+                                preset = next(
+                                    (
+                                        p
+                                        for p in VIEW_PRESETS
+                                        if p["name"] == preset_name
+                                    ),
+                                    None,
+                                )
                                 if not preset:
                                     return
 
                                 # Filter columns to only those available in the data
-                                available = [col for col in preset.get("columns", [])
-                                             if col in all_columns_local]
+                                available = [
+                                    col
+                                    for col in preset.get("columns", [])
+                                    if col in all_columns_local
+                                ]
 
                                 selected_cols_local["value"] = available
                                 data["selected_preset"]["name"] = preset_name
@@ -1660,7 +1829,9 @@ def render_wombat_tab(
                             preset_select.on_value_change(on_preset_change)
 
                         # Store refresh reference for filter callbacks
-                        wombat_data[config_name]["_refresh"]["fn"] = render_data_table.refresh
+                        wombat_data[config_name]["_refresh"]["fn"] = (
+                            render_data_table.refresh
+                        )
                         data_table_refreshers.append(render_data_table.refresh)
                         render_data_table()
 

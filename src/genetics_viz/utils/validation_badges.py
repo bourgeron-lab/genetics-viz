@@ -56,14 +56,16 @@ def build_validation_badge(
         # Extract date-only from timestamp (drop time portion)
         ts = v[6] if len(v) > 6 else ""
         date_only = ts.split(" ")[0].split("T")[0] if ts else ""
-        details.append({
-            "s": v[0],
-            "sy": d_cfg.get("symbol", ""),
-            "sc": d_cfg.get("color", "#9e9e9e"),
-            "i": v[1],
-            "c": v[2],
-            "t": date_only,
-            "u": v[7] if len(v) > 7 else "",
-        })
+        details.append(
+            {
+                "s": v[0],
+                "sy": d_cfg.get("symbol", ""),
+                "sc": d_cfg.get("color", "#9e9e9e"),
+                "i": v[1],
+                "c": v[2],
+                "t": date_only,
+                "u": v[7] if len(v) > 7 else "",
+            }
+        )
 
     return {"badge": badge, "details": details}
