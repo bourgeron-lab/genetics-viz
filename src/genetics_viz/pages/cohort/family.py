@@ -1,14 +1,71 @@
 """Family detail page - displays family members and analysis tabs."""
 
-from typing import List
+from typing import Dict, List
 
 from nicegui import app as nicegui_app
 from nicegui import ui
 
+from genetics_viz.components.diagnostic_loader import (
+    ensure_diagnostic_file,
+    load_family_diagnostics,
+)
 from genetics_viz.components.header import create_header
 from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
 from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
+from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.gene_scoring import GeneScorer, get_gene_scorer
+
+
+def _parse_sv_cytoband(variant: str) -> str:
+    """Extract cytoband range from an SV variant key like 'chr1:1000-2000:dup'."""
+    try:
+        # Strip trailing :dup/:del if present
+        parts = variant.split(":")
+        if len(parts) >= 2:
+            chrom = parts[0]
+            range_part = parts[1]
+            if "-" in range_part:
+                start_str, end_str = range_part.split("-", 1)
+                return get_cytoband_range(chrom, int(start_str), int(end_str))
+    except (ValueError, IndexError):
+        pass
+    return ""
+
+
+def _render_sv_gene_badges(gene_str: str, gene_scorer: GeneScorer) -> None:
+    """Render gene badges for an SV entry, sorted by descending geneset score.
+
+    Shows up to 6 genes as colored badges, then a "+X genes" overflow label.
+    Mirrors the pattern used in svs_tab.py for DataTable gene badges.
+    """
+    genes = []
+    for gene_part in str(gene_str).split(","):
+        gene_part = gene_part.strip()
+        if not gene_part or gene_part == "-":
+            continue
+        # Handle "SYMBOL:type" format
+        symbol = gene_part.split(":")[0].strip()
+        if symbol:
+            score, _ = gene_scorer.get_gene_score_and_sets(symbol)
+            color = gene_scorer.get_gene_color(symbol)
+            tooltip = gene_scorer.get_gene_tooltip(symbol)
+            genes.append(
+                {"symbol": symbol, "score": score, "color": color, "tooltip": tooltip}
+            )
+
+    # Sort by score descending
+    genes.sort(key=lambda g: g["score"], reverse=True)
+
+    total = len(genes)
+    display_genes = genes[:6]
+
+    for g in display_genes:
+        ui.badge(g["symbol"], color=g["color"]).classes("text-xs").tooltip(g["tooltip"])
+
+    if total > 6:
+        remaining = total - 6
+        ui.label(f"+{remaining} genes").classes("text-xs text-gray-500 italic")
 
 
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
@@ -77,39 +134,40 @@ def family_page(cohort_name: str, family_id: str) -> None:
             # Store refresh functions for all data tables
             data_table_refreshers: List = []
 
-            with ui.card().classes("w-full"):
-                # Member selection checkboxes
-                with ui.column().classes("p-4 bg-blue-50"):
-                    with ui.row().classes("items-center gap-2 mb-2"):
-                        ui.label("Select Members to Display:").classes(
-                            "font-semibold text-blue-800"
-                        )
+            with ui.row().classes("w-full gap-4 items-start"):
+                with ui.card().classes("flex-1"):
+                    # Member selection checkboxes
+                    with ui.column().classes("p-4 bg-blue-50"):
+                        with ui.row().classes("items-center gap-2 mb-2"):
+                            ui.label("Select Members to Display:").classes(
+                                "font-semibold text-blue-800"
+                            )
 
-                        def select_all_members():
-                            selected_members["value"] = [
-                                m["Sample ID"] for m in members_data
-                            ]
-                            for cb in member_checkboxes.values():
-                                cb.value = True
-                            for refresher in data_table_refreshers:
-                                refresher()
+                            def select_all_members():
+                                selected_members["value"] = [
+                                    m["Sample ID"] for m in members_data
+                                ]
+                                for cb in member_checkboxes.values():
+                                    cb.value = True
+                                for refresher in data_table_refreshers:
+                                    refresher()
 
-                        def select_none_members():
-                            selected_members["value"] = []
-                            for cb in member_checkboxes.values():
-                                cb.value = False
-                            for refresher in data_table_refreshers:
-                                refresher()
+                            def select_none_members():
+                                selected_members["value"] = []
+                                for cb in member_checkboxes.values():
+                                    cb.value = False
+                                for refresher in data_table_refreshers:
+                                    refresher()
 
-                        ui.button("All", on_click=select_all_members).props(
-                            "size=sm flat dense"
-                        ).classes("text-xs")
-                        ui.button("None", on_click=select_none_members).props(
-                            "size=sm flat dense"
-                        ).classes("text-xs")
+                            ui.button("All", on_click=select_all_members).props(
+                                "size=sm flat dense"
+                            ).classes("text-xs")
+                            ui.button("None", on_click=select_none_members).props(
+                                "size=sm flat dense"
+                            ).classes("text-xs")
 
-                    # Create HTML table with checkboxes and member info
-                    table_html = """
+                        # Create HTML table with checkboxes and member info
+                        table_html = """
                     <table class="w-full text-sm">
                         <thead class="bg-blue-100">
                             <tr>
@@ -125,10 +183,10 @@ def family_page(cohort_name: str, family_id: str) -> None:
                         <tbody>
                     """
 
-                    for idx, member in enumerate(members_data):
-                        sample_id = member["Sample ID"]
-                        bg_class = "bg-white" if idx % 2 == 0 else "bg-gray-50"
-                        table_html += f'''
+                        for idx, member in enumerate(members_data):
+                            sample_id = member["Sample ID"]
+                            bg_class = "bg-white" if idx % 2 == 0 else "bg-gray-50"
+                            table_html += f'''
                             <tr class="{bg_class} border-b border-gray-200">
                                 <td class="px-3 py-2" id="checkbox-cell-{idx}"></td>
                                 <td class="px-3 py-2" id="only-button-cell-{idx}"></td>
@@ -140,52 +198,56 @@ def family_page(cohort_name: str, family_id: str) -> None:
                             </tr>
                         '''
 
-                    table_html += """
+                        table_html += """
                         </tbody>
                     </table>
                     """
 
-                    ui.html(table_html, sanitize=False)
+                        ui.html(table_html, sanitize=False)
 
-                    # Create checkboxes and insert them into the table cells
-                    for idx, member in enumerate(members_data):
-                        sample_id = member["Sample ID"]
+                        # Create checkboxes and insert them into the table cells
+                        for idx, member in enumerate(members_data):
+                            sample_id = member["Sample ID"]
 
-                        def make_change_handler(sid):
-                            def handler(e):
-                                if e.value and sid not in selected_members["value"]:
-                                    selected_members["value"].append(sid)
-                                elif not e.value and sid in selected_members["value"]:
-                                    selected_members["value"].remove(sid)
-                                for refresher in data_table_refreshers:
-                                    refresher()
+                            def make_change_handler(sid):
+                                def handler(e):
+                                    if e.value and sid not in selected_members["value"]:
+                                        selected_members["value"].append(sid)
+                                    elif (
+                                        not e.value and sid in selected_members["value"]
+                                    ):
+                                        selected_members["value"].remove(sid)
+                                    for refresher in data_table_refreshers:
+                                        refresher()
 
-                            return handler
+                                return handler
 
-                        with ui.element().classes(f"checkbox-cell-{idx}"):
-                            member_checkboxes[sample_id] = ui.checkbox(
-                                "",
-                                value=True,
-                                on_change=make_change_handler(sample_id),
-                            )
+                            with ui.element().classes(f"checkbox-cell-{idx}"):
+                                member_checkboxes[sample_id] = ui.checkbox(
+                                    "",
+                                    value=True,
+                                    on_change=make_change_handler(sample_id),
+                                )
 
-                        def make_only_handler(sid):
-                            def handler():
-                                selected_members["value"] = [sid]
-                                for s_id, checkbox in member_checkboxes.items():
-                                    checkbox.value = s_id == sid
-                                for refresher in data_table_refreshers:
-                                    refresher()
+                            def make_only_handler(sid):
+                                def handler():
+                                    selected_members["value"] = [sid]
+                                    for s_id, checkbox in member_checkboxes.items():
+                                        checkbox.value = s_id == sid
+                                    for refresher in data_table_refreshers:
+                                        refresher()
 
-                            return handler
+                                return handler
 
-                        with ui.element().classes(f"only-button-cell-{idx}"):
-                            ui.button(
-                                "only", on_click=make_only_handler(sample_id)
-                            ).props("size=xs flat dense color=blue").classes("text-xs")
+                            with ui.element().classes(f"only-button-cell-{idx}"):
+                                ui.button(
+                                    "only", on_click=make_only_handler(sample_id)
+                                ).props("size=xs flat dense color=blue").classes(
+                                    "text-xs"
+                                )
 
-                    # Move checkboxes and only buttons into table cells using JavaScript
-                    ui.run_javascript(f"""
+                        # Move checkboxes and only buttons into table cells using JavaScript
+                        ui.run_javascript(f"""
                         for (let i = 0; i < {len(members_data)}; i++) {{
                             const checkbox = document.querySelector('.checkbox-cell-' + i);
                             const checkboxCell = document.getElementById('checkbox-cell-' + i);
@@ -200,6 +262,86 @@ def family_page(cohort_name: str, family_id: str) -> None:
                             }}
                         }}
                     """)
+
+                # ---- Diagnostics panel (right column) ----
+                with ui.card().classes("flex-1"):
+                    with ui.column().classes("p-4 gap-2"):
+                        ui.label("Diagnostics").classes(
+                            "text-lg font-semibold text-blue-700"
+                        )
+
+                        @ui.refreshable
+                        def render_diagnostics_panel():
+                            snv_file = store.data_dir / "diagnostics" / "snvs.tsv"
+                            sv_file = store.data_dir / "diagnostics" / "svs.tsv"
+                            ensure_diagnostic_file(snv_file)
+                            ensure_diagnostic_file(sv_file)
+
+                            entries = load_family_diagnostics(
+                                snv_file,
+                                sv_file,
+                                family_id,
+                                selected_members["value"],
+                            )
+
+                            if not entries:
+                                ui.label(
+                                    "No diagnostics recorded for selected members"
+                                ).classes("text-gray-500 text-sm italic")
+                                return
+
+                            # Build display rows
+                            _DIAG_COLORS: Dict[str, str] = {
+                                "pathogenic": "red",
+                                "uncertain": "orange",
+                                "benign": "green",
+                                "conflicting": "amber",
+                            }
+                            gene_scorer = get_gene_scorer()
+
+                            for entry in entries:
+                                diag = entry.get("Diagnostic", "")
+                                color = _DIAG_COLORS.get(diag, "grey")
+                                is_sv = entry.get("_source") == "sv"
+                                with ui.row().classes(
+                                    "items-center gap-2 w-full px-2 py-1 border-b border-gray-100"
+                                ):
+                                    ui.badge(
+                                        diag.upper()[:3] if diag else "?",
+                                        color=color,
+                                    ).classes("text-xs")
+
+                                    # Variant + cytoband for SVs
+                                    variant = entry.get("Variant", "")
+                                    if is_sv and variant:
+                                        ui.label(variant).classes("text-xs font-mono")
+                                        cytoband = _parse_sv_cytoband(variant)
+                                        if cytoband:
+                                            ui.label(cytoband).classes(
+                                                "text-xs text-purple-600 italic"
+                                            )
+                                    else:
+                                        ui.label(variant).classes("text-xs font-mono")
+
+                                    # Gene display: badges for SVs, plain label for SNVs
+                                    gene_str = entry.get("Gene", "")
+                                    if gene_str and is_sv:
+                                        _render_sv_gene_badges(gene_str, gene_scorer)
+                                    elif gene_str:
+                                        ui.label(gene_str).classes(
+                                            "text-xs text-blue-700 font-medium"
+                                        )
+
+                                    ui.space()
+                                    ui.label(entry.get("Sample", "")).classes(
+                                        "text-xs text-gray-600"
+                                    )
+                                    ui.label(entry.get("User", "")).classes(
+                                        "text-xs text-gray-400"
+                                    )
+
+                        render_diagnostics_panel()
+                        data_table_refreshers.append(render_diagnostics_panel.refresh)
 
             # Track loading state for each tab
             wombat_state = {"loaded": False}

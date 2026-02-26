@@ -465,7 +465,7 @@ def render_dnm_tab(
                                 )
                             # Refresh the table using the captured client context
                             with page_client:
-                                ui.timer(0.1, render_dnm_table.refresh, once=True)
+                                render_dnm_table.refresh()
 
                         # Show dialog
                         show_variant_dialog(

@@ -630,6 +630,7 @@ class DataTable {
             case 'cnv_call': return this._renderCnvCallCell(value, meta, rowData);
             case 'curated_locus': return this._renderCuratedLocusCell(value, meta, rowData);
             case 'number': return this._renderNumberCell(value);
+            case 'diagnostic': return this._renderDiagnosticCell(value, rowData);
             default: return this._renderTextCell(value);
         }
     }
@@ -703,6 +704,52 @@ class DataTable {
                 html += '<tr>';
                 html += '<td><span style="color:' + d.sc + ';">' + this._escapeHtml(d.sy) + '</span> ' + this._escapeHtml(d.s) + '</td>';
                 html += '<td>' + this._escapeHtml(d.i || '') + '</td>';
+                html += '<td>' + this._escapeHtml(d.u || '') + '</td>';
+                html += '<td>' + this._escapeHtml(d.c || '') + '</td>';
+                html += '<td>' + this._escapeHtml(d.t || '') + '</td>';
+                html += '</tr>';
+            }
+            html += '</table></div>';
+        }
+
+        html += '</span>';
+        return html;
+    }
+
+    _renderDiagnosticCell(value, rowData) {
+        var instId = this.containerId;
+        var dataRow = ' data-row=\'' + this._escapeAttr(JSON.stringify(rowData)) + '\'';
+        var onclick = ' onclick="DataTable._emitRowAction(\'' + instId + '\', \'open_diagnostic\', this)"';
+
+        var bd = rowData.Diagnostic_badge;
+        if (!bd) {
+            // Empty cell: show clickable "+" icon
+            return '<span class="dt-diag-add material-icons"'
+                + onclick + dataRow
+                + ' title="Add diagnostic">add_circle_outline</span>';
+        }
+
+        var b = bd.badge;
+        var html = '<span class="dt-diag-wrap">';
+        html += '<span class="dt-diag-badge" style="background-color:' + b.bg + ';"'
+            + onclick + dataRow + '>';
+        if (b.symbol) {
+            html += '<span class="dt-diag-symbol" style="color:' + b.sc + ';">' + this._escapeHtml(b.symbol) + '</span>';
+        }
+        if (b.text) {
+            html += '<span class="dt-diag-text" style="color:' + b.tc + ';">' + this._escapeHtml(b.text) + '</span>';
+        }
+        html += '</span>';
+
+        // Tooltip table with diagnostic details
+        var details = bd.details;
+        if (details && details.length) {
+            html += '<div class="dt-val-tooltip"><table>';
+            html += '<tr><th>Diagnostic</th><th>User</th><th>Comment</th><th>Date</th></tr>';
+            for (var i = 0; i < details.length; i++) {
+                var d = details[i];
+                html += '<tr>';
+                html += '<td><span style="color:' + d.sc + ';">' + this._escapeHtml(d.sy) + '</span> ' + this._escapeHtml(d.s) + '</td>';
                 html += '<td>' + this._escapeHtml(d.u || '') + '</td>';
                 html += '<td>' + this._escapeHtml(d.c || '') + '</td>';
                 html += '<td>' + this._escapeHtml(d.t || '') + '</td>';
@@ -1018,7 +1065,7 @@ class DataTable {
 
     _bindValTooltip(scrollContainer) {
         scrollContainer.addEventListener('mouseenter', function(e) {
-            var wrap = e.target.closest('.dt-val-wrap');
+            var wrap = e.target.closest('.dt-val-wrap') || e.target.closest('.dt-diag-wrap');
             if (!wrap) return;
             var src = wrap.querySelector('.dt-val-tooltip');
             if (!src) return;
@@ -1046,7 +1093,7 @@ class DataTable {
         }, true);
 
         scrollContainer.addEventListener('mouseleave', function(e) {
-            var wrap = e.target.closest('.dt-val-wrap');
+            var wrap = e.target.closest('.dt-val-wrap') || e.target.closest('.dt-diag-wrap');
             if (!wrap) return;
             var tip = document.getElementById('dt-val-floating-tooltip');
             if (tip) tip.style.display = 'none';

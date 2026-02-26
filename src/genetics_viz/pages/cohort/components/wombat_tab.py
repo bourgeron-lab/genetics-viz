@@ -9,6 +9,11 @@ from nicegui import ui
 from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.components.diagnostic_loader import (
+    add_diagnostic_status_to_row,
+    load_diagnostic_map,
+)
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -147,6 +152,12 @@ def render_wombat_tab(
                     if _drop:
                         df = df.drop(list(_drop))
 
+                    if len(df) == 0:
+                        ui.label("No data available").classes(
+                            "text-gray-500 italic mt-4"
+                        )
+                        continue
+
                     # Group by variant and sample, aggregating other columns
                     grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
 
@@ -185,6 +196,10 @@ def render_wombat_tab(
                     # Load validation data from snvs.tsv
                     validation_file = store.data_dir / "validations" / "snvs.tsv"
                     validation_map = load_validation_map(validation_file, family_id)
+
+                    # Load diagnostic data from snvs.tsv
+                    diagnostic_file = store.data_dir / "diagnostics" / "snvs.tsv"
+                    diagnostic_map = load_diagnostic_map(diagnostic_file, family_id)
 
                     # Track unknown terms for warnings
                     unknown_consequences = set()
@@ -320,6 +335,9 @@ def render_wombat_tab(
                         add_validation_status_to_row(
                             row, validation_map, variant_key, sample_id
                         )
+                        add_diagnostic_status_to_row(
+                            row, diagnostic_map, variant_key, sample_id
+                        )
 
                         # Add continuous score badges
                         # Iterate over row columns and check if they have score configs
@@ -365,7 +383,7 @@ def render_wombat_tab(
                             for col in df.columns
                             if col not in ["#CHROM", "POS", "REF", "ALT", "n_grouped"]
                         ]
-                        + ["Validation"]
+                        + ["Validation", "Diagnostic"]
                     )
 
                     wombat_data[config_name]["all_columns"] = all_columns
@@ -1081,6 +1099,8 @@ def render_wombat_tab(
                                     }
                                     if col == "Validation":
                                         col_def["cellType"] = "validation"
+                                    elif col == "Diagnostic":
+                                        col_def["cellType"] = "diagnostic"
                                     elif col == "VEP_Consequence":
                                         col_def["cellType"] = "badge_list"
                                         col_def["badgesField"] = "ConsequenceBadges"
@@ -1677,61 +1697,64 @@ def render_wombat_tab(
                                     on_click=show_stats_dialog,
                                 ).props("outline color=blue size=sm")
 
-                            def on_view_variant(e):
+                            def _refresh_table_data() -> None:
+                                """Reload validation + diagnostic data for all rows and refresh table."""
+                                val_file = store.data_dir / "validations" / "snvs.tsv"
+                                val_map = load_validation_map(val_file, family_id)
+                                diag_file = store.data_dir / "diagnostics" / "snvs.tsv"
+                                diag_map = load_diagnostic_map(diag_file, family_id)
+                                for row in data["all_rows"]:
+                                    c = row.get("#CHROM", "")
+                                    p = row.get("POS", "")
+                                    r = row.get("REF", "")
+                                    a = row.get("ALT", "")
+                                    sid = row.get("sample", "")
+                                    vk = f"{c}:{p}:{r}:{a}"
+                                    add_validation_status_to_row(row, val_map, vk, sid)
+                                    add_diagnostic_status_to_row(row, diag_map, vk, sid)
+                                with page_client:
+                                    for rfn in data_table_refreshers:
+                                        rfn()
+
+                            def on_row_action(e):
+                                action = e.get("action", "")
                                 row_data = e.get("row", {})
                                 chrom = row_data.get("#CHROM", "")
                                 pos = row_data.get("POS", "")
                                 ref = row_data.get("REF", "")
                                 alt = row_data.get("ALT", "")
                                 sample_val = row_data.get("sample", "")
+                                variant_key = f"{chrom}:{pos}:{ref}:{alt}"
 
-                                # Callback to update the Validation column in the table
-                                # NOTE: use data["all_rows"] and data["_refresh"]["fn"]
-                                # instead of bare `all_rows` / `render_data_table.refresh`
-                                # to avoid late-binding closure over the loop variable.
-                                def on_save(validation_status: str):
-                                    # Reload validation data from file
-                                    validation_file = (
-                                        store.data_dir / "validations" / "snvs.tsv"
+                                if action == "open_diagnostic":
+                                    gene = row_data.get("VEP_SYMBOL", "")
+                                    impact = row_data.get("VEP_Consequence", "")
+                                    diag_file = (
+                                        store.data_dir / "diagnostics" / "snvs.tsv"
                                     )
-                                    validation_map = load_validation_map(
-                                        validation_file, family_id
+                                    show_diagnostic_dialog(
+                                        family_id=family_id,
+                                        variant_key=variant_key,
+                                        gene=gene,
+                                        impact=impact,
+                                        sample=sample_val,
+                                        variant_type="snv",
+                                        diagnostic_file=diag_file,
+                                        on_save_callback=lambda s: _refresh_table_data(),
                                     )
-                                    # Re-add validation status to all rows
-                                    for row in data["all_rows"]:
-                                        chrom = row.get("#CHROM", "")
-                                        pos = row.get("POS", "")
-                                        ref = row.get("REF", "")
-                                        alt = row.get("ALT", "")
-                                        sample_id = row.get("sample", "")
-                                        variant_key = f"{chrom}:{pos}:{ref}:{alt}"
-                                        add_validation_status_to_row(
-                                            row,
-                                            validation_map,
-                                            variant_key,
-                                            sample_id,
-                                        )
-                                    # Refresh the table using the captured client context
-                                    refresh_fn = data["_refresh"]["fn"]
-                                    with page_client:
-                                        ui.timer(
-                                            0.1,
-                                            refresh_fn,
-                                            once=True,
-                                        )
-
-                                # Show dialog
-                                show_variant_dialog(
-                                    cohort_name=cohort_name,
-                                    family_id=family_id,
-                                    chrom=chrom,
-                                    pos=pos,
-                                    ref=ref,
-                                    alt=alt,
-                                    sample=sample_val,
-                                    variant_data=row_data,
-                                    on_save_callback=on_save,
-                                )
+                                else:
+                                    # Default: open variant dialog
+                                    show_variant_dialog(
+                                        cohort_name=cohort_name,
+                                        family_id=family_id,
+                                        chrom=chrom,
+                                        pos=pos,
+                                        ref=ref,
+                                        alt=alt,
+                                        sample=sample_val,
+                                        variant_data=row_data,
+                                        on_save_callback=lambda s: _refresh_table_data(),
+                                    )
 
                             # Restore table state (sorting / page) across refreshes
                             table_state = data["_table_state"]
@@ -1791,7 +1814,7 @@ def render_wombat_tab(
                                 pagination={"rowsPerPage": 10},
                                 visible_columns=["actions"]
                                 + list(selected_cols_local["value"]),
-                                on_row_action=on_view_variant,
+                                on_row_action=on_row_action,
                                 initial_sorting=saved_sorting,
                                 initial_page=table_state.get("page", 0),
                                 state_holder=table_state,
@@ -1835,5 +1858,7 @@ def render_wombat_tab(
                         data_table_refreshers.append(render_data_table.refresh)
                         render_data_table()
 
+                except pl.exceptions.NoDataError:
+                    ui.label("No data available").classes("text-gray-500 italic mt-4")
                 except Exception as e:
                     ui.label(f"Error reading file: {e}").classes("text-red-500 mt-4")

@@ -607,7 +607,7 @@ async def validation_all_page() -> None:
                                 validations_data = load_and_aggregate_validations()
                                 # Refresh the table display using the captured client context
                                 with page_client:
-                                    ui.timer(0.1, refresh_table, once=True)
+                                    refresh_table()
 
                             if variant_type == "SNV":
                                 parts = variant_str.split(":")

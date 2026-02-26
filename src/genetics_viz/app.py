@@ -15,7 +15,7 @@ from nicegui import ui
 from genetics_viz.models import DataStore
 
 # Import pages to register routes - this triggers all @ui.page decorators
-from genetics_viz.pages import cohort, validation  # noqa: F401
+from genetics_viz.pages import cohort, diagnostic, validation  # noqa: F401
 from genetics_viz.utils import data as data_module
 
 # Legacy: Keep local reference for backward compatibility

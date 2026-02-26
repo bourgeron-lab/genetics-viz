@@ -168,9 +168,10 @@ class DataTable:
         data = json.dumps(self.rows, default=str)
         inst_id = self.instance_id
 
-        ui.timer(
-            0.1,
-            lambda: ui.run_javascript(f"""
+        # Use JS setTimeout instead of ui.timer to avoid creating a NiceGUI
+        # element that can lose its parent slot when @ui.refreshable re-renders.
+        ui.run_javascript(f"""
+            setTimeout(function() {{
                 (function initDT() {{
                     // Wait for TanStack library to load
                     if (!window.TanStackTable || !window.DataTable) {{
@@ -198,9 +199,8 @@ class DataTable:
                         obs.disconnect();
                     }}, 30000);
                 }})();
-            """),
-            once=True,
-        )
+            }}, 100);
+        """)
 
     def update_data(self, rows: list[dict[str, Any]]) -> None:
         """Push new row data to the browser table."""

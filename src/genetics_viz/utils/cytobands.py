@@ -87,3 +87,40 @@ def norm_chrom(raw: str) -> str:
     """Normalise a chromosome string: strip 'chr' prefix, uppercase, M→MT."""
     c = str(raw).replace("chr", "").upper()
     return "MT" if c == "M" else c
+
+
+def get_cytoband_range(chrom: str, start_bp: int, end_bp: int) -> str:
+    """Return cytoband range string for a chromosomal interval.
+
+    Queries the CYTOBANDS dict (loaded from cytobands_hg38.tsv) to find all
+    bands overlapping the given bp range.
+
+    Args:
+        chrom: Chromosome name (any format: "chr1", "1", "Chr1")
+        start_bp: Start position in base pairs
+        end_bp: End position in base pairs
+
+    Returns:
+        Cytoband range string, e.g. "1p36.33", "1p36.33-p36.31",
+        "3p26.3-q29".  Empty string if no bands found.
+    """
+    c = norm_chrom(chrom)
+    bands = CYTOBANDS.get(c)
+    if not bands:
+        return ""
+
+    start_mb = start_bp / 1_000_000
+    end_mb = end_bp / 1_000_000
+
+    # Find all overlapping bands
+    overlapping = [b for b in bands if b["end"] > start_mb and b["start"] < end_mb]
+
+    if not overlapping:
+        return ""
+
+    first = overlapping[0]["name"]
+    if len(overlapping) == 1:
+        return f"{c}{first}"
+
+    last = overlapping[-1]["name"]
+    return f"{c}{first}-{last}"

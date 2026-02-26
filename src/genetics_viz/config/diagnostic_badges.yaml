@@ -1,0 +1,29 @@
+# Diagnostic badge configuration
+# Controls how diagnostic status is displayed as badges in DataTables
+
+status:
+  pathogenic:
+    symbol: "P"
+    color: "#d32f2f"
+    bg: "#ffebee"
+    text_color: "#b71c1c"
+  uncertain:
+    symbol: "?"
+    color: "#ff9800"
+    bg: "#fff3e0"
+    text_color: "#e65100"
+  benign:
+    symbol: "B"
+    color: "#4caf50"
+    bg: "#e8f5e9"
+    text_color: "#1b5e20"
+  conflicting:
+    symbol: "!"
+    color: "#ff8f00"
+    bg: "#fff8e1"
+    text_color: "#ff6f00"
+
+# Default badge style when no diagnostic status matches
+default:
+  bg: "#ffffff"
+  text_color: "#374151"

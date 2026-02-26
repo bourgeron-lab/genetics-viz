@@ -16,6 +16,7 @@ presets:
       - father_gt
       - mother_gt
       - Validation
+      - Diagnostic
 
   - name: "Recessive View"
     keywords: ["rare_homalt"]
@@ -33,6 +34,7 @@ presets:
       - father_gt
       - mother_gt
       - Validation
+      - Diagnostic
 
   - name: "Missense View"
     keywords: ["rare_missense_plp", "rare_missense"]
@@ -51,6 +53,7 @@ presets:
       - father_gt
       - mother_gt
       - Validation
+      - Diagnostic
 
   - name: "SpliceAI View"
     keywords: ["rare_spliceai", "spliceai"]
@@ -68,6 +71,7 @@ presets:
       - father_gt
       - mother_gt
       - Validation
+      - Diagnostic
 
   - name: "Mix View"
     keywords: ["default", "standard"]
@@ -83,6 +87,7 @@ presets:
       - FID
       - wisecondorX
       - Validation
+      - Diagnostic
 
   - name: "SV View"
     keywords: ["sv", "wisecondorx"]
@@ -94,3 +99,4 @@ presets:
       - FID
       - wisecondorX
       - Validation
+      - Diagnostic

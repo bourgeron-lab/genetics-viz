@@ -14,6 +14,11 @@ from nicegui import app as nicegui_app
 from nicegui import context, ui
 
 from genetics_viz.components.column_selector import build_column_selector
+from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.components.diagnostic_loader import (
+    add_diagnostic_status_to_row,
+    load_diagnostic_map,
+)
 from genetics_viz.components.search_stats import show_stats_dialog
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.utils.locus import (
@@ -75,6 +80,7 @@ _INTERNAL_KEYS = {
     "ClinVarBadges",
     "GeneBadges",
     "VEP_Gene_badges",
+    "Diagnostic_badge",
 }
 
 
@@ -1448,6 +1454,16 @@ def search_cohort_page(cohort_name: str) -> None:
                             sv_validation_file, None
                         )
 
+                    # Load diagnostic data
+                    snv_diagnostic_map = {}
+                    sv_diagnostic_map = {}
+                    snv_diag_file = store.data_dir / "diagnostics" / "snvs.tsv"
+                    sv_diag_file = store.data_dir / "diagnostics" / "svs.tsv"
+                    if wombat_filtered is not None:
+                        snv_diagnostic_map = load_diagnostic_map(snv_diag_file, None)
+                    if wcx_filtered is not None:
+                        sv_diagnostic_map = load_diagnostic_map(sv_diag_file, None)
+
                     # Yield to event loop before badge processing
                     await asyncio.sleep(0)
 
@@ -1585,6 +1601,9 @@ def search_cohort_page(cohort_name: str) -> None:
 
                             add_validation_status_to_row(
                                 row, snv_validation_map, variant_key, sample_id
+                            )
+                            add_diagnostic_status_to_row(
+                                row, snv_diagnostic_map, variant_key, sample_id
                             )
 
                             # Continuous score badges
@@ -1732,6 +1751,9 @@ def search_cohort_page(cohort_name: str) -> None:
                             add_validation_status_to_row(
                                 row, sv_validation_map, sv_variant_key, sample_id
                             )
+                            add_diagnostic_status_to_row(
+                                row, sv_diagnostic_map, sv_variant_key, sample_id
+                            )
                             _apply_curated_coordinates(
                                 row, sv_validation_map, sv_variant_key, sample_id
                             )
@@ -1798,7 +1820,12 @@ def search_cohort_page(cohort_name: str) -> None:
                     all_columns = list(all_col_set)
                     if "Variant" not in all_columns:
                         all_columns.insert(0, "Variant")
-                    for ensure_col in ["FID", "Phenotype", "Validation"]:
+                    for ensure_col in [
+                        "FID",
+                        "Phenotype",
+                        "Validation",
+                        "Diagnostic",
+                    ]:
                         if ensure_col not in all_columns:
                             all_columns.append(ensure_col)
 
@@ -1966,6 +1993,8 @@ def search_cohort_page(cohort_name: str) -> None:
                                         col_def["tooltipField"] = "_curated_tooltip"
                                     elif col == "Validation":
                                         col_def["cellType"] = "validation"
+                                    elif col == "Diagnostic":
+                                        col_def["cellType"] = "diagnostic"
                                     elif col == "VEP_Consequence":
                                         col_def["cellType"] = "badge_list"
                                         col_def["badgesField"] = "ConsequenceBadges"
@@ -2189,13 +2218,11 @@ def search_cohort_page(cohort_name: str) -> None:
                                     """Reset filename, open dialog, auto-focus and select text."""
                                     name_input.value = f"genetics-viz.{datetime.now().strftime('%Y-%m-%d.%H-%M')}"
                                     dlg.open()
-                                    ui.timer(
-                                        0.2,
-                                        lambda inp=name_input: ui.run_javascript(
-                                            f'var el = getElement({inp.id}).$el.querySelector("input");'
-                                            f"if(el){{el.focus();el.select();}}"
-                                        ),
-                                        once=True,
+                                    ui.run_javascript(
+                                        f"setTimeout(function() {{"
+                                        f'  var el = getElement({name_input.id}).$el.querySelector("input");'
+                                        f"  if(el){{el.focus();el.select();}}"
+                                        f"}}, 200);"
                                     )
 
                                 with ui.button(
@@ -2269,8 +2296,46 @@ def search_cohort_page(cohort_name: str) -> None:
                                                 f"(log2{_op}{cfg['ratio_threshold']} & Z{_op}{cfg['zscore_threshold']})"
                                             ).classes("text-xs text-gray-600")
 
-                            # Handle view variant click
-                            def on_view_variant(e):
+                            def _refresh_all_rows():
+                                """Reload validation + diagnostic data for all rows."""
+                                snv_val = load_validation_map(validation_file, None)
+                                sv_val = load_validation_map(sv_validation_file, None)
+                                snv_diag = load_diagnostic_map(snv_diag_file, None)
+                                sv_diag = load_diagnostic_map(sv_diag_file, None)
+                                for row in all_rows:
+                                    s_id = row.get("sample", "")
+                                    if row.get("_source_type") == "wisecondorx":
+                                        orig = row.get(
+                                            "_original_locus",
+                                            row.get("chr:start-end", ""),
+                                        )
+                                        sv_t = _infer_sv_type(row)
+                                        sv_vk = f"{orig}:{sv_t}"
+                                        row["chr:start-end"] = orig
+                                        row["Variant"] = orig
+                                        add_validation_status_to_row(
+                                            row, sv_val, sv_vk, s_id
+                                        )
+                                        add_diagnostic_status_to_row(
+                                            row, sv_diag, sv_vk, s_id
+                                        )
+                                        _apply_curated_coordinates(
+                                            row, sv_val, sv_vk, s_id
+                                        )
+                                    else:
+                                        v_key = row.get("Variant", "")
+                                        add_validation_status_to_row(
+                                            row, snv_val, v_key, s_id
+                                        )
+                                        add_diagnostic_status_to_row(
+                                            row, snv_diag, v_key, s_id
+                                        )
+                                with page_client:
+                                    render_results_table.refresh()
+
+                            # Handle row action click
+                            def on_row_action(e):
+                                action = e.get("action", "")
                                 row_data = e.get("row", {})
                                 variant_str = row_data.get("Variant", "")
                                 sample_id = row_data.get("sample", "")
@@ -2286,9 +2351,62 @@ def search_cohort_page(cohort_name: str) -> None:
                                     )
                                     return
 
+                                if action == "open_diagnostic":
+                                    if source_type == "wisecondorx":
+                                        # SV diagnostic
+                                        gene_str = row_data.get("gene", "")
+                                        gene_syms = []
+                                        if gene_str and gene_str != "-":
+                                            for gp in str(gene_str).split(","):
+                                                sym = gp.split(":")[0].strip()
+                                                if sym:
+                                                    gene_syms.append(sym)
+                                        gene = ", ".join(gene_syms) if gene_syms else ""
+                                        sv_call = str(
+                                            row_data.get(
+                                                "wisecondorX",
+                                                row_data.get("call", ""),
+                                            )
+                                        ).upper()
+                                        impact = (
+                                            "GAIN"
+                                            if "GAIN" in sv_call
+                                            else (
+                                                "LOSS" if "LOSS" in sv_call else sv_call
+                                            )
+                                        )
+                                        orig_locus = row_data.get(
+                                            "_original_locus", variant_str
+                                        )
+                                        show_diagnostic_dialog(
+                                            family_id=family_id,
+                                            variant_key=orig_locus,
+                                            gene=gene,
+                                            impact=impact,
+                                            sample=sample_id,
+                                            variant_type="sv",
+                                            diagnostic_file=sv_diag_file,
+                                            on_save_callback=lambda s: _refresh_all_rows(),
+                                        )
+                                    else:
+                                        # SNV diagnostic
+                                        gene = row_data.get("VEP_SYMBOL", "")
+                                        impact = row_data.get("VEP_Consequence", "")
+                                        show_diagnostic_dialog(
+                                            family_id=family_id,
+                                            variant_key=variant_str,
+                                            gene=gene,
+                                            impact=impact,
+                                            sample=sample_id,
+                                            variant_type="snv",
+                                            diagnostic_file=snv_diag_file,
+                                            on_save_callback=lambda s: _refresh_all_rows(),
+                                        )
+                                    return
+
                                 try:
                                     if source_type == "wisecondorx":
-                                        # SV dialog: use original locus (before curated update)
+                                        # SV dialog
                                         locus_for_dialog = row_data.get(
                                             "_original_locus", variant_str
                                         )
@@ -2297,48 +2415,6 @@ def search_cohort_page(cohort_name: str) -> None:
                                             chrom = parts[0]
                                             range_parts = parts[1].split("-")
                                             if len(range_parts) == 2:
-
-                                                def on_sv_save():
-                                                    sv_val_updated = (
-                                                        load_validation_map(
-                                                            sv_validation_file, None
-                                                        )
-                                                    )
-                                                    for row in all_rows:
-                                                        if (
-                                                            row.get("_source_type")
-                                                            == "wisecondorx"
-                                                        ):
-                                                            orig = row.get(
-                                                                "_original_locus",
-                                                                row.get(
-                                                                    "chr:start-end", ""
-                                                                ),
-                                                            )
-                                                            sv_t = _infer_sv_type(row)
-                                                            sv_vk = f"{orig}:{sv_t}"
-                                                            # Reset chr:start-end to original before re-applying
-                                                            row["chr:start-end"] = orig
-                                                            row["Variant"] = orig
-                                                            add_validation_status_to_row(
-                                                                row,
-                                                                sv_val_updated,
-                                                                sv_vk,
-                                                                row.get("sample", ""),
-                                                            )
-                                                            _apply_curated_coordinates(
-                                                                row,
-                                                                sv_val_updated,
-                                                                sv_vk,
-                                                                row.get("sample", ""),
-                                                            )
-                                                    with page_client:
-                                                        ui.timer(
-                                                            0.1,
-                                                            render_results_table.refresh,
-                                                            once=True,
-                                                        )
-
                                                 show_sv_dialog(
                                                     cohort_name=cohort_name,
                                                     family_id=family_id,
@@ -2353,47 +2429,23 @@ def search_cohort_page(cohort_name: str) -> None:
                                                             row_data.get("call", ""),
                                                         ),
                                                     },
-                                                    on_validation_saved=on_sv_save,
+                                                    on_validation_saved=_refresh_all_rows,
                                                 )
                                             else:
                                                 ui.notify(
-                                                    "Invalid SV format", type="warning"
+                                                    "Invalid SV format",
+                                                    type="warning",
                                                 )
                                         else:
                                             ui.notify(
-                                                "Invalid SV format", type="warning"
+                                                "Invalid SV format",
+                                                type="warning",
                                             )
                                     else:
                                         # Wombat variant dialog
                                         parts = variant_str.split(":")
                                         if len(parts) == 4:
                                             chrom, pos, ref, alt = parts
-                                            variant_data = dict(row_data)
-
-                                            def on_save(validation_status: str):
-                                                snv_val_updated = load_validation_map(
-                                                    validation_file, None
-                                                )
-                                                for row in all_rows:
-                                                    if (
-                                                        row.get("_source_type")
-                                                        != "wisecondorx"
-                                                    ):
-                                                        v_key = row.get("Variant", "")
-                                                        s_id = row.get("sample", "")
-                                                        add_validation_status_to_row(
-                                                            row,
-                                                            snv_val_updated,
-                                                            v_key,
-                                                            s_id,
-                                                        )
-                                                with page_client:
-                                                    ui.timer(
-                                                        0.1,
-                                                        render_results_table.refresh,
-                                                        once=True,
-                                                    )
-
                                             show_variant_dialog(
                                                 cohort_name=cohort_name,
                                                 family_id=family_id,
@@ -2402,8 +2454,8 @@ def search_cohort_page(cohort_name: str) -> None:
                                                 ref=ref,
                                                 alt=alt,
                                                 sample=sample_id,
-                                                variant_data=variant_data,
-                                                on_save_callback=on_save,
+                                                variant_data=dict(row_data),
+                                                on_save_callback=lambda s: _refresh_all_rows(),
                                             )
                                         else:
                                             ui.notify(
@@ -2412,7 +2464,8 @@ def search_cohort_page(cohort_name: str) -> None:
                                             )
                                 except Exception as ex:
                                     ui.notify(
-                                        f"Error parsing variant: {ex}", type="warning"
+                                        f"Error parsing variant: {ex}",
+                                        type="warning",
                                     )
 
                             # Restore table state (sorting / page) across refreshes
@@ -2467,7 +2520,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                 pagination={"rowsPerPage": 50},
                                 visible_columns=["actions"]
                                 + list(selected_cols["value"]),
-                                on_row_action=on_view_variant,
+                                on_row_action=on_row_action,
                                 initial_sorting=saved_sorting,
                                 initial_page=table_state.get("page", 0),
                                 state_holder=table_state,

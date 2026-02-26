@@ -5,6 +5,11 @@ from typing import Any, Callable, Dict, List
 
 from nicegui import ui
 
+from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.components.diagnostic_loader import (
+    add_diagnostic_status_to_row,
+    load_diagnostic_map,
+)
 from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
@@ -19,6 +24,7 @@ from genetics_viz.utils.column_names import (
     get_display_label,
     reorder_columns_by_group,
 )
+from genetics_viz.utils.cytobands import CHROM_ORDER, VALIDATION_COLORS
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.wisecondorx import (
     WISECONDORX_CONFIG,
@@ -202,12 +208,15 @@ def render_wisecondorx_subtab(
             if "chr:start-end" in row:
                 row["_original_locus"] = row["chr:start-end"]
 
-        # Function to reload and apply validation data
+        # Function to reload and apply validation + diagnostic data
         def reload_validations():
-            """Reload validation data and update all rows."""
+            """Reload validation and diagnostic data and update all rows."""
             # Load validation data from svs.tsv
             validation_file = store.data_dir / "validations" / "svs.tsv"
             validation_map = load_validation_map(validation_file, family_id)
+            # Load diagnostic data from svs.tsv
+            diagnostic_file = store.data_dir / "diagnostics" / "svs.tsv"
+            diagnostic_map = load_diagnostic_map(diagnostic_file, family_id)
 
             # Add Validation status to each row
             for row in all_rows:
@@ -253,6 +262,9 @@ def render_wisecondorx_subtab(
 
                 add_validation_status_to_row(
                     row, validation_map, full_variant_key, sample_id
+                )
+                add_diagnostic_status_to_row(
+                    row, diagnostic_map, full_variant_key, sample_id
                 )
 
                 # Check if there are "present" validations with curated boundaries
@@ -325,6 +337,7 @@ def render_wisecondorx_subtab(
                             score, _ = gene_scorer.get_gene_score_and_sets(symbol)
                             color = gene_scorer.get_gene_color(symbol)
                             tooltip = gene_scorer.get_gene_tooltip(symbol)
+                            is_exonic = gene_type.strip() == "exonic"
                             gene_badges.append(
                                 {
                                     "label": symbol,
@@ -332,6 +345,7 @@ def render_wisecondorx_subtab(
                                     "tooltip": tooltip,
                                     "type": gene_type,
                                     "score": score,
+                                    "borderColor": "black" if is_exonic else None,
                                 }
                             )
 
@@ -368,12 +382,14 @@ def render_wisecondorx_subtab(
                         for symbol in symbols:
                             color = gene_scorer.get_gene_color(symbol)
                             tooltip = gene_scorer.get_gene_tooltip(symbol)
+                            is_exonic = col_name == "exonic_symbol"
                             badges.append(
                                 {
                                     "label": symbol,
                                     "color": color,
                                     "tooltip": tooltip,
-                                    "isExonic": col_name == "exonic_symbol",
+                                    "isExonic": is_exonic,
+                                    "borderColor": "black" if is_exonic else None,
                                 }
                             )
                         row[f"{col_name}_badges"] = badges
@@ -391,12 +407,14 @@ def render_wisecondorx_subtab(
                         for ensg in ensgs:
                             color = gene_scorer.get_gene_color(ensg)
                             tooltip = gene_scorer.get_gene_tooltip(ensg)
+                            is_exonic = col_name == "exonic_ensg"
                             badges.append(
                                 {
                                     "label": ensg,
                                     "color": color,
                                     "tooltip": tooltip,
-                                    "isExonic": col_name in ["exonic_ensg"],
+                                    "isExonic": is_exonic,
+                                    "borderColor": "black" if is_exonic else None,
                                 }
                             )
                         row[f"{col_name}_badges"] = badges
@@ -407,7 +425,9 @@ def render_wisecondorx_subtab(
         reload_validations()
 
         # Get all columns (add Validation column), group same-group columns together
-        all_columns = reorder_columns_by_group(list(df.columns) + ["Validation"])
+        all_columns = reorder_columns_by_group(
+            list(df.columns) + ["Validation", "Diagnostic"]
+        )
 
         # All columns visible by default except gene ID and symbol columns and type
         unchecked_columns = {
@@ -491,6 +511,8 @@ def render_wisecondorx_subtab(
                             col_def["tooltipField"] = "_curated_tooltip"
                         elif col == "Validation":
                             col_def["cellType"] = "validation"
+                        elif col == "Diagnostic":
+                            col_def["cellType"] = "diagnostic"
                         elif col == "call":
                             col_def["cellType"] = "cnv_call"
                             col_def["callColors"] = call_colors
@@ -514,14 +536,16 @@ def render_wisecondorx_subtab(
                         cols.append(col_def)
                     return cols
 
-                with ui.row().classes("items-center gap-4 mt-4 mb-2"):
+                with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
                     ui.label(f"Data ({len(rows)} rows)").classes(
                         "text-lg font-semibold text-blue-700"
                     )
 
+                    ui.space()  # Push buttons to the right
+
                     # Column selector
-                    with ui.button("Select Columns", icon="view_column").props(
-                        "outline color=blue"
+                    with ui.button("Columns", icon="view_column").props(
+                        "outline color=blue size=sm"
                     ):
                         with ui.menu():
                             ui.label("Show/Hide Columns:").classes(
@@ -561,7 +585,7 @@ def render_wisecondorx_subtab(
 
                     # Call filter
                     with ui.button("Filter Call", icon="filter_list").props(
-                        "outline color=blue"
+                        "outline color=blue size=sm"
                     ):
                         with ui.menu():
                             ui.label("Filter by Call:").classes(
@@ -598,62 +622,278 @@ def render_wisecondorx_subtab(
                                         c=call_value: handle_call_change(c, e.value),
                                     ).classes("text-sm")
 
-                def on_view_sv(e):
+                    # Stats button
+                    def show_stats_dialog(current_rows=rows):
+                        from collections import Counter
+
+                        with (
+                            ui.dialog().props("full-width") as stats_dialog,
+                            ui.card().classes("w-full"),
+                        ):
+                            with ui.column().classes("w-full p-4"):
+                                # Header
+                                with ui.row().classes(
+                                    "items-center justify-between w-full mb-2"
+                                ):
+                                    with ui.row().classes("items-center gap-3"):
+                                        ui.label("SV Statistics").classes(
+                                            "text-xl font-bold text-blue-900"
+                                        )
+                                        ui.label(f"{len(current_rows)} SVs").classes(
+                                            "text-sm text-gray-500"
+                                        )
+                                    ui.button(
+                                        icon="close",
+                                        on_click=lambda: stats_dialog.close(),
+                                    ).props("flat round")
+
+                                # --- Chromosome distribution (stacked bar) ---
+                                chrom_counts: Dict[str, Dict[str, int]] = {
+                                    c: {} for c in CHROM_ORDER
+                                }
+                                for r in current_rows:
+                                    locus = r.get("chr:start-end", "")
+                                    if ":" in locus:
+                                        chrom = locus.split(":")[0].replace("chr", "")
+                                        status = r.get("Validation", "") or "TODO"
+                                        if chrom in chrom_counts:
+                                            chrom_counts[chrom][status] = (
+                                                chrom_counts[chrom].get(status, 0) + 1
+                                            )
+
+                                all_statuses = sorted(
+                                    {s for cc in chrom_counts.values() for s in cc}
+                                )
+
+                                ui.label("SVs per Chromosome").classes(
+                                    "text-lg font-semibold text-gray-800 mt-2"
+                                )
+
+                                stacked_series = [
+                                    {
+                                        "name": status,
+                                        "type": "bar",
+                                        "stack": "total",
+                                        "data": [
+                                            chrom_counts[c].get(status, 0)
+                                            for c in CHROM_ORDER
+                                        ],
+                                        "itemStyle": {
+                                            "color": VALIDATION_COLORS.get(
+                                                status, "#94a3b8"
+                                            )
+                                        },
+                                    }
+                                    for status in all_statuses
+                                ]
+                                ui.echart(
+                                    {
+                                        "tooltip": {
+                                            "trigger": "axis",
+                                            "axisPointer": {"type": "shadow"},
+                                        },
+                                        "legend": {"data": all_statuses, "top": 0},
+                                        "grid": {"top": 30},
+                                        "xAxis": {
+                                            "type": "category",
+                                            "data": list(CHROM_ORDER),
+                                            "name": "Chromosome",
+                                        },
+                                        "yAxis": {"type": "value", "name": "Count"},
+                                        "series": stacked_series,
+                                    }
+                                ).classes("w-full h-64")
+
+                                # --- Pie charts row ---
+                                with ui.row().classes("w-full gap-4 flex-wrap mt-4"):
+                                    # Call type pie chart
+                                    with ui.column().classes("flex-1 min-w-[400px]"):
+                                        ui.label("Call Type Distribution").classes(
+                                            "text-lg font-semibold text-gray-800"
+                                        )
+                                        call_counts = Counter(
+                                            r.get("call", "N/A") for r in current_rows
+                                        )
+                                        call_colors_map = build_call_colors()
+                                        call_data = [
+                                            {
+                                                "name": call,
+                                                "value": count,
+                                                "itemStyle": {
+                                                    "color": call_colors_map.get(
+                                                        call, "#94a3b8"
+                                                    )
+                                                },
+                                            }
+                                            for call, count in call_counts.most_common()
+                                        ]
+                                        ui.echart(
+                                            {
+                                                "tooltip": {"trigger": "item"},
+                                                "series": [
+                                                    {
+                                                        "type": "pie",
+                                                        "radius": "70%",
+                                                        "data": call_data,
+                                                        "label": {
+                                                            "formatter": "{b}: {c} ({d}%)"
+                                                        },
+                                                    }
+                                                ],
+                                            }
+                                        ).classes("w-full h-64")
+
+                                    # Validation status pie chart
+                                    with ui.column().classes("flex-1 min-w-[400px]"):
+                                        ui.label("Validation Status").classes(
+                                            "text-lg font-semibold text-gray-800"
+                                        )
+                                        val_counts = Counter(
+                                            r.get("Validation", "") or "TODO"
+                                            for r in current_rows
+                                        )
+                                        val_data = [
+                                            {
+                                                "name": status,
+                                                "value": count,
+                                                "itemStyle": {
+                                                    "color": VALIDATION_COLORS.get(
+                                                        status, "#94a3b8"
+                                                    )
+                                                },
+                                            }
+                                            for status, count in val_counts.most_common()
+                                        ]
+                                        ui.echart(
+                                            {
+                                                "tooltip": {"trigger": "item"},
+                                                "series": [
+                                                    {
+                                                        "type": "pie",
+                                                        "radius": "70%",
+                                                        "data": val_data,
+                                                        "label": {
+                                                            "formatter": "{b}: {c} ({d}%)"
+                                                        },
+                                                    }
+                                                ],
+                                            }
+                                        ).classes("w-full h-64")
+
+                        stats_dialog.open()
+
+                    ui.button(
+                        "Stats",
+                        icon="bar_chart",
+                        on_click=show_stats_dialog,
+                    ).props("outline color=blue size=sm")
+
+                def _on_save_refresh():
+                    """Refresh callback for validation/diagnostic saves."""
+                    reload_validations()
+                    with page_client:
+                        for rfn in data_table_refreshers:
+                            rfn()
+
+                def on_row_action(e):
+                    action = e.get("action", "")
                     row_data = e.get("row", {})
                     locus = row_data.get("chr:start-end", "")
                     sample_id = row_data.get("sample", "")
 
                     if not locus or not sample_id:
-                        ui.notify("Missing locus or sample information", type="warning")
+                        ui.notify(
+                            "Missing locus or sample information",
+                            type="warning",
+                        )
                         return
 
-                    # Parse locus (format: chr:start-end)
-                    # Use original locus if available (for curated variants)
-                    try:
-                        locus_to_parse = row_data.get("OriginalLocus", locus)
-                        parts = locus_to_parse.split(":")
-                        if len(parts) == 2:
-                            chrom = parts[0]
-                            range_parts = parts[1].split("-")
-                            if len(range_parts) == 2:
-                                start = range_parts[0]
-                                end = range_parts[1]
+                    if action == "open_diagnostic":
+                        # Extract gene symbols from gene column
+                        gene_str = row_data.get("gene", "")
+                        gene_symbols = []
+                        if gene_str and gene_str != "-":
+                            for gp in str(gene_str).split(","):
+                                sym = gp.split(":")[0].strip()
+                                if sym:
+                                    gene_symbols.append(sym)
+                        gene = ", ".join(gene_symbols) if gene_symbols else ""
 
-                                # Define refresh callback that reloads validations
-                                def on_save():
-                                    reload_validations()
-                                    render_data_table.refresh()
+                        # Impact from call type
+                        sv_call = str(row_data.get("call", "")).upper()
+                        if "GAIN" in sv_call:
+                            impact = "GAIN"
+                        elif "LOSS" in sv_call:
+                            impact = "LOSS"
+                        else:
+                            impact = sv_call
 
-                                # Show SV dialog with refresh callback
-                                show_sv_dialog(
-                                    cohort_name=cohort_name,
-                                    family_id=family_id,
-                                    chrom=chrom,
-                                    start=start,
-                                    end=end,
-                                    sample=sample_id,
-                                    sv_data=row_data,
-                                    on_validation_saved=on_save,
-                                )
+                        # Use original locus + sv_type for variant key
+                        # Must match the full_variant_key format used in
+                        # reload_validations() and sv_dialog.py
+                        orig_locus = row_data.get("_original_locus", locus)
+                        if "GAIN" in sv_call:
+                            sv_type = "dup"
+                        elif "LOSS" in sv_call:
+                            sv_type = "del"
+                        else:
+                            sv_type = "del"
+                        full_variant_key = f"{orig_locus}:{sv_type}"
+                        diag_file = store.data_dir / "diagnostics" / "svs.tsv"
+                        show_diagnostic_dialog(
+                            family_id=family_id,
+                            variant_key=full_variant_key,
+                            gene=gene,
+                            impact=impact,
+                            sample=sample_id,
+                            variant_type="sv",
+                            diagnostic_file=diag_file,
+                            on_save_callback=lambda s: _on_save_refresh(),
+                        )
+                    else:
+                        # Default: open SV validation dialog
+                        try:
+                            locus_to_parse = row_data.get("OriginalLocus", locus)
+                            parts = locus_to_parse.split(":")
+                            if len(parts) == 2:
+                                chrom = parts[0]
+                                range_parts = parts[1].split("-")
+                                if len(range_parts) == 2:
+                                    start = range_parts[0]
+                                    end = range_parts[1]
+
+                                    show_sv_dialog(
+                                        cohort_name=cohort_name,
+                                        family_id=family_id,
+                                        chrom=chrom,
+                                        start=start,
+                                        end=end,
+                                        sample=sample_id,
+                                        sv_data=row_data,
+                                        on_validation_saved=_on_save_refresh,
+                                    )
+                                else:
+                                    ui.notify(
+                                        "Invalid locus format. Expected chr:start-end",
+                                        type="warning",
+                                    )
                             else:
                                 ui.notify(
                                     "Invalid locus format. Expected chr:start-end",
                                     type="warning",
                                 )
-                        else:
+                        except Exception as ex:
                             ui.notify(
-                                "Invalid locus format. Expected chr:start-end",
+                                f"Error parsing locus: {ex}",
                                 type="warning",
                             )
-                    except Exception as ex:
-                        ui.notify(f"Error parsing locus: {ex}", type="warning")
 
                 with ui.card().classes("w-full"):
                     DataTable(
                         columns=make_columns(selected_cols["value"]),
                         rows=rows,
                         pagination={"rowsPerPage": 10},
-                        on_row_action=on_view_sv,
+                        on_row_action=on_row_action,
                     )
 
                 def handle_col_change(col_name, is_checked):

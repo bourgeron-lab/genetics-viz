@@ -1,6 +1,6 @@
 """Filter components for genetics-viz."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 from nicegui import ui
 
@@ -12,6 +12,7 @@ def create_validation_filter_menu(
     filter_state: Dict[str, List[str]],
     on_change: Callable[[], Any],
     label: str = "Filter by Validation",
+    icon_fn: Callable[[str], Tuple[str, str]] | None = None,
     button_classes: str = "mb-4",
     button_size: str = "",
     button_props: str = "",
@@ -91,7 +92,7 @@ def create_validation_filter_menu(
                                 filter_state["value"].remove(st)
                         on_change()
 
-                    icon, color = get_validation_icon(status)
+                    icon, color = (icon_fn or get_validation_icon)(status)
                     with ui.row().classes("items-center gap-1"):
                         if icon:
                             ui.icon(icon).props(f"size=sm color={color}")

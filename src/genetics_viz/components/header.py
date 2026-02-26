@@ -4,6 +4,7 @@ from nicegui import ui
 
 from genetics_viz.utils.clinvar import reload_clinvar_config
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.diagnostic_badges import reload_diagnostic_config
 from genetics_viz.utils.gene_scoring import reload_gene_scoring
 from genetics_viz.utils.score_colors import reload_score_configs
 from genetics_viz.utils.vep import reload_vep_config
@@ -18,6 +19,7 @@ def reload_all_configs() -> None:
         reload_vep_config()
         reload_clinvar_config()
         reload_view_presets()
+        reload_diagnostic_config()
         ui.notify("Configuration files reloaded successfully", type="positive")
     except Exception as e:
         ui.notify(f"Error reloading configs: {e}", type="negative")
@@ -75,6 +77,20 @@ def create_header(cohort_name: str | None = None) -> None:
                             )
                         except RuntimeError:
                             ui.menu_item("Loading...", auto_close=False)
+
+                # Diagnostic dropdown (always visible)
+                with ui.button("Diagnostic", icon="medical_services").props(
+                    "flat color=white"
+                ):
+                    with ui.menu():
+                        ui.menu_item(
+                            "See All",
+                            on_click=lambda: ui.navigate.to("/diagnostic/all"),
+                        )
+                        ui.menu_item(
+                            "Statistics",
+                            on_click=lambda: ui.navigate.to("/diagnostic/statistics"),
+                        )
 
                 # Project selector dropdown (always visible)
                 try:

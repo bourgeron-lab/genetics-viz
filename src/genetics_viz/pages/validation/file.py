@@ -11,6 +11,11 @@ from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.components.column_selector import build_column_selector
+from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.components.diagnostic_loader import (
+    add_diagnostic_status_to_row,
+    load_diagnostic_map,
+)
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
 from genetics_viz.components.search_stats import show_stats_dialog
@@ -294,11 +299,14 @@ async def validation_file_page(filename: str) -> None:
             # Load validation data (offloaded to thread)
             if is_sv_format:
                 validation_file = store.data_dir / "validations" / "svs.tsv"
+                diagnostic_file = store.data_dir / "diagnostics" / "svs.tsv"
             else:
                 validation_file = store.data_dir / "validations" / "snvs.tsv"
+                diagnostic_file = store.data_dir / "diagnostics" / "snvs.tsv"
             validation_map = await asyncio.to_thread(
                 _load_validation_map, validation_file
             )
+            diagnostic_map = load_diagnostic_map(diagnostic_file)
 
             # Add Validation status to each row
             _add_validation_status_to_rows(
@@ -309,6 +317,19 @@ async def validation_file_page(filename: str) -> None:
                 sample_col,
                 is_sv=is_sv_format,
             )
+
+            # Add Diagnostic status to each row
+            for row in file_data:
+                variant = row.get(variant_col, "")
+                sample = row.get(sample_col, "")
+                if is_sv_format and _SV_PATTERN.match(variant):
+                    sv_type = _infer_sv_type_from_row(row)
+                    diag_variant_key = f"{variant}:{sv_type}"
+                else:
+                    diag_variant_key = variant
+                add_diagnostic_status_to_row(
+                    row, diagnostic_map, diag_variant_key, sample
+                )
 
             # Build badge data for gene, consequence, and ClinVar columns
             gene_scorer = get_gene_scorer()
@@ -408,7 +429,7 @@ async def validation_file_page(filename: str) -> None:
             }
 
             # Column visibility state — all columns visible by default
-            all_columns = list(headers) + ["Validation"]
+            all_columns = list(headers) + ["Validation", "Diagnostic"]
             selected_cols: Dict[str, Any] = {"value": list(all_columns)}
             dt_ref: Dict[str, Any] = {"ref": None}
             table_state: Dict[str, Any] = {"sorting": [], "page": 0}
@@ -506,6 +527,8 @@ async def validation_file_page(filename: str) -> None:
                         col_lower = col.lower()
                         if col == "Validation":
                             col_def["cellType"] = "validation"
+                        elif col == "Diagnostic":
+                            col_def["cellType"] = "diagnostic"
                         elif col == "Variant":
                             col_def["sorting"] = "genomic"
                         elif (
@@ -533,12 +556,82 @@ async def validation_file_page(filename: str) -> None:
                         apply_width_constraints(col_def, col)
                         columns.append(col_def)
 
-                    # Handle view button click
-                    def on_view_variant(e):
+                    def _refresh_file_data():
+                        """Reload validation + diagnostic data and refresh table."""
+                        updated_map = _load_validation_map(validation_file)
+                        _add_validation_status_to_rows(
+                            file_data,
+                            updated_map,
+                            fid_col,
+                            variant_col,
+                            sample_col,
+                            is_sv=is_sv_format,
+                        )
+                        diag_map = load_diagnostic_map(diagnostic_file)
+                        for row in file_data:
+                            v = row.get(variant_col, "")
+                            s = row.get(sample_col, "")
+                            if is_sv_format and _SV_PATTERN.match(v):
+                                dvk = f"{v}:{_infer_sv_type_from_row(row)}"
+                            else:
+                                dvk = v
+                            add_diagnostic_status_to_row(row, diag_map, dvk, s)
+                        with page_client:
+                            refresh_table()
+
+                    # Handle row action click
+                    def on_row_action(e):
+                        action = e.get("action", "")
                         row_data = e.get("row", {})
                         family_id = row_data.get(fid_col, "")
                         variant_str = row_data.get(variant_col, "")
                         sample_id = row_data.get(sample_col, "")
+
+                        if action == "open_diagnostic":
+                            # Determine gene and impact from row data
+                            gene = row_data.get(
+                                "VEP_SYMBOL",
+                                row_data.get("Gene", ""),
+                            )
+                            impact = row_data.get(
+                                "VEP_Consequence",
+                                row_data.get("Impact", ""),
+                            )
+                            if is_sv_format and _SV_PATTERN.match(variant_str):
+                                vtype = "sv"
+                                # Parse gene symbols from SV gene column
+                                gene_str = row_data.get("gene", gene)
+                                if gene_str and ":" in gene_str:
+                                    syms = []
+                                    for gp in str(gene_str).split(","):
+                                        sym = gp.split(":")[0].strip()
+                                        if sym:
+                                            syms.append(sym)
+                                    gene = ", ".join(syms) if syms else gene
+                                sv_call = str(
+                                    row_data.get(
+                                        "wisecondorX",
+                                        row_data.get("call", ""),
+                                    )
+                                ).upper()
+                                if "GAIN" in sv_call:
+                                    impact = "GAIN"
+                                elif "LOSS" in sv_call:
+                                    impact = "LOSS"
+                            else:
+                                vtype = "snv"
+
+                            show_diagnostic_dialog(
+                                family_id=family_id,
+                                variant_key=variant_str,
+                                gene=gene,
+                                impact=impact,
+                                sample=sample_id,
+                                variant_type=vtype,
+                                diagnostic_file=diagnostic_file,
+                                on_save_callback=lambda s: _refresh_file_data(),
+                            )
+                            return
 
                         try:
                             # Find the cohort from family_id
@@ -562,21 +655,7 @@ async def validation_file_page(filename: str) -> None:
                                 range_parts = parts[1].split("-")
                                 start, end = range_parts[0], range_parts[1]
 
-                                def on_sv_save():
-                                    updated_map = _load_validation_map(validation_file)
-                                    _add_validation_status_to_rows(
-                                        file_data,
-                                        updated_map,
-                                        fid_col,
-                                        variant_col,
-                                        sample_col,
-                                        is_sv=True,
-                                    )
-                                    with page_client:
-                                        ui.timer(0.1, refresh_table, once=True)
-
                                 sv_data = dict(row_data)
-                                # Map wisecondorX to call for sv_dialog
                                 if "wisecondorX" in sv_data and "call" not in sv_data:
                                     sv_data["call"] = sv_data["wisecondorX"]
 
@@ -588,29 +667,13 @@ async def validation_file_page(filename: str) -> None:
                                     end=end,
                                     sample=sample_id,
                                     sv_data=sv_data,
-                                    on_validation_saved=on_sv_save,
+                                    on_validation_saved=_refresh_file_data,
                                 )
                             else:
                                 # SNV variant: chr:pos:ref:alt
                                 parts = variant_str.split(":")
                                 if len(parts) == 4:
                                     chrom, pos, ref, alt = parts
-                                    variant_data = dict(row_data)
-
-                                    def on_save(validation_status: str):
-                                        updated_map = _load_validation_map(
-                                            validation_file
-                                        )
-                                        _add_validation_status_to_rows(
-                                            file_data,
-                                            updated_map,
-                                            fid_col,
-                                            variant_col,
-                                            sample_col,
-                                        )
-                                        with page_client:
-                                            ui.timer(0.1, refresh_table, once=True)
-
                                     show_variant_dialog(
                                         cohort_name=cohort_name,
                                         family_id=family_id,
@@ -619,8 +682,8 @@ async def validation_file_page(filename: str) -> None:
                                         ref=ref,
                                         alt=alt,
                                         sample=sample_id,
-                                        variant_data=variant_data,
-                                        on_save_callback=on_save,
+                                        variant_data=dict(row_data),
+                                        on_save_callback=lambda s: _refresh_file_data(),
                                     )
                                 else:
                                     ui.notify(
@@ -628,7 +691,10 @@ async def validation_file_page(filename: str) -> None:
                                         type="warning",
                                     )
                         except Exception as ex:
-                            ui.notify(f"Error parsing variant: {ex}", type="warning")
+                            ui.notify(
+                                f"Error parsing variant: {ex}",
+                                type="warning",
+                            )
 
                     # Restore saved sorting
                     saved_sorting = table_state.get("sorting", [])
@@ -676,7 +742,7 @@ async def validation_file_page(filename: str) -> None:
                         row_key=variant_col if has_variant else "Variant",
                         pagination={"rowsPerPage": 50},
                         visible_columns=["actions"] + list(selected_cols["value"]),
-                        on_row_action=on_view_variant,
+                        on_row_action=on_row_action,
                         initial_sorting=saved_sorting,
                         initial_page=table_state.get("page", 0),
                         state_holder=table_state,
