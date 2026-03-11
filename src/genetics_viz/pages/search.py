@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import polars as pl
-from nicegui import app as nicegui_app
 from nicegui import context, ui
 
 from genetics_viz.components.column_selector import build_column_selector
@@ -33,6 +32,7 @@ from genetics_viz.utils.wisecondorx import (
 )
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.auth import can_write, check_auth
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -247,6 +247,8 @@ def _pedigree_data_from_cohort(cohort_name: str) -> Dict[str, Dict[str, str]]:
 @ui.page("/search/{cohort_name}")
 def search_cohort_page(cohort_name: str) -> None:
     """Search page for cohort-wide variant search."""
+    if redirect := check_auth():
+        return redirect
     create_header(cohort_name)
 
     # Add IGV.js library
@@ -260,9 +262,6 @@ def search_cohort_page(cohort_name: str) -> None:
 
     try:
         store = get_data_store()
-
-        # Serve data files for IGV.js
-        nicegui_app.add_static_files("/data", str(store.data_dir))
 
         # Scan for source files (wombat + SVS)
         wombat_dir = store.data_dir / "cohorts" / cohort_name / "wombat"
@@ -2230,12 +2229,13 @@ def search_cohort_page(cohort_name: str) -> None:
                                     icon="save",
                                 ).props("outline color=blue size=sm"):
                                     with ui.menu().classes("min-w-[250px]"):
-                                        ui.menu_item(
-                                            "Save as validation file",
-                                            on_click=lambda: _open_dialog(
-                                                save_dlg, save_input
-                                            ),
-                                        )
+                                        if can_write():
+                                            ui.menu_item(
+                                                "Save as validation file",
+                                                on_click=lambda: _open_dialog(
+                                                    save_dlg, save_input
+                                                ),
+                                            )
                                         ui.menu_item(
                                             "Download TSV",
                                             on_click=lambda: _open_dialog(

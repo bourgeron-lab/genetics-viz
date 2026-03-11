@@ -9,12 +9,15 @@ from typing import Dict, List
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 
 
 @ui.page("/validation/statistics")
 async def validation_statistics_page() -> None:
     """Render the validation statistics page."""
+    if redirect := check_auth():
+        return redirect
     create_header()
 
     try:

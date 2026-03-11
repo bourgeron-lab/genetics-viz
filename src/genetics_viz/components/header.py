@@ -1,28 +1,9 @@
 """Header component for genetics-viz."""
 
-from nicegui import ui
+from nicegui import app, ui
 
-from genetics_viz.utils.clinvar import reload_clinvar_config
-from genetics_viz.utils.data import get_data_store
-from genetics_viz.utils.diagnostic_badges import reload_diagnostic_config
-from genetics_viz.utils.gene_scoring import reload_gene_scoring
-from genetics_viz.utils.score_colors import reload_score_configs
-from genetics_viz.utils.vep import reload_vep_config
-from genetics_viz.utils.view_presets import reload_view_presets
-
-
-def reload_all_configs() -> None:
-    """Reload all YAML configuration files."""
-    try:
-        reload_score_configs()
-        reload_gene_scoring()
-        reload_vep_config()
-        reload_clinvar_config()
-        reload_view_presets()
-        reload_diagnostic_config()
-        ui.notify("Configuration files reloaded successfully", type="positive")
-    except Exception as e:
-        ui.notify(f"Error reloading configs: {e}", type="negative")
+from genetics_viz.utils.auth import get_current_user, is_admin
+from genetics_viz.utils.data import get_data_dir_options, get_data_store
 
 
 def create_header(cohort_name: str | None = None) -> None:
@@ -128,14 +109,54 @@ def create_header(cohort_name: str | None = None) -> None:
                         on_click=lambda n=cohort_name: ui.navigate.to(f"/search/{n}"),
                     ).props("flat color=white")
 
-        # Right side - data directory indicator and refresh button
+        # Right side — data directory selector + user menu
         with ui.row().classes("items-center gap-2"):
-            try:
-                store = get_data_store()
-                ui.label(f"📁 {store.data_dir.name}").classes("text-sm opacity-75")
-            except RuntimeError:
-                pass
+            # Data directory dropdown
+            dir_options = get_data_dir_options()
+            current_dir = app.storage.user.get("data_dir", "")
 
-            ui.button(icon="refresh", on_click=reload_all_configs).props(
-                "flat color=white size=sm round"
-            ).tooltip("Reload configuration files")
+            def on_data_dir_change(e) -> None:
+                app.storage.user["data_dir"] = e.value
+                ui.navigate.to(ui.context.client.page.path)
+
+            if len(dir_options) > 1:
+                ui.select(
+                    options={opt["value"]: opt["label"] for opt in dir_options},
+                    value=current_dir,
+                    on_change=on_data_dir_change,
+                ).props("outlined dense dark color=white label-color=white").classes(
+                    "w-48"
+                ).tooltip("Select data directory")
+            elif dir_options:
+                ui.label(f"📁 {dir_options[0]['label']}").classes("text-sm opacity-75")
+
+            # User menu
+            username = get_current_user()
+            with ui.button(icon="person").props("flat color=white round"):
+                with ui.menu():
+                    ui.menu_item(
+                        f"{username}",
+                        auto_close=False,
+                    ).props("disable").classes("font-bold")
+                    ui.separator()
+                    ui.menu_item(
+                        "Profile",
+                        on_click=lambda: ui.navigate.to("/profile"),
+                    )
+                    if is_admin():
+                        ui.separator()
+                        ui.menu_item(
+                            "Manage Directories",
+                            on_click=lambda: ui.navigate.to("/admin/directories"),
+                        )
+                        ui.menu_item(
+                            "Manage Users",
+                            on_click=lambda: ui.navigate.to("/admin/users"),
+                        )
+                    ui.separator()
+
+                    def logout() -> None:
+                        app.storage.user.clear()
+                        ui.navigate.to("/login")
+
+                    ui.menu_item("Logout", on_click=logout)

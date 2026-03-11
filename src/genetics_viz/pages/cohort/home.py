@@ -3,12 +3,15 @@
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 
 
 @ui.page("/")
 def home_page() -> None:
     """Render the home/welcome page."""
+    if redirect := check_auth():
+        return redirect
     create_header()
 
     with ui.column().classes("w-full max-w-6xl mx-auto p-6"):

@@ -7,7 +7,6 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
-from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.components.column_selector import build_column_selector
@@ -30,6 +29,7 @@ from genetics_viz.utils.column_names import (
     get_column_type,
     get_display_label,
 )
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
@@ -197,6 +197,8 @@ def _add_validation_status_to_rows(
 @ui.page("/validation/file/{filename}")
 async def validation_file_page(filename: str) -> None:
     """Render a specific to_validate file."""
+    if redirect := check_auth():
+        return redirect
     create_header()
 
     # Add IGV.js library at page level
@@ -208,9 +210,6 @@ async def validation_file_page(filename: str) -> None:
         store = get_data_store()
         to_validate_dir = store.data_dir / "to_validate"
         file_path = to_validate_dir / f"{filename}.tsv"
-
-        # Serve data files for IGV.js
-        nicegui_app.add_static_files("/data", str(store.data_dir))
 
         with ui.column().classes("w-full px-6 py-6"):
             # Title row with trash button on the right

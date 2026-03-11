@@ -2,7 +2,7 @@
 
 import csv
 import fcntl
-import getpass
+from genetics_viz.utils.auth import can_write, get_current_user
 import json
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
-from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 
 # Path to the validation guide markdown file
@@ -507,8 +507,8 @@ def show_variant_dialog(
                             "name": main_label,
                             "type": "alignment",
                             "format": "cram",
-                            "url": f"/data/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram",
-                            "indexURL": f"/data/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram.crai",
+                            "url": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram",
+                            "indexURL": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram.crai",
                             "height": 250,
                             "displayMode": "SQUISHED",
                         }
@@ -527,8 +527,8 @@ def show_variant_dialog(
                                 "name": track_label,
                                 "type": "alignment",
                                 "format": "cram",
-                                "url": f"/data/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram",
-                                "indexURL": f"/data/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram.crai",
+                                "url": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram",
+                                "indexURL": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram.crai",
                                 "height": 250,
                                 "displayMode": "SQUISHED",
                             }
@@ -620,14 +620,14 @@ def show_variant_dialog(
 
             with ui.card().classes("w-full p-4 mb-4"):
                 with ui.column().classes("gap-4"):
-                    default_user = getpass.getuser()
-
                     with ui.row().classes("items-center gap-4 w-full flex-wrap"):
                         ui.label("User:").classes("font-semibold")
                         user_input = (
-                            ui.input("Username").props("outlined dense").classes("w-48")
+                            ui.input("Username")
+                            .props("outlined dense readonly")
+                            .classes("w-48")
                         )
-                        user_input.value = default_user
+                        user_input.value = get_current_user()
 
                         ui.label("Inheritance:").classes("font-semibold ml-4")
                         inferred_inheritance = _infer_inheritance(
@@ -677,14 +677,22 @@ def show_variant_dialog(
                             .classes("flex-grow")
                         )
 
-                        ui.button(
-                            "Save Validation",
-                            icon="save",
-                            on_click=lambda: save_validation(),
-                        ).props("color=blue")
+                        if can_write():
+                            ui.button(
+                                "Save Validation",
+                                icon="save",
+                                on_click=lambda: save_validation(),
+                            ).props("color=blue")
+                        else:
+                            ui.label("Read-only access").classes(
+                                "text-sm text-gray-400 italic"
+                            )
 
                     def save_validation():
                         """Save a validation."""
+                        if not can_write():
+                            ui.notify("Permission denied", type="negative")
+                            return
                         user = user_input.value.strip()
                         validation_status = validation_select.value
                         inheritance = inheritance_select.value or ""

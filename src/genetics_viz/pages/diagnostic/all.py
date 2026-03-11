@@ -11,6 +11,7 @@ from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.header import create_header
 from genetics_viz.components.icons import get_diagnostic_icon
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
 from genetics_viz.utils.gene_scoring import get_gene_scorer
@@ -21,6 +22,8 @@ from genetics_viz.utils.wisecondorx import WISECONDORX_CONFIG
 @ui.page("/diagnostic/all")
 async def diagnostic_all_page() -> None:
     """Render all diagnostics from diagnostics/snvs.tsv and svs.tsv."""
+    if redirect := check_auth():
+        return redirect
     create_header()
 
     try:

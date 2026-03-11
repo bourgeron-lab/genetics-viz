@@ -14,6 +14,9 @@ A web-based visualization tool for genetics cohort data, providing interactive a
 - ✅ **Variant Validation** - Track and validate genetic variants with inheritance patterns
 - 🔬 **IGV Integration** - Built-in IGV.js browser for sequence visualization (CRAM files)
 - 🌊 **WAVES Validation** - Specialized validation workflow for bedGraph/coverage analysis
+- 🔐 **Authentication & Authorization** - YAML-configured user accounts with role-based access (reader, curator, administrator)
+- 📂 **Multi-Data-Directory** - Switch between multiple data directories per user session via YAML config
+- 🛠️ **Admin Pages** - Manage users and data directories from the web interface
 - 🎨 **Modern UI** - Clean, responsive interface built with NiceGUI
 
 ### Validation Features
@@ -35,7 +38,7 @@ A web-based visualization tool for genetics cohort data, providing interactive a
 The easiest way to run genetics-viz without installation:
 
 ```bash
-uvx genetics-viz /path/to/data/directory
+uvx genetics-viz /path/to/config.yaml
 ```
 
 ### From PyPI
@@ -53,11 +56,11 @@ cd genetics-viz
 
 # Install with uv (recommended)
 uv sync
-uv run genetics-viz /path/to/data/directory
+uv run genetics-viz /path/to/config.yaml
 
 # Or install with pip
 pip install -e .
-genetics-viz /path/to/data/directory
+genetics-viz /path/to/config.yaml
 ```
 
 ### Alternative: Local Python/Virtualenv
@@ -71,8 +74,59 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install genetics-viz
 
 # Run the application
-genetics-viz /path/to/data/directory
+genetics-viz /path/to/config.yaml
 ```
+
+## Configuration
+
+### YAML Config File
+
+The application requires a YAML configuration file listing data directories and users:
+
+```yaml
+data_directories:
+  - path: /path/to/data/directory1
+    description: "Primary WGS data"
+    default: true
+  - path: /path/to/data/directory2
+    description: "Secondary dataset"
+
+user_list:
+  - username: admin
+    password: "<sha512-hex-digest>"
+    role: administrator
+  - username: curator1
+    password: "<sha512-hex-digest>"
+    role: curator
+  - username: viewer
+    password: "<sha512-hex-digest>"
+    role: reader
+
+# Auto-generated on first run — do not edit manually
+storage_secret: "<hex-string>"
+```
+
+### Generating Password Hashes
+
+```bash
+echo -n "your_password" | sha512sum | cut -d' ' -f1
+```
+
+### User Roles
+
+| Role | Permissions |
+|------|-------------|
+| **reader** | View all data, cannot save validations or diagnostics |
+| **curator** | View all data + save validations and diagnostics |
+| **administrator** | All curator permissions + manage users and data directories |
+
+### Initial Setup
+
+1. Create a YAML config file with at least one data directory and one administrator user
+2. Generate the admin password hash (see above)
+3. Run: `genetics-viz /path/to/config.yaml`
+4. Log in with admin credentials at `http://localhost:8080/login`
+5. Use the admin pages to add more users and data directories
 
 ## Usage
 
@@ -80,10 +134,10 @@ genetics-viz /path/to/data/directory
 
 ```bash
 # Basic usage
-genetics-viz /path/to/data/directory
+genetics-viz /path/to/config.yaml
 
 # With custom host and port
-genetics-viz /path/to/data/directory --host 0.0.0.0 --port 8080
+genetics-viz /path/to/config.yaml --host 0.0.0.0 --port 8080
 
 # Full help
 genetics-viz --help
@@ -91,7 +145,7 @@ genetics-viz --help
 
 ### Web Interface
 
-Once started, open your browser to `http://localhost:8000` (or the specified port).
+Once started, open your browser to `http://localhost:8080` (or the specified port). You will be redirected to the login page.
 
 The interface provides:
 
@@ -101,7 +155,10 @@ The interface provides:
 - **Search Page** - Cohort-wide variant search with tabbed filters (Variants and Individuals)
 - **Variant Statistics** - Charts and ideogram views for search results
 - **Validation Pages** - Track variant validations (file-specific and all validations)
+- **Diagnostic Pages** - Track variant diagnostic conclusions
 - **WAVES Validation** - Specialized coverage/bedGraph validation workflow
+- **Profile Page** - View role and change password
+- **Admin Pages** - Manage data directories and users (administrators only)
 
 ## Data Directory Structure
 
@@ -233,10 +290,10 @@ sudo mount -t cifs //helix.pasteur.fr/projects/ghfc_wgs /mnt/ghfc_wgs -o usernam
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Run directly with uvx
-uvx genetics-viz /Volumes/ghfc_wgs/WGS/GHFC-GRCh38
+uvx genetics-viz /path/to/genetics_viz.yaml
 
-# On Linux (adjust mount point):
-uvx genetics-viz /mnt/ghfc_wgs/WGS/GHFC-GRCh38
+# On Linux (adjust path):
+uvx genetics-viz /path/to/genetics_viz.yaml
 ```
 
 #### Method 2: Using uv with Local Installation
@@ -249,21 +306,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv pip install genetics-viz
 
 # Run the application
-genetics-viz /Volumes/ghfc_wgs/WGS/GHFC-GRCh38
-```
-
-#### Method 3: Traditional Python/pip
-
-```bash
-# Create and activate virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install genetics-viz
-pip install genetics-viz
-
-# Run the application
-genetics-viz /Volumes/ghfc_wgs/WGS/GHFC-GRCh38
+genetics-viz /path/to/genetics_viz.yaml
 ```
 
 ### Access the Application
@@ -271,16 +314,16 @@ genetics-viz /Volumes/ghfc_wgs/WGS/GHFC-GRCh38
 Once started, open your browser to:
 
 ```
-http://localhost:8000
+http://localhost:8080
 ```
 
 To access from other machines on the network:
 
 ```bash
-genetics-viz /Volumes/ghfc_wgs/WGS/GHFC-GRCh38 --host 0.0.0.0 --port 8000
+genetics-viz /path/to/genetics_viz.yaml --host 0.0.0.0 --port 8080
 ```
 
-Then access via: `http://YOUR_MACHINE_IP:8000`
+Then access via: `http://YOUR_MACHINE_IP:8080`
 
 ## Validation Workflow
 
@@ -337,7 +380,7 @@ uv run ruff check .
 uv run ruff format .
 
 # Run with auto-reload for development
-uv run genetics-viz --reload /path/to/data
+uv run genetics-viz --reload /path/to/config.yaml
 ```
 
 ## Validation File Formats

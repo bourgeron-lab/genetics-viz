@@ -5,7 +5,6 @@ import csv
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.components.filters import create_validation_filter_menu
@@ -13,6 +12,7 @@ from genetics_viz.components.header import create_header
 from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.validation_badges import build_validation_badge
 
@@ -20,6 +20,8 @@ from genetics_viz.utils.validation_badges import build_validation_badge
 @ui.page("/validation/all")
 async def validation_all_page() -> None:
     """Render all validations from validations/snvs.tsv."""
+    if redirect := check_auth():
+        return redirect
     create_header()
 
     # Add IGV.js library at page level
@@ -31,9 +33,6 @@ async def validation_all_page() -> None:
         store = get_data_store()
         snv_validation_file = store.data_dir / "validations" / "snvs.tsv"
         sv_validation_file = store.data_dir / "validations" / "svs.tsv"
-
-        # Serve data files for IGV.js
-        nicegui_app.add_static_files("/data", str(store.data_dir))
 
         with ui.column().classes("w-full px-6 py-6"):
             # Title

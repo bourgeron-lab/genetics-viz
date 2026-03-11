@@ -9,6 +9,7 @@ from typing import Dict, List
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 
@@ -16,6 +17,8 @@ from genetics_viz.utils.gene_scoring import get_gene_scorer
 @ui.page("/diagnostic/statistics")
 async def diagnostic_statistics_page() -> None:
     """Render the diagnostic statistics page."""
+    if redirect := check_auth():
+        return redirect
     create_header()
 
     try:

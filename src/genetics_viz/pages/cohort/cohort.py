@@ -7,12 +7,15 @@ from nicegui import ui
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.pages.cohort.components.stats_panel import render_stats_panel
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 
 
 @ui.page("/cohort/{cohort_name}")
 def cohort_page(cohort_name: str) -> None:
     """Render the cohort detail page."""
+    if redirect := check_auth():
+        return redirect
     create_header(cohort_name)
 
     try:

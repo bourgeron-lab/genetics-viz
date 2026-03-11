@@ -1,16 +1,15 @@
 """Waves validation page - displays samples from selected cohort pedigree."""
 
-import getpass
 import json
 from collections import Counter
 from datetime import datetime
 from typing import Dict, List
 
-from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.auth import can_write, check_auth, get_current_user
 from genetics_viz.components.waves_loader import (
     get_wave_category,
     get_wave_color,
@@ -19,12 +18,14 @@ from genetics_viz.components.waves_loader import (
     load_waves_validations_full,
     save_wave_validation,
 )
-from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.data import get_data_store, get_static_prefix
 
 
 @ui.page("/validation/waves")
 def waves_validation_page() -> None:
     """Render the waves validation page showing samples from selected cohort."""
+    if redirect := check_auth():
+        return redirect
     create_header()
 
     # Add IGV.js library at page level
@@ -35,9 +36,6 @@ def waves_validation_page() -> None:
     try:
         store = get_data_store()
         validation_file = store.data_dir / "validations" / "waves.tsv"
-
-        # Serve data files for IGV.js
-        nicegui_app.add_static_files("/data", str(store.data_dir))
 
         with ui.column().classes("w-full px-6 py-6"):
             ui.label("🌊 Waves Validation").classes(
@@ -365,7 +363,7 @@ def waves_validation_page() -> None:
                                 browser_var = f"igvBrowser_{igv_id.replace('-', '_')}"
 
                                 # Build IGV config with bedgraph track
-                                bedgraph_url = f"/data/samples/{sample_id}/sequences/{sample_id}.by1000.bedgraph.gz"
+                                bedgraph_url = f"{get_static_prefix()}/samples/{sample_id}/sequences/{sample_id}.by1000.bedgraph.gz"
                                 bedgraph_index_url = bedgraph_url + ".tbi"
 
                                 igv_config = {
@@ -456,16 +454,14 @@ def waves_validation_page() -> None:
 
                             with ui.card().classes("w-full p-4 mb-4"):
                                 with ui.column().classes("gap-4"):
-                                    default_user = getpass.getuser()
-
                                     with ui.row().classes("items-center gap-4 w-full"):
                                         ui.label("User:").classes("font-semibold")
                                         user_input = (
                                             ui.input("Username")
-                                            .props("outlined dense")
+                                            .props("outlined dense readonly")
                                             .classes("w-48")
                                         )
-                                        user_input.value = default_user
+                                        user_input.value = get_current_user()
 
                                         ui.label("Wave Score:").classes(
                                             "font-semibold ml-4"
@@ -484,14 +480,24 @@ def waves_validation_page() -> None:
                                             .classes("w-56")
                                         )
 
-                                        ui.button(
-                                            "Save Validation",
-                                            icon="save",
-                                            on_click=lambda: save_validation_and_refresh(),
-                                        ).props("color=blue").classes("ml-4")
+                                        if can_write():
+                                            ui.button(
+                                                "Save Validation",
+                                                icon="save",
+                                                on_click=lambda: save_validation_and_refresh(),
+                                            ).props("color=blue").classes("ml-4")
+                                        else:
+                                            ui.label("Read-only access").classes(
+                                                "text-sm text-gray-400 italic ml-4"
+                                            )
 
                                     def save_validation_and_refresh():
                                         """Save a wave validation."""
+                                        if not can_write():
+                                            ui.notify(
+                                                "Permission denied", type="negative"
+                                            )
+                                            return
                                         user = user_input.value.strip()
                                         wave = wave_select.value
 

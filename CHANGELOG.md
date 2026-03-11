@@ -5,6 +5,27 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-03-09
+
+### Added
+- **Authentication & authorization** — YAML-configured user accounts with SHA-512 password hashing and role-based access control (reader, curator, administrator)
+- **Login page** — username/password login with session persistence
+- **Profile page** — view current role and change password
+- **Admin: user management** — add, remove, change role, and reset password from the web interface
+- **Admin: data directory management** — add, remove, and set default data directory from the web interface
+- **Multi-data-directory support** — per-user data directory selection via header dropdown; YAML config lists multiple directories with descriptions and default flag
+- **YAML config file** — single config file replaces CLI data_dir argument; holds data directories, user list, and auto-generated storage secret
+- **Write protection** — save operations (validations, diagnostics) gated by `can_write()` at both UI and backend level
+- **Config model** (`config_model.py`) — dataclasses for config loading/saving with file locking and password helpers
+
+### Changed
+- **CLI** — accepts `config_file` (path to YAML) instead of `data_dir`
+- **App init** — loads config, initializes multi-store registry, registers per-directory static files, sets storage secret from config
+- **Header** — data directory dropdown replaces reload button; user menu with profile/logout added
+- **Static file URLs** — migrated from hardcoded `/data/` to `get_static_prefix()` for per-directory routing
+- **All page handlers** — auth guard added (`check_auth()` redirect at top of every page)
+- **Validation/diagnostic saves** — username read from session instead of OS user; `can_write()` guards added
+
 ## [0.5.0] - 2026-02-24
 
 ### Added

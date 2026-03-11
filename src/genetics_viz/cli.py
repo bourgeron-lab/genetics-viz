@@ -18,13 +18,13 @@ app = typer.Typer(
 
 @app.command()
 def main(
-    data_dir: Annotated[
+    config_file: Annotated[
         Path,
         typer.Argument(
-            help="Path to the data directory containing cohort data",
+            help="Path to the YAML configuration file",
             exists=True,
-            file_okay=False,
-            dir_okay=True,
+            file_okay=True,
+            dir_okay=False,
             readable=True,
             resolve_path=True,
         ),
@@ -57,12 +57,12 @@ def main(
     """
     Start the genetics-viz web application.
 
-    DATA_DIR should be the path to a directory containing cohort data,
-    with subdirectories under 'cohorts/' each containing a .pedigree.tsv file.
+    CONFIG_FILE should be a YAML file listing data directories and users.
+    See the README for the expected format.
     """
-    typer.echo(f"Starting genetics-viz with data from: {data_dir}")
+    typer.echo(f"Starting genetics-viz with config: {config_file}")
     typer.echo(f"Server running at http://{host}:{port}")
-    run_app(data_dir=data_dir, host=host, port=port, reload=reload)
+    run_app(config_file=config_file, host=host, port=port, reload=reload)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

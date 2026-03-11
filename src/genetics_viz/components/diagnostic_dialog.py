@@ -1,7 +1,7 @@
 """Diagnostic review dialog for recording variant diagnostic conclusions."""
 
 import csv
-import getpass
+from genetics_viz.utils.auth import can_write, get_current_user
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -65,9 +65,11 @@ def show_diagnostic_dialog(
                 ui.label("New diagnostic").classes("font-semibold text-sm mb-2")
                 with ui.row().classes("items-end gap-4 w-full flex-wrap"):
                     user_input = (
-                        ui.input("User").props("outlined dense").classes("w-40")
+                        ui.input("User")
+                        .props("outlined dense readonly")
+                        .classes("w-40")
                     )
-                    user_input.value = getpass.getuser()
+                    user_input.value = get_current_user()
 
                     diagnostic_select = (
                         ui.select(
@@ -85,11 +87,16 @@ def show_diagnostic_dialog(
                         .classes("flex-1 min-w-[200px]")
                     )
 
-                    ui.button(
-                        "Save",
-                        icon="save",
-                        on_click=lambda: _save_diagnostic(),
-                    ).props("color=primary dense")
+                    if can_write():
+                        ui.button(
+                            "Save",
+                            icon="save",
+                            on_click=lambda: _save_diagnostic(),
+                        ).props("color=primary dense")
+                    else:
+                        ui.label("Read-only access").classes(
+                            "text-sm text-gray-400 italic"
+                        )
 
             # ---- History ----
             history_container = ui.column().classes("w-full")
@@ -191,6 +198,9 @@ def show_diagnostic_dialog(
 
             def _save_diagnostic() -> None:
                 """Save the diagnostic entry."""
+                if not can_write():
+                    ui.notify("Permission denied", type="negative")
+                    return
                 user = user_input.value.strip()
                 diag_value = diagnostic_select.value
                 comment = comment_input.value.strip() if comment_input.value else ""

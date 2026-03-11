@@ -2,7 +2,6 @@
 
 from typing import Dict, List
 
-from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.components.diagnostic_loader import (
@@ -11,6 +10,7 @@ from genetics_viz.components.diagnostic_loader import (
 )
 from genetics_viz.components.header import create_header
 from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
+from genetics_viz.utils.auth import check_auth
 from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
 from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
@@ -71,6 +71,8 @@ def _render_sv_gene_badges(gene_str: str, gene_scorer: GeneScorer) -> None:
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
 def family_page(cohort_name: str, family_id: str) -> None:
     """Render the family detail page."""
+    if redirect := check_auth():
+        return redirect
     create_header(cohort_name)
 
     # Add IGV.js library at page level
@@ -80,9 +82,6 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
     try:
         store = get_data_store()
-
-        # Serve data files for IGV.js
-        nicegui_app.add_static_files("/data", str(store.data_dir))
 
         cohort = store.get_cohort(cohort_name)
 
