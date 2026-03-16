@@ -276,6 +276,7 @@ def show_sv_dialog(
                         additional_samples["value"].append(sample_id)
                         refresh_additional_samples()
                         refresh_igv()
+                        refresh_igv_vaf()
                         refresh_igv_cram()
                     else:
                         ui.notify(
@@ -302,6 +303,7 @@ def show_sv_dialog(
                 if added:
                     refresh_additional_samples()
                     refresh_igv()
+                    refresh_igv_vaf()
                     refresh_igv_cram()
                     ui.notify(f"Added parents: {', '.join(added)}", type="positive")
                 else:
@@ -325,6 +327,7 @@ def show_sv_dialog(
                 if added:
                     refresh_additional_samples()
                     refresh_igv()
+                    refresh_igv_vaf()
                     refresh_igv_cram()
                     ui.notify(f"Added {len(added)} family members", type="positive")
                 else:
@@ -335,6 +338,7 @@ def show_sv_dialog(
                     additional_samples["value"].remove(sample_id)
                     refresh_additional_samples()
                     refresh_igv()
+                    refresh_igv_vaf()
                     refresh_igv_cram()
 
             refresh_additional_samples()
@@ -709,6 +713,11 @@ def show_sv_dialog(
                 num_tracks = 1 + len(additional_samples["value"])
                 return 200 + (num_tracks * 100) + 50
 
+            def calculate_vaf_height():
+                """Calculate height based on number of tracks: 200px base + (tracks * 100px) + 50px buffer."""
+                num_tracks = 1 + len(additional_samples["value"])
+                return 200 + (num_tracks * 100) + 50
+
             def calculate_cram_height():
                 """Calculate height for CRAM tracks: 200px base + (tracks * 250px) + 50px buffer."""
                 num_tracks = 1 + len(additional_samples["value"])
@@ -758,6 +767,61 @@ def show_sv_dialog(
                                 "indexURL": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.by1000.bedgraph.gz.tbi",
                                 "height": 100,
                                 "autoscaleGroup": "cnv",
+                            }
+                        )
+
+                return tracks
+
+            # Build IGV tracks function for VAF bedgraph
+            def build_vaf_tracks():
+                tracks = []
+
+                # Main sample track
+                vaf_file = (
+                    get_sample_path(store.data_dir, sample)
+                    / "sequences"
+                    / f"{sample}.vaf.bedgraph.gz"
+                )
+                if vaf_file.exists():
+                    sample_url_seg = get_sample_url(store.data_dir, sample)
+                    main_label = f"{sample} {get_relationship_label(sample)}".strip()
+                    tracks.append(
+                        {
+                            "name": main_label,
+                            "type": "wig",
+                            "format": "bedgraph",
+                            "graphType": "points",
+                            "url": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.vaf.bedgraph.gz",
+                            "indexURL": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.vaf.bedgraph.gz.tbi",
+                            "height": 100,
+                            "min": 0,
+                            "max": 1,
+                            "autoscale": False,
+                        }
+                    )
+
+                # Additional samples tracks
+                for add_sample_id in additional_samples["value"]:
+                    vaf_file = (
+                        get_sample_path(store.data_dir, add_sample_id)
+                        / "sequences"
+                        / f"{add_sample_id}.vaf.bedgraph.gz"
+                    )
+                    if vaf_file.exists():
+                        add_url_seg = get_sample_url(store.data_dir, add_sample_id)
+                        add_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
+                        tracks.append(
+                            {
+                                "name": add_label,
+                                "type": "wig",
+                                "format": "bedgraph",
+                                "graphType": "points",
+                                "url": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.vaf.bedgraph.gz",
+                                "indexURL": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.vaf.bedgraph.gz.tbi",
+                                "height": 100,
+                                "min": 0,
+                                "max": 1,
+                                "autoscale": False,
                             }
                         )
 
@@ -914,6 +978,103 @@ def show_sv_dialog(
                     """)
 
             cnv_expansion.on_value_change(on_cnv_expansion_change)
+
+            # IGV.js viewer container for VAF bedgraph
+            vaf_expansion = (
+                ui.expansion("VAF View", icon="water_drop", value=False)
+                .classes("w-full mt-4 border border-gray-400 rounded-lg")
+                .props("header-class='text-lg font-bold bg-gray-100'")
+            )
+
+            with vaf_expansion:
+                igv_vaf_container = (
+                    ui.element("div")
+                    .props('id="igv-vaf-div"')
+                    .classes("w-full border border-gray-300 rounded-lg")
+                    .style(f"height: {calculate_vaf_height()}px")
+                )
+
+                @ui.refreshable
+                def refresh_igv_vaf():
+                    """Refresh VAF IGV viewer with current tracks."""
+                    igv_vaf_container.clear()
+
+                    # Update container height
+                    try:
+                        new_height = calculate_vaf_height()
+                        igv_vaf_container.style(f"height: {new_height}px")
+                    except RuntimeError:
+                        pass
+
+                    tracks = build_vaf_tracks()
+
+                    # Determine ROI color based on call type
+                    call_value = sv_data.get("call", "")
+                    roi_color = "rgba(255,0,0,0.2)"  # Default red for loss
+                    if "GAIN" in str(call_value).upper():
+                        roi_color = "rgba(0,128,0,0.2)"  # Green for gain
+
+                    # Create ROI description
+                    roi_description = f"{chrom}:{start}-{end} - {call_value}"
+
+                    # IGV.js initialization script
+                    igv_vaf_script = f"""
+                    (async function() {{
+                        const igvDiv = document.getElementById("igv-vaf-div");
+                        if (!igvDiv) return;
+
+                        // Clear any existing IGV instance
+                        if (window.igvVafBrowser) {{
+                            igv.removeBrowser(window.igvVafBrowser);
+                        }}
+
+                        const options = {{
+                            genome: "hg38",
+                            locus: "{igv_locus}",
+                            tracks: {json.dumps(tracks)},
+                            roi: [
+                                {{
+                                    name: "{roi_description}",
+                                    color: "{roi_color}",
+                                    features: [
+                                        {{
+                                            chr: "{chrom}",
+                                            start: {roi_start_coord},
+                                            end: {roi_end_coord},
+                                            name: "{call_value}"
+                                        }}
+                                    ]
+                                }}
+                            ]
+                        }};
+
+                        window.igvVafBrowser = await igv.createBrowser(igvDiv, options);
+
+                        // Trigger resize to ensure proper width
+                        setTimeout(() => {{
+                            if (window.igvVafBrowser && window.igvVafBrowser.visibilityChange) {{
+                                window.igvVafBrowser.visibilityChange();
+                            }}
+                        }}, 100);
+                    }})();
+                    """
+
+                    ui.run_javascript(igv_vaf_script, timeout=10.0)
+
+                refresh_igv_vaf()
+
+            # Handle expansion panel opening to resize IGV
+            def on_vaf_expansion_change(e):
+                if e.value:  # Panel was opened
+                    ui.run_javascript("""
+                        setTimeout(() => {
+                            if (window.igvVafBrowser && window.igvVafBrowser.visibilityChange) {
+                                window.igvVafBrowser.visibilityChange();
+                            }
+                        }, 100);
+                    """)
+
+            vaf_expansion.on_value_change(on_vaf_expansion_change)
 
             # Second IGV.js viewer container for CRAM (read-level split view)
             cram_expansion = (
