@@ -12,6 +12,7 @@ from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 
 # Path to the validation guide markdown file
 VALIDATION_GUIDE_PATH = (
@@ -229,8 +230,9 @@ def show_variant_dialog(
                     and parent_id != sample
                 ):
                     sample_cram = (
-                        store.data_dir
-                        / f"samples/{parent_id}/sequences/{parent_id}.GRCh38_GIABv3.cram"
+                        get_sample_path(store.data_dir, parent_id)
+                        / "sequences"
+                        / f"{parent_id}.GRCh38_GIABv3.cram"
                     )
                     if sample_cram.exists():
                         additional_samples["value"].append(parent_id)
@@ -317,8 +319,9 @@ def show_variant_dialog(
                     and sample_id != sample
                 ):
                     sample_cram = (
-                        store.data_dir
-                        / f"samples/{sample_id}/sequences/{sample_id}.GRCh38_GIABv3.cram"
+                        get_sample_path(store.data_dir, sample_id)
+                        / "sequences"
+                        / f"{sample_id}.GRCh38_GIABv3.cram"
                     )
                     if sample_cram.exists():
                         additional_samples["value"].append(sample_id)
@@ -339,8 +342,9 @@ def show_variant_dialog(
                             and parent_id != sample
                         ):
                             sample_cram = (
-                                store.data_dir
-                                / f"samples/{parent_id}/sequences/{parent_id}.GRCh38_GIABv3.cram"
+                                get_sample_path(store.data_dir, parent_id)
+                                / "sequences"
+                                / f"{parent_id}.GRCh38_GIABv3.cram"
                             )
                             if sample_cram.exists():
                                 additional_samples["value"].append(parent_id)
@@ -360,8 +364,9 @@ def show_variant_dialog(
                         and member_id != sample
                     ):
                         sample_cram = (
-                            store.data_dir
-                            / f"samples/{member_id}/sequences/{member_id}.GRCh38_GIABv3.cram"
+                            get_sample_path(store.data_dir, member_id)
+                            / "sequences"
+                            / f"{member_id}.GRCh38_GIABv3.cram"
                         )
                         if sample_cram.exists():
                             additional_samples["value"].append(member_id)
@@ -497,8 +502,9 @@ def show_variant_dialog(
 
                 # Main sample track
                 sample_cram = (
-                    store.data_dir
-                    / f"samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram"
+                    get_sample_path(store.data_dir, sample)
+                    / "sequences"
+                    / f"{sample}.GRCh38_GIABv3.cram"
                 )
                 if sample_cram.exists():
                     main_label = f"{sample} {get_relationship_label(sample)}".strip()
@@ -507,8 +513,8 @@ def show_variant_dialog(
                             "name": main_label,
                             "type": "alignment",
                             "format": "cram",
-                            "url": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram",
-                            "indexURL": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram.crai",
+                            "url": f"{get_static_prefix()}/{get_sample_url(store.data_dir, sample)}/sequences/{sample}.GRCh38_GIABv3.cram",
+                            "indexURL": f"{get_static_prefix()}/{get_sample_url(store.data_dir, sample)}/sequences/{sample}.GRCh38_GIABv3.cram.crai",
                             "height": 250,
                             "displayMode": "SQUISHED",
                         }
@@ -517,8 +523,9 @@ def show_variant_dialog(
                 # Additional samples tracks
                 for add_sample_id in additional_samples["value"]:
                     add_sample_cram = (
-                        store.data_dir
-                        / f"samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram"
+                        get_sample_path(store.data_dir, add_sample_id)
+                        / "sequences"
+                        / f"{add_sample_id}.GRCh38_GIABv3.cram"
                     )
                     if add_sample_cram.exists():
                         track_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
@@ -527,8 +534,8 @@ def show_variant_dialog(
                                 "name": track_label,
                                 "type": "alignment",
                                 "format": "cram",
-                                "url": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram",
-                                "indexURL": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram.crai",
+                                "url": f"{get_static_prefix()}/{get_sample_url(store.data_dir, add_sample_id)}/sequences/{add_sample_id}.GRCh38_GIABv3.cram",
+                                "indexURL": f"{get_static_prefix()}/{get_sample_url(store.data_dir, add_sample_id)}/sequences/{add_sample_id}.GRCh38_GIABv3.cram.crai",
                                 "height": 250,
                                 "displayMode": "SQUISHED",
                             }

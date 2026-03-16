@@ -73,6 +73,7 @@ src/genetics_viz/
     gene_scoring.py               # Gene scoring and color coding
     score_colors.py               # Continuous score color ranges
     vep.py                        # VEP consequence utilities (from YAML)
+    sharding.py                   # Two-level sharded directory path resolution
     view_presets.py               # View preset loading with reload support
     column_names.py               # Column name/group/sorting/schema utilities
   static/
@@ -118,6 +119,14 @@ Config files (YAML) are loaded once at module level.
 - `get_data_store()` reads `app.storage.user['data_dir']` for per-user data directory selection. Same signature as before — all calling files work unchanged.
 - `get_static_prefix()` returns the per-user URL prefix (e.g., `/data-0`) for IGV static file URLs.
 - Static files are registered centrally in `app.py` via `nicegui_app.add_static_files()` — NOT in individual pages.
+
+### Sharded Directories
+- `samples/` and `families/` directories may use two-level sharding: `samples/<shard1>/<shard2>/<id>/`.
+- Shard keys: strip `-`, `.`, `_` from entity ID, then shard1 = last char (uppercased), shard2 = second-to-last char (uppercased).
+- Auto-detected per data directory (if all children of `samples/` are single-char dirs → sharded). Cached.
+- Use `get_sample_path(data_dir, id)` / `get_family_path(data_dir, id)` for filesystem paths.
+- Use `get_sample_url(data_dir, id)` / `get_family_url(data_dir, id)` for URL segments.
+- All functions in `utils/sharding.py`. Never construct `samples/{id}` or `families/{id}` paths manually.
 
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.

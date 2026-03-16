@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List
 from nicegui import ui
 
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
     load_diagnostic_map,
@@ -59,7 +60,7 @@ def render_svs_tab(
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
     """
-    svs_dir = store.data_dir / "families" / family_id / "svs"
+    svs_dir = get_family_path(store.data_dir, family_id) / "svs"
 
     if not svs_dir.exists():
         ui.label(f"No SVs directory found at: {svs_dir}").classes(

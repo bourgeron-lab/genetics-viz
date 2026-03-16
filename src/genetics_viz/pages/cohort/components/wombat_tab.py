@@ -7,6 +7,7 @@ import polars as pl
 from nicegui import ui
 
 from genetics_viz.components.column_selector import build_column_selector
+from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
@@ -72,7 +73,7 @@ def render_wombat_tab(
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
     """
-    wombat_dir = store.data_dir / "families" / family_id / "wombat"
+    wombat_dir = get_family_path(store.data_dir, family_id) / "wombat"
 
     if not wombat_dir.exists():
         ui.label(f"No wombat directory found at: {wombat_dir}").classes(

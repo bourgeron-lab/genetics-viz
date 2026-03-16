@@ -5,6 +5,14 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-03-16
+
+### Added
+- **Sharded directory support** — two-level sharding for `samples/` and `families/` directories (`utils/sharding.py`), with auto-detection and backward compatibility for flat layouts
+
+### Changed
+- All sample/family path constructions now use `get_sample_path()`/`get_family_path()` and `get_sample_url()`/`get_family_url()` from the sharding module
+
 ## [0.6.0] - 2026-03-09
 
 ### Added

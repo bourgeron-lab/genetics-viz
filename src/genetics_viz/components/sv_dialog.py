@@ -13,6 +13,7 @@ from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 
 
 # Load WisecondorX thresholds and colors from YAML
@@ -178,8 +179,9 @@ def show_sv_dialog(
                     and parent_id != sample
                 ):
                     bedgraph_file = (
-                        store.data_dir
-                        / f"samples/{parent_id}/sequences/{parent_id}.by1000.bedgraph.gz"
+                        get_sample_path(store.data_dir, parent_id)
+                        / "sequences"
+                        / f"{parent_id}.by1000.bedgraph.gz"
                     )
                     if bedgraph_file.exists():
                         additional_samples["value"].append(parent_id)
@@ -266,8 +268,9 @@ def show_sv_dialog(
                     and sample_id != sample
                 ):
                     bedgraph_file = (
-                        store.data_dir
-                        / f"samples/{sample_id}/sequences/{sample_id}.by1000.bedgraph.gz"
+                        get_sample_path(store.data_dir, sample_id)
+                        / "sequences"
+                        / f"{sample_id}.by1000.bedgraph.gz"
                     )
                     if bedgraph_file.exists():
                         additional_samples["value"].append(sample_id)
@@ -289,8 +292,9 @@ def show_sv_dialog(
                             and parent_id != sample
                         ):
                             bedgraph_file = (
-                                store.data_dir
-                                / f"samples/{parent_id}/sequences/{parent_id}.by1000.bedgraph.gz"
+                                get_sample_path(store.data_dir, parent_id)
+                                / "sequences"
+                                / f"{parent_id}.by1000.bedgraph.gz"
                             )
                             if bedgraph_file.exists():
                                 additional_samples["value"].append(parent_id)
@@ -311,8 +315,9 @@ def show_sv_dialog(
                         and member_id != sample
                     ):
                         bedgraph_file = (
-                            store.data_dir
-                            / f"samples/{member_id}/sequences/{member_id}.by1000.bedgraph.gz"
+                            get_sample_path(store.data_dir, member_id)
+                            / "sequences"
+                            / f"{member_id}.by1000.bedgraph.gz"
                         )
                         if bedgraph_file.exists():
                             additional_samples["value"].append(member_id)
@@ -715,18 +720,20 @@ def show_sv_dialog(
 
                 # Main sample track
                 bedgraph_file = (
-                    store.data_dir
-                    / f"samples/{sample}/sequences/{sample}.by1000.bedgraph.gz"
+                    get_sample_path(store.data_dir, sample)
+                    / "sequences"
+                    / f"{sample}.by1000.bedgraph.gz"
                 )
                 if bedgraph_file.exists():
+                    sample_url_seg = get_sample_url(store.data_dir, sample)
                     main_label = f"{sample} {get_relationship_label(sample)}".strip()
                     tracks.append(
                         {
                             "name": main_label,
                             "type": "wig",
                             "format": "bedgraph",
-                            "url": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.by1000.bedgraph.gz",
-                            "indexURL": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.by1000.bedgraph.gz.tbi",
+                            "url": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.by1000.bedgraph.gz",
+                            "indexURL": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.by1000.bedgraph.gz.tbi",
                             "height": 100,
                             "autoscaleGroup": "cnv",
                         }
@@ -735,18 +742,20 @@ def show_sv_dialog(
                 # Additional samples tracks
                 for add_sample_id in additional_samples["value"]:
                     bedgraph_file = (
-                        store.data_dir
-                        / f"samples/{add_sample_id}/sequences/{add_sample_id}.by1000.bedgraph.gz"
+                        get_sample_path(store.data_dir, add_sample_id)
+                        / "sequences"
+                        / f"{add_sample_id}.by1000.bedgraph.gz"
                     )
                     if bedgraph_file.exists():
+                        add_url_seg = get_sample_url(store.data_dir, add_sample_id)
                         add_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
                         tracks.append(
                             {
                                 "name": add_label,
                                 "type": "wig",
                                 "format": "bedgraph",
-                                "url": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.by1000.bedgraph.gz",
-                                "indexURL": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.by1000.bedgraph.gz.tbi",
+                                "url": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.by1000.bedgraph.gz",
+                                "indexURL": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.by1000.bedgraph.gz.tbi",
                                 "height": 100,
                                 "autoscaleGroup": "cnv",
                             }
@@ -760,18 +769,20 @@ def show_sv_dialog(
 
                 # Main sample CRAM track
                 cram_file = (
-                    store.data_dir
-                    / f"samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram"
+                    get_sample_path(store.data_dir, sample)
+                    / "sequences"
+                    / f"{sample}.GRCh38_GIABv3.cram"
                 )
                 if cram_file.exists():
+                    sample_url_seg = get_sample_url(store.data_dir, sample)
                     main_label = f"{sample} {get_relationship_label(sample)}".strip()
                     tracks.append(
                         {
                             "name": main_label,
                             "type": "alignment",
                             "format": "cram",
-                            "url": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram",
-                            "indexURL": f"{get_static_prefix()}/samples/{sample}/sequences/{sample}.GRCh38_GIABv3.cram.crai",
+                            "url": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.GRCh38_GIABv3.cram",
+                            "indexURL": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.GRCh38_GIABv3.cram.crai",
                             "height": 250,
                             "displayMode": "SQUISHED",
                             "viewAsPairs": True,
@@ -783,18 +794,20 @@ def show_sv_dialog(
                 # Additional samples CRAM tracks
                 for add_sample_id in additional_samples["value"]:
                     cram_file = (
-                        store.data_dir
-                        / f"samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram"
+                        get_sample_path(store.data_dir, add_sample_id)
+                        / "sequences"
+                        / f"{add_sample_id}.GRCh38_GIABv3.cram"
                     )
                     if cram_file.exists():
+                        add_url_seg = get_sample_url(store.data_dir, add_sample_id)
                         add_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
                         tracks.append(
                             {
                                 "name": add_label,
                                 "type": "alignment",
                                 "format": "cram",
-                                "url": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram",
-                                "indexURL": f"{get_static_prefix()}/samples/{add_sample_id}/sequences/{add_sample_id}.GRCh38_GIABv3.cram.crai",
+                                "url": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.GRCh38_GIABv3.cram",
+                                "indexURL": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.GRCh38_GIABv3.cram.crai",
                                 "height": 250,
                                 "displayMode": "SQUISHED",
                                 "viewAsPairs": True,

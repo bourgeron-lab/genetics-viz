@@ -5,6 +5,7 @@ from typing import Optional
 
 from genetics_viz.config_model import DataDirectoryConfig
 from genetics_viz.models import DataStore
+from genetics_viz.utils.sharding import clear_sharding_cache
 
 # ---------------------------------------------------------------------------
 # Multi-store registry
@@ -143,6 +144,7 @@ def add_data_store(path: str, description: str = "") -> str:
     _data_stores[path_str] = store
     _static_prefix_map[path_str] = prefix
     _dir_descriptions[path_str] = description
+    clear_sharding_cache()
 
     # Register static files
     from nicegui import app as nicegui_app
@@ -158,3 +160,4 @@ def remove_data_store(path: str) -> None:
     _data_stores.pop(path_str, None)
     _static_prefix_map.pop(path_str, None)
     _dir_descriptions.pop(path_str, None)
+    clear_sharding_cache()

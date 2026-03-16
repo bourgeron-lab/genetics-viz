@@ -8,6 +8,7 @@ import polars as pl
 from nicegui import ui
 
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -73,7 +74,7 @@ def render_dnm_tab(
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
     """
-    vcfs_dir = store.data_dir / "families" / family_id / "vcfs"
+    vcfs_dir = get_family_path(store.data_dir, family_id) / "vcfs"
 
     if not vcfs_dir.exists():
         ui.label(f"No vcfs directory found at: {vcfs_dir}").classes(

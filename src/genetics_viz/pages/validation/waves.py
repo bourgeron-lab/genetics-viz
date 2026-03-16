@@ -19,6 +19,7 @@ from genetics_viz.components.waves_loader import (
     save_wave_validation,
 )
 from genetics_viz.utils.data import get_data_store, get_static_prefix
+from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 
 
 @ui.page("/validation/waves")
@@ -313,9 +314,7 @@ def waves_validation_page() -> None:
                 """Show wave validation dialog for a sample."""
                 # Check if bedgraph exists
                 bedgraph_path = (
-                    store.data_dir
-                    / "samples"
-                    / sample_id
+                    get_sample_path(store.data_dir, sample_id)
                     / "sequences"
                     / f"{sample_id}.by1000.bedgraph.gz"
                 )
@@ -363,7 +362,7 @@ def waves_validation_page() -> None:
                                 browser_var = f"igvBrowser_{igv_id.replace('-', '_')}"
 
                                 # Build IGV config with bedgraph track
-                                bedgraph_url = f"{get_static_prefix()}/samples/{sample_id}/sequences/{sample_id}.by1000.bedgraph.gz"
+                                bedgraph_url = f"{get_static_prefix()}/{get_sample_url(store.data_dir, sample_id)}/sequences/{sample_id}.by1000.bedgraph.gz"
                                 bedgraph_index_url = bedgraph_url + ".tbi"
 
                                 igv_config = {

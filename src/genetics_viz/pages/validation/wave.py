@@ -13,6 +13,7 @@ from genetics_viz.components.waves_loader import (
     save_wave_validation,
 )
 from genetics_viz.utils.data import get_data_store, get_static_prefix
+from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 
 
 @ui.page("/validation/wave/{sample_id}")
@@ -28,9 +29,7 @@ def wave_validation_page(sample_id: str) -> None:
 
         # Check if bedgraph exists
         bedgraph_path = (
-            store.data_dir
-            / "samples"
-            / sample_id
+            get_sample_path(store.data_dir, sample_id)
             / "sequences"
             / f"{sample_id}.by1000.bedgraph.gz"
         )
@@ -81,7 +80,7 @@ def wave_validation_page(sample_id: str) -> None:
                 browser_var = f"igvBrowser_{igv_id.replace('-', '_')}"
 
                 # Build IGV config with bedgraph track
-                bedgraph_url = f"{get_static_prefix()}/samples/{sample_id}/sequences/{sample_id}.by1000.bedgraph.gz"
+                bedgraph_url = f"{get_static_prefix()}/{get_sample_url(store.data_dir, sample_id)}/sequences/{sample_id}.by1000.bedgraph.gz"
                 bedgraph_index_url = bedgraph_url + ".tbi"
 
                 igv_config = {
@@ -127,7 +126,7 @@ def wave_validation_page(sample_id: str) -> None:
                 with ui.row().classes("items-center gap-4 p-4 bg-gray-50"):
                     ui.label("Bedgraph:").classes("font-semibold text-sm")
                     ui.label(
-                        f"samples/{sample_id}/sequences/{sample_id}.by1000.bedgraph.gz"
+                        f"{get_sample_url(store.data_dir, sample_id)}/sequences/{sample_id}.by1000.bedgraph.gz"
                     ).classes("text-xs text-gray-600 font-mono")
 
             # Panel 2: Wave Validation Form
