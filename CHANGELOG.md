@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-03-23
+
+### Fixed
+- **SV validation display for GAIN variants** — validations on "gain" type SVs now display correctly in the validation file table. Root cause: inconsistent SV type inference between save (sv_dialog.py, checked only `call` column) and lookup (file.py, checked `wisecondorX` first). Extracted shared `infer_sv_type()` utility in `utils/wisecondorx.py` used by all callers.
+
 ## [0.6.2] - 2026-03-16
 
 ### Added

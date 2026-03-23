@@ -31,6 +31,7 @@ from genetics_viz.utils.wisecondorx import (
     WISECONDORX_CONFIG,
     build_call_colors,
     build_color_thresholds,
+    infer_sv_type,
     parse_wisecondorx_bed_for_display,
 )
 
@@ -833,12 +834,7 @@ def render_wisecondorx_subtab(
                         # Must match the full_variant_key format used in
                         # reload_validations() and sv_dialog.py
                         orig_locus = row_data.get("_original_locus", locus)
-                        if "GAIN" in sv_call:
-                            sv_type = "dup"
-                        elif "LOSS" in sv_call:
-                            sv_type = "del"
-                        else:
-                            sv_type = "del"
+                        sv_type = infer_sv_type(row_data)
                         full_variant_key = f"{orig_locus}:{sv_type}"
                         diag_file = store.data_dir / "diagnostics" / "svs.tsv"
                         show_diagnostic_dialog(

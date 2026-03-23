@@ -19,6 +19,33 @@ def _load_wisecondorx_config() -> Dict[str, Any]:
 WISECONDORX_CONFIG: Dict[str, Any] = _load_wisecondorx_config()
 
 
+def infer_sv_type(row_data: Dict[str, Any]) -> str:
+    """Infer SV type (dup/del) from row data.
+
+    Checks wisecondorX, call, type columns, then falls back to ratio.
+    Must be used consistently everywhere an SV type is needed to ensure
+    validation save/lookup keys match.
+    """
+    wcx_call = str(row_data.get("wisecondorX", "")).upper()
+    if "GAIN" in wcx_call:
+        return "dup"
+    if "LOSS" in wcx_call:
+        return "del"
+    call = str(row_data.get("call", "")).upper()
+    if "GAIN" in call:
+        return "dup"
+    if "LOSS" in call:
+        return "del"
+    raw_type = str(row_data.get("type", "")).lower()
+    if raw_type in ("dup", "del"):
+        return raw_type
+    try:
+        ratio = float(row_data.get("ratio", 0))
+        return "dup" if ratio > 0 else "del"
+    except (ValueError, TypeError):
+        return "del"
+
+
 def classify_cnv(ratio: Any, zscore: Any) -> str:
     """Classify CNV based on ratio (log2) and zscore thresholds.
 

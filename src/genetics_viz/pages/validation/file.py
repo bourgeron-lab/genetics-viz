@@ -34,7 +34,7 @@ from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.validation_badges import build_validation_badge
-from genetics_viz.utils.wisecondorx import build_call_colors
+from genetics_viz.utils.wisecondorx import build_call_colors, infer_sv_type
 from genetics_viz.utils.clinvar import (
     format_clinvar_display,
     get_clinvar_color,
@@ -66,31 +66,6 @@ def _read_tsv_file(file_path: Path) -> tuple:
 def _detect_sv_format(file_data: List[Dict[str, Any]], variant_col: str) -> bool:
     """Check if any variant in the file matches the SV format (chr:start-end)."""
     return any(_SV_PATTERN.match(row.get(variant_col, "")) for row in file_data)
-
-
-def _infer_sv_type_from_row(row: Dict[str, Any]) -> str:
-    """Infer SV type (dup/del) from row data.
-
-    Checks wisecondorX, call, type columns, then falls back to ratio.
-    """
-    wcx_call = str(row.get("wisecondorX", "")).upper()
-    if "GAIN" in wcx_call:
-        return "dup"
-    if "LOSS" in wcx_call:
-        return "del"
-    call = str(row.get("call", "")).upper()
-    if "GAIN" in call:
-        return "dup"
-    if "LOSS" in call:
-        return "del"
-    raw_type = str(row.get("type", "")).lower()
-    if raw_type in ("dup", "del"):
-        return raw_type
-    try:
-        ratio = float(row.get("ratio", 0))
-        return "dup" if ratio > 0 else "del"
-    except (ValueError, TypeError):
-        return "del"
 
 
 def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
@@ -140,7 +115,7 @@ def _add_validation_status_to_rows(
         sample = row.get(sample_col, "")
 
         if is_sv and _SV_PATTERN.match(variant):
-            sv_type = _infer_sv_type_from_row(row)
+            sv_type = infer_sv_type(row)
             lookup_variant = f"{variant}:{sv_type}"
         else:
             lookup_variant = variant
@@ -322,7 +297,7 @@ async def validation_file_page(filename: str) -> None:
                 variant = row.get(variant_col, "")
                 sample = row.get(sample_col, "")
                 if is_sv_format and _SV_PATTERN.match(variant):
-                    sv_type = _infer_sv_type_from_row(row)
+                    sv_type = infer_sv_type(row)
                     diag_variant_key = f"{variant}:{sv_type}"
                 else:
                     diag_variant_key = variant
@@ -571,7 +546,7 @@ async def validation_file_page(filename: str) -> None:
                             v = row.get(variant_col, "")
                             s = row.get(sample_col, "")
                             if is_sv_format and _SV_PATTERN.match(v):
-                                dvk = f"{v}:{_infer_sv_type_from_row(row)}"
+                                dvk = f"{v}:{infer_sv_type(row)}"
                             else:
                                 dvk = v
                             add_diagnostic_status_to_row(row, diag_map, dvk, s)

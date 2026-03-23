@@ -14,6 +14,7 @@ from nicegui import ui
 from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
+from genetics_viz.utils.wisecondorx import infer_sv_type
 
 
 # Load WisecondorX thresholds and colors from YAML
@@ -74,12 +75,7 @@ def show_sv_dialog(
     validation_map = load_validation_map(validation_file, family_id)
 
     # Determine SV type for variant key
-    sv_call = sv_data.get("call", "")
-    if "GAIN" in str(sv_call).upper() or "gain" in str(sv_call).lower():
-        sv_type = "dup"
-    else:
-        sv_type = "del"
-
+    sv_type = infer_sv_type(sv_data)
     variant_key = f"{chrom}:{start}-{end}:{sv_type}"
     map_key = (variant_key, sample)
 
@@ -1319,8 +1315,7 @@ def show_sv_dialog(
 
             # SV Validation section
             # Determine SV type for variant key (dup for gain, del for loss)
-            sv_call = sv_data.get("call", "")
-            sv_type = "dup" if "GAIN" in str(sv_call).upper() else "del"
+            sv_type = infer_sv_type(sv_data)
             variant_key = f"{chrom}:{start}-{end}:{sv_type}"
 
             validation_file = store.data_dir / "validations" / "svs.tsv"

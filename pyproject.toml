@@ -1,6 +1,6 @@
 [project]
 name = "genetics-viz"
-version = "0.6.2"
+version = "0.6.3"
 description = "A web-based visualization tool for genetics cohort data"
 readme = "README.md"
 authors = [{ name = "Freddy Cliquet", email = "fcliquet@pasteur.fr" }]
