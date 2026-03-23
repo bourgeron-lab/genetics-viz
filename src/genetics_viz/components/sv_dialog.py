@@ -4,6 +4,7 @@ import csv
 import fcntl
 from genetics_viz.utils.auth import can_write, get_current_user
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,121 @@ def _load_wisecondorx_config():
 
 
 WISECONDORX_CONFIG = _load_wisecondorx_config()
+
+
+_SV_KEY_PATTERN = re.compile(r"^(chr[^:]+):(\d+)-(\d+):(\w+)$")
+
+# Priority constants for suggestion sorting
+_PRIORITY_PARENT = 0
+_PRIORITY_FAMILY = 1
+_PRIORITY_COHORT = 2
+
+
+def _build_sv_suggestions(
+    all_validation_map: Dict,
+    chrom: str,
+    start_pos: int,
+    end_pos: int,
+    current_sample: str,
+    sample_parents: Dict[str, Optional[str]],
+    family_members: List[str],
+    max_suggestions: int = 5,
+) -> List[Dict[str, Any]]:
+    """Build a list of suggested curated coordinates from overlapping validated SVs.
+
+    Scans all validations for SVs on the same chromosome that overlap with
+    the current SV.  Returns suggestions sorted by priority (parents first,
+    then family, then cohort) and overlap percentage.
+    """
+    parent_ids = {
+        pid
+        for pid in (sample_parents.get("father"), sample_parents.get("mother"))
+        if pid and pid not in ("", "0", "-9", "-")
+    }
+    family_set = set(family_members)
+    current_length = end_pos - start_pos
+
+    if current_length <= 0:
+        return []
+
+    # coord_key -> suggestion dict
+    merged: Dict[tuple, Dict[str, Any]] = {}
+
+    for (variant_key, sample_id), validations in all_validation_map.items():
+        m = _SV_KEY_PATTERN.match(variant_key)
+        if not m:
+            continue
+        other_chrom, other_start_s, other_end_s, _other_type = m.groups()
+        if other_chrom != chrom:
+            continue
+        other_start = int(other_start_s)
+        other_end = int(other_end_s)
+
+        # Filter to "present" or "different", non-ignored validations
+        good = [
+            v for v in validations if v[0] in ("present", "different") and v[3] != "1"
+        ]
+        if not good:
+            continue
+
+        # Get suggested coordinates: prefer curated, fall back to original
+        # Use the most recent validation with curated coords
+        curated = [v for v in good if v[4] or v[5]]
+        if curated:
+            curated.sort(key=lambda v: v[6], reverse=True)
+            best = curated[0]
+            sug_start = int(best[4]) if best[4] else other_start
+            sug_end = int(best[5]) if best[5] else other_end
+        else:
+            sug_start = other_start
+            sug_end = other_end
+
+        # Check overlap between suggested coords and current SV
+        overlap_start = max(start_pos, sug_start)
+        overlap_end = min(end_pos, sug_end)
+        if overlap_start >= overlap_end:
+            continue
+        overlap_length = overlap_end - overlap_start
+        sug_length = sug_end - sug_start
+        if sug_length <= 0:
+            continue
+        overlap_pct = overlap_length / min(current_length, sug_length) * 100
+
+        # Skip exact same coordinates as current SV (not useful)
+        if sug_start == start_pos and sug_end == end_pos:
+            continue
+
+        # Classify sample priority
+        if sample_id in parent_ids:
+            priority = _PRIORITY_PARENT
+        elif sample_id in family_set:
+            priority = _PRIORITY_FAMILY
+        else:
+            priority = _PRIORITY_COHORT
+
+        coord_key = (sug_start, sug_end)
+        if coord_key not in merged:
+            merged[coord_key] = {
+                "start": sug_start,
+                "end": sug_end,
+                "overlap_pct": overlap_pct,
+                "samples": [],
+                "priority": priority,
+            }
+        entry = merged[coord_key]
+        # Update priority to best (lowest) seen
+        entry["priority"] = min(entry["priority"], priority)
+        # Update overlap to max seen
+        entry["overlap_pct"] = max(entry["overlap_pct"], overlap_pct)
+        # Add sample if not already listed
+        if sample_id not in {s["id"] for s in entry["samples"]}:
+            entry["samples"].append({"id": sample_id, "priority": priority})
+
+    # Sort: by priority (parent < family < cohort), then overlap % desc
+    suggestions = sorted(
+        merged.values(), key=lambda s: (s["priority"], -s["overlap_pct"])
+    )
+    return suggestions[:max_suggestions]
 
 
 def show_sv_dialog(
@@ -73,6 +189,7 @@ def show_sv_dialog(
 
     validation_file = store.data_dir / "validations" / "svs.tsv"
     validation_map = load_validation_map(validation_file, family_id)
+    all_validation_map = load_validation_map(validation_file, family_id=None)
 
     # Determine SV type for variant key
     sv_type = infer_sv_type(sv_data)
@@ -877,6 +994,71 @@ def show_sv_dialog(
                         )
 
                 return tracks
+
+            # Suggested coordinates from overlapping validated SVs
+            suggestions = _build_sv_suggestions(
+                all_validation_map=all_validation_map,
+                chrom=chrom,
+                start_pos=start_pos,
+                end_pos=end_pos,
+                current_sample=sample,
+                sample_parents=sample_parents,
+                family_members=family_members,
+            )
+
+            if suggestions:
+                _PRIORITY_COLORS = {
+                    _PRIORITY_PARENT: "green",
+                    _PRIORITY_FAMILY: "blue",
+                    _PRIORITY_COHORT: "grey",
+                }
+                _PRIORITY_LABELS = {
+                    _PRIORITY_PARENT: "parent",
+                    _PRIORITY_FAMILY: "family",
+                    _PRIORITY_COHORT: "cohort",
+                }
+
+                with ui.row().classes("w-full mt-4 items-center gap-2 flex-wrap"):
+                    ui.icon("lightbulb", color="amber").classes("text-lg")
+                    ui.label("Suggested Coordinates").classes(
+                        "text-sm font-semibold text-gray-600"
+                    )
+                    for sug in suggestions:
+                        sample_labels = []
+                        for s in sorted(sug["samples"], key=lambda x: x["priority"]):
+                            sample_labels.append(s["id"])
+                        samples_text = ", ".join(sample_labels)
+                        pct = sug["overlap_pct"]
+                        label = (
+                            f"{chrom}:{sug['start']}-{sug['end']}  ({pct:.0f}% overlap)"
+                        )
+                        tooltip_text = (
+                            f"{samples_text} [{_PRIORITY_LABELS[sug['priority']]}]"
+                        )
+                        color = _PRIORITY_COLORS[sug["priority"]]
+
+                        def make_apply(s):
+                            def on_click():
+                                curated_inputs["start"].value = str(s["start"])
+                                curated_inputs["end"].value = str(s["end"])
+                                roi_coords["start"] = s["start"]
+                                roi_coords["end"] = s["end"]
+                                _update_roi()
+                                ui.notify(
+                                    f"Curated position set to"
+                                    f" {chrom}:{s['start']}-{s['end']}",
+                                    type="positive",
+                                )
+
+                            return on_click
+
+                        ui.button(
+                            label,
+                            on_click=make_apply(sug),
+                            icon="content_paste",
+                        ).props(f"dense outline color={color} size=sm no-caps").tooltip(
+                            tooltip_text
+                        )
 
             # IGV.js viewer container for bedgraph (CNV view)
             cnv_expansion = (

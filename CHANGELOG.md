@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-03-23
+
+### Added
+- **SV coordinate suggestions** — panel between SV Details and CNV Coverage View suggesting curated coordinates from overlapping validated SVs; prioritizes parents, then family, then cohort; click to auto-fill curated position fields and update ROI
+
 ## [0.6.3] - 2026-03-23
 
 ### Fixed
