@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] - 2026-03-24
+
+### Fixed
+- **IGV.js v3 ROI display** — ROI regions were not rendering because `loadROI()` became async in v3. Moved ROI loading from `createBrowser` config to explicit `await browser.loadROI()` calls after browser creation. Also wrapped dynamic `_update_roi()` in an async IIFE.
+
 ## [0.6.6] - 2026-03-24
 
 ### Added
