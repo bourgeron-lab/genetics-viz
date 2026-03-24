@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] - 2026-03-24
+
+### Added
+- **CRAM split view re-centering** — when ROI is updated (via suggestion click, curated position refresh, or New Start/End buttons), the Read-Level Split View automatically re-centers both panes on the new boundary positions (±1500bp windows)
+
 ## [0.6.8] - 2026-03-24
 
 ### Fixed

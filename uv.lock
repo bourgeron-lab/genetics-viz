@@ -312,7 +312,7 @@ wheels = [
 
 [[package]]
 name = "genetics-viz"
-version = "0.6.8"
+version = "0.6.9"
 source = { editable = "." }
 dependencies = [
     { name = "nicegui" },

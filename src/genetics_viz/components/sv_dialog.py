@@ -1423,6 +1423,13 @@ def show_sv_dialog(
                     if (window.igvCramBrowser) {{
                         window.igvCramBrowser.clearROIs();
                         window.igvCramBrowser.loadROI(roiConfig);
+                        // Re-center split panes on new boundaries
+                        const s = {roi_coords["start"]};
+                        const e = {roi_coords["end"]};
+                        const splitLocus =
+                            "{chrom}:" + Math.max(0, s - 1500) + "-" + (s + 1500) +
+                            " {chrom}:" + Math.max(0, e - 1500) + "-" + (e + 1500);
+                        window.igvCramBrowser.search(splitLocus);
                     }}
                     """
                     ui.run_javascript(update_roi_script)
