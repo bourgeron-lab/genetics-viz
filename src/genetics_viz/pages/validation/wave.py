@@ -74,7 +74,7 @@ def wave_validation_page(sample_id: str) -> None:
 
                 # Add IGV.js library
                 ui.add_head_html("""
-                    <script src="https://cdn.jsdelivr.net/npm/igv@3.8.0/dist/igv.min.js"></script>
+                    <script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>
                 """)
 
                 browser_var = f"igvBrowser_{igv_id.replace('-', '_')}"

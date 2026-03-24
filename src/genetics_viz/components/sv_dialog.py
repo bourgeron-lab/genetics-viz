@@ -1140,14 +1140,7 @@ def show_sv_dialog(
                             igv.removeBrowser(window.igvBrowser);
                         }}
 
-                        const options = {{
-                            genome: "hg38",
-                            locus: "{igv_locus}",
-                            tracks: {json.dumps(tracks)},
-                        }};
-
-                        window.igvBrowser = await igv.createBrowser(igvDiv, options);
-                        await window.igvBrowser.loadROI([
+                        const roiConfig = [
                             {{
                                 name: "{roi_description}",
                                 color: "{roi_color}",
@@ -1160,7 +1153,15 @@ def show_sv_dialog(
                                     }}
                                 ]
                             }}
-                        ]);
+                        ];
+                        const options = {{
+                            genome: "hg38",
+                            locus: "{igv_locus}",
+                            tracks: {json.dumps(tracks)},
+                            roi: roiConfig,
+                        }};
+
+                        window.igvBrowser = await igv.createBrowser(igvDiv, options);
 
                         // Trigger resize to ensure proper width
                         setTimeout(() => {{
@@ -1344,15 +1345,7 @@ def show_sv_dialog(
                             igv.removeBrowser(window.igvCramBrowser);
                         }}
 
-                        const options = {{
-                            genome: "hg38",
-                            locus: "{split_locus}",
-                            showCenterGuide: true,
-                            tracks: {json.dumps(cram_tracks)},
-                        }};
-
-                        window.igvCramBrowser = await igv.createBrowser(igvDiv, options);
-                        await window.igvCramBrowser.loadROI([
+                        const roiConfig = [
                             {{
                                 name: "{roi_description}",
                                 color: "{roi_color}",
@@ -1365,7 +1358,16 @@ def show_sv_dialog(
                                     }}
                                 ]
                             }}
-                        ]);
+                        ];
+                        const options = {{
+                            genome: "hg38",
+                            locus: "{split_locus}",
+                            showCenterGuide: true,
+                            tracks: {json.dumps(cram_tracks)},
+                            roi: roiConfig,
+                        }};
+
+                        window.igvCramBrowser = await igv.createBrowser(igvDiv, options);
 
                         // Trigger resize to ensure proper width
                         setTimeout(() => {{
@@ -1400,30 +1402,28 @@ def show_sv_dialog(
                     )
                     roi_description = f"{chrom}:{roi_coords['start']}-{roi_coords['end']} - {call_value}"
                     update_roi_script = f"""
-                    (async function() {{
-                        const roiConfig = [
-                            {{
-                                name: "{roi_description}",
-                                color: "{roi_color}",
-                                features: [
-                                    {{
-                                        chr: "{chrom}",
-                                        start: {roi_coords["start"]},
-                                        end: {roi_coords["end"]},
-                                        name: "{call_value}"
-                                    }}
-                                ]
-                            }}
-                        ];
-                        if (window.igvBrowser) {{
-                            window.igvBrowser.clearROIs();
-                            await window.igvBrowser.loadROI(roiConfig);
+                    const roiConfig = [
+                        {{
+                            name: "{roi_description}",
+                            color: "{roi_color}",
+                            features: [
+                                {{
+                                    chr: "{chrom}",
+                                    start: {roi_coords["start"]},
+                                    end: {roi_coords["end"]},
+                                    name: "{call_value}"
+                                }}
+                            ]
                         }}
-                        if (window.igvCramBrowser) {{
-                            window.igvCramBrowser.clearROIs();
-                            await window.igvCramBrowser.loadROI(roiConfig);
-                        }}
-                    }})();
+                    ];
+                    if (window.igvBrowser) {{
+                        window.igvBrowser.clearROIs();
+                        window.igvBrowser.loadROI(roiConfig);
+                    }}
+                    if (window.igvCramBrowser) {{
+                        window.igvCramBrowser.clearROIs();
+                        window.igvCramBrowser.loadROI(roiConfig);
+                    }}
                     """
                     ui.run_javascript(update_roi_script)
 
