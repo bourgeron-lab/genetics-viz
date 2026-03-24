@@ -77,7 +77,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
     # Add IGV.js library at page level
     ui.add_head_html("""
-        <script src="https://cdn.jsdelivr.net/npm/igv@2.15.11/dist/igv.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/igv@3.8.0/dist/igv.min.js"></script>
     """)
 
     try:

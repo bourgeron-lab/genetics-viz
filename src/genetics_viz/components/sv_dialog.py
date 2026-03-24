@@ -54,11 +54,9 @@ def _build_sv_suggestions(
     the current SV.  Returns suggestions sorted by priority (parents first,
     then family, then cohort) and overlap percentage.
     """
-    parent_ids = {
-        pid
-        for pid in (sample_parents.get("father"), sample_parents.get("mother"))
-        if pid and pid not in ("", "0", "-9", "-")
-    }
+    _missing = {"", "0", "-9", "-", None}
+    father_id = sample_parents.get("father")
+    mother_id = sample_parents.get("mother")
     family_set = set(family_members)
     current_length = end_pos - start_pos
 
@@ -106,41 +104,65 @@ def _build_sv_suggestions(
         sug_length = sug_end - sug_start
         if sug_length <= 0:
             continue
-        overlap_pct = overlap_length / min(current_length, sug_length) * 100
+        # Overlap as % of current SV and as % of suggested SV
+        overlap_pct_current = overlap_length / current_length * 100
+        overlap_pct_suggested = overlap_length / sug_length * 100
 
         # Skip exact same coordinates as current SV (not useful)
         if sug_start == start_pos and sug_end == end_pos:
             continue
 
-        # Classify sample priority
-        if sample_id in parent_ids:
+        # Classify sample priority and relationship
+        if sample_id == father_id and father_id not in _missing:
             priority = _PRIORITY_PARENT
+            relationship = "father"
+        elif sample_id == mother_id and mother_id not in _missing:
+            priority = _PRIORITY_PARENT
+            relationship = "mother"
         elif sample_id in family_set:
             priority = _PRIORITY_FAMILY
+            relationship = "family"
         else:
             priority = _PRIORITY_COHORT
+            relationship = "cohort"
 
         coord_key = (sug_start, sug_end)
         if coord_key not in merged:
             merged[coord_key] = {
                 "start": sug_start,
                 "end": sug_end,
-                "overlap_pct": overlap_pct,
+                "overlap_pct_current": overlap_pct_current,
+                "overlap_pct_suggested": overlap_pct_suggested,
                 "samples": [],
                 "priority": priority,
+                "inheritance": "unknown",
             }
         entry = merged[coord_key]
         # Update priority to best (lowest) seen
         entry["priority"] = min(entry["priority"], priority)
         # Update overlap to max seen
-        entry["overlap_pct"] = max(entry["overlap_pct"], overlap_pct)
+        entry["overlap_pct_current"] = max(
+            entry["overlap_pct_current"], overlap_pct_current
+        )
+        entry["overlap_pct_suggested"] = max(
+            entry["overlap_pct_suggested"], overlap_pct_suggested
+        )
+        # Set inheritance from parent relationship
+        if relationship == "father" and entry["inheritance"] == "unknown":
+            entry["inheritance"] = "paternal"
+        elif relationship == "mother" and entry["inheritance"] == "unknown":
+            entry["inheritance"] = "maternal"
         # Add sample if not already listed
         if sample_id not in {s["id"] for s in entry["samples"]}:
             entry["samples"].append({"id": sample_id, "priority": priority})
 
     # Sort: by priority (parent < family < cohort), then overlap % desc
     suggestions = sorted(
-        merged.values(), key=lambda s: (s["priority"], -s["overlap_pct"])
+        merged.values(),
+        key=lambda s: (
+            s["priority"],
+            -min(s["overlap_pct_current"], s["overlap_pct_suggested"]),
+        ),
     )
     return suggestions[:max_suggestions]
 
@@ -1028,9 +1050,11 @@ def show_sv_dialog(
                         for s in sorted(sug["samples"], key=lambda x: x["priority"]):
                             sample_labels.append(s["id"])
                         samples_text = ", ".join(sample_labels)
-                        pct = sug["overlap_pct"]
+                        pct_cur = sug["overlap_pct_current"]
+                        pct_sug = sug["overlap_pct_suggested"]
                         label = (
-                            f"{chrom}:{sug['start']}-{sug['end']}  ({pct:.0f}% overlap)"
+                            f"{chrom}:{sug['start']}-{sug['end']}"
+                            f"  ({pct_cur:.0f}% ours | {pct_sug:.0f}% theirs)"
                         )
                         tooltip_text = (
                             f"{samples_text} [{_PRIORITY_LABELS[sug['priority']]}]"
@@ -1044,6 +1068,13 @@ def show_sv_dialog(
                                 roi_coords["start"] = s["start"]
                                 roi_coords["end"] = s["end"]
                                 _update_roi()
+                                # Preselect inheritance from parent relationship
+                                inh = s.get("inheritance", "unknown")
+                                if (
+                                    inh != "unknown"
+                                    and inheritance_ref["select"] is not None
+                                ):
+                                    inheritance_ref["select"].value = inh
                                 ui.notify(
                                     f"Curated position set to"
                                     f" {chrom}:{s['start']}-{s['end']}",
@@ -1351,6 +1382,8 @@ def show_sv_dialog(
 
                 # Store references to curated input fields (will be set later)
                 curated_inputs = {"start": None, "end": None}
+                # Forward reference to inheritance dropdown (will be set later)
+                inheritance_ref = {"select": None}
 
                 # Store current ROI coordinates - use curated boundaries if available
                 roi_start = int(curated_start) if curated_start else int(start)
@@ -1533,6 +1566,7 @@ def show_sv_dialog(
                             .props("outlined dense")
                             .classes("w-40")
                         )
+                        inheritance_ref["select"] = inheritance_select
 
                         ui.label("Validation:").classes("font-semibold ml-4")
                         validation_select = (
