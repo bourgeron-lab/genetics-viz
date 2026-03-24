@@ -20,7 +20,7 @@ from genetics_viz.utils.vep import (
     format_consequence_display,
     get_highest_consequence_term,
 )
-from genetics_viz.utils.wisecondorx import WISECONDORX_CONFIG
+from genetics_viz.utils.wisecondorx import WISECONDORX_CONFIG, infer_sv_type
 
 _SV_VARIANT_PATTERN = re.compile(r"^chr[^:]+:\d+-\d+$")
 
@@ -106,14 +106,9 @@ def show_stats_dialog(rows: List[Dict[str, Any]]) -> None:
             r["_sv_chrom"] = ""
             r["_sv_start_mb"] = 0
             r["_sv_end_mb"] = 0
-        # Classify gain/loss
-        wcx = str(r.get("wisecondorX", r.get("call", ""))).upper()
-        if "GAIN" in wcx:
-            r["_sv_call"] = "GAIN"
-        elif "LOSS" in wcx:
-            r["_sv_call"] = "LOSS"
-        else:
-            r["_sv_call"] = "Unknown"
+        # Classify gain/loss using shared inference logic
+        sv_type = infer_sv_type(r)
+        r["_sv_call"] = "GAIN" if sv_type == "dup" else "LOSS"
 
     chrom_order = CHROM_ORDER
     chrom_sizes_mb = CHROM_SIZES_MB
