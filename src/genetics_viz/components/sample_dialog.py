@@ -10,12 +10,11 @@ from genetics_viz.utils.sharding import get_sample_url
 
 
 def show_sample_dialog(sample_id: str) -> None:
-    """Open a fullscreen dialog to visualize a sample's bedgraph and CRAM data."""
-    # Ensure IGV.js is loaded at page level (must be before dialog opens)
-    ui.add_head_html(
-        '<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
-    )
+    """Open a fullscreen dialog to visualize a sample's bedgraph and CRAM data.
 
+    Note: The calling page must load IGV.js via ui.add_head_html() at page
+    construction time. Loading it inside a click handler is too late.
+    """
     store = get_data_store()
     avail = check_sample_availability(store.data_dir, sample_id)
 

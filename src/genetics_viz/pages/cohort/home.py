@@ -23,6 +23,11 @@ async def home_page() -> None:
         return redirect
     create_header()
 
+    # Pre-load IGV.js for sample visualization dialog
+    ui.add_head_html(
+        '<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
+    )
+
     with ui.column().classes("w-full max-w-6xl mx-auto p-6"):
         ui.label("Welcome to Genetics-Viz").classes(
             "text-3xl font-bold mb-2 text-blue-900"
