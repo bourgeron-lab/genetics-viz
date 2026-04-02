@@ -138,14 +138,18 @@ def show_sample_dialog(sample_id: str) -> None:
 
                 ui.run_javascript(
                     f"""
-                    (async function() {{
-                        const igvDiv = document.getElementById("sample-igv-div");
+                    setTimeout(function() {{
+                        var igvDiv = document.getElementById("sample-igv-div");
                         if (igvDiv && typeof igv !== 'undefined') {{
-                            window.sampleBrowser = await igv.createBrowser(
-                                igvDiv, {json.dumps(igv_config)}
-                            );
+                            igv.createBrowser(igvDiv, {json.dumps(igv_config)})
+                                .then(function(browser) {{
+                                    window.sampleBrowser = browser;
+                                }})
+                                .catch(function(error) {{
+                                    console.error("Error creating IGV browser:", error);
+                                }});
                         }}
-                    }})();
+                    }}, 500);
                     """
                 )
 
