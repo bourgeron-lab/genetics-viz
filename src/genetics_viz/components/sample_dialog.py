@@ -11,6 +11,11 @@ from genetics_viz.utils.sharding import get_sample_url
 
 def show_sample_dialog(sample_id: str) -> None:
     """Open a fullscreen dialog to visualize a sample's bedgraph and CRAM data."""
+    # Ensure IGV.js is loaded at page level (must be before dialog opens)
+    ui.add_head_html(
+        '<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
+    )
+
     store = get_data_store()
     avail = check_sample_availability(store.data_dir, sample_id)
 
@@ -67,10 +72,6 @@ def show_sample_dialog(sample_id: str) -> None:
                 locus_input.on("keydown.enter", navigate_to_locus)
 
             # IGV container
-            ui.add_head_html(
-                '<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
-            )
-
             (
                 ui.element("div")
                 .props('id="sample-igv-div"')
@@ -138,7 +139,7 @@ def show_sample_dialog(sample_id: str) -> None:
 
                 ui.run_javascript(
                     f"""
-                    setTimeout(function() {{
+                    (function waitForIgv() {{
                         var igvDiv = document.getElementById("sample-igv-div");
                         if (igvDiv && typeof igv !== 'undefined') {{
                             igv.createBrowser(igvDiv, {json.dumps(igv_config)})
@@ -148,8 +149,10 @@ def show_sample_dialog(sample_id: str) -> None:
                                 .catch(function(error) {{
                                     console.error("Error creating IGV browser:", error);
                                 }});
+                        }} else {{
+                            setTimeout(waitForIgv, 200);
                         }}
-                    }}, 500);
+                    }})();
                     """
                 )
 
