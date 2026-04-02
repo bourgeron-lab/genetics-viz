@@ -176,6 +176,8 @@ def show_sv_dialog(
     sample: str,
     sv_data: Dict[str, Any],
     on_validation_saved: Optional[callable] = None,
+    family_members_override: Optional[List[str]] = None,
+    sample_parents_override: Optional[Dict[str, Optional[str]]] = None,
 ) -> None:
     """Show SV visualization dialog with IGV viewer.
 
@@ -188,6 +190,8 @@ def show_sv_dialog(
         sample: Sample ID
         sv_data: Additional SV data to display
         on_validation_saved: Optional callback to invoke after validation is saved
+        family_members_override: Optional pre-computed family member IDs (for standalone pages)
+        sample_parents_override: Optional pre-computed parent IDs (for standalone pages)
     """
     store = get_data_store()
 
@@ -284,23 +288,28 @@ def show_sv_dialog(
                     "flat round"
                 )
 
-            # Get family members
-            cohort = store.get_cohort(cohort_name)
-            family_members: List[str] = []
-            sample_parents: Dict[str, Optional[str]] = {
-                "father": None,
-                "mother": None,
-            }
+            # Get family members (use overrides if provided, else query cohort)
+            if family_members_override is not None:
+                family_members = family_members_override
+            else:
+                family_members = []
+            if sample_parents_override is not None:
+                sample_parents = sample_parents_override
+            else:
+                sample_parents = {"father": None, "mother": None}
 
-            if cohort:
-                members_data = cohort.get_family_members(family_id)
-                family_members = [m["Sample ID"] for m in members_data]
-                # Find current sample's parents
-                for member in members_data:
-                    if member["Sample ID"] == sample:
-                        sample_parents["father"] = member.get("Father")
-                        sample_parents["mother"] = member.get("Mother")
-                        break
+            if family_members_override is None or sample_parents_override is None:
+                cohort = store.get_cohort(cohort_name)
+                if cohort:
+                    members_data = cohort.get_family_members(family_id)
+                    if family_members_override is None:
+                        family_members = [m["Sample ID"] for m in members_data]
+                    if sample_parents_override is None:
+                        for member in members_data:
+                            if member["Sample ID"] == sample:
+                                sample_parents["father"] = member.get("Father")
+                                sample_parents["mother"] = member.get("Mother")
+                                break
 
             # Track additional samples
             additional_samples: Dict[str, List[str]] = {"value": []}
