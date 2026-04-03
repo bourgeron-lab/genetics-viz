@@ -2,6 +2,7 @@
 
 from nicegui import app, ui
 
+from genetics_viz import __version__
 from genetics_viz.utils.auth import get_current_user, is_admin
 from genetics_viz.utils.data import get_data_dir_options, get_data_store
 
@@ -15,7 +16,11 @@ def create_header(cohort_name: str | None = None) -> None:
     """
     with ui.header().classes("bg-blue-700 text-white items-center justify-between"):
         with ui.row().classes("items-center gap-4"):
-            ui.label("🧬 Genetics-Viz").classes("text-xl font-bold")
+            with ui.column().classes("gap-0"):
+                ui.label("🧬 Genetics-Viz").classes("text-xl font-bold leading-tight")
+                ui.label(f"v{__version__}").classes(
+                    "text-xs text-blue-200 leading-tight"
+                )
 
             with ui.row().classes("gap-2 items-center"):
                 # Home button (always visible)

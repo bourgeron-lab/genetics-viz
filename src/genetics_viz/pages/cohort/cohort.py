@@ -1,5 +1,7 @@
 """Cohort detail page - displays pedigree members with filters."""
 
+import csv
+from collections import defaultdict
 from typing import Any, Dict, List
 
 from nicegui import ui
@@ -9,6 +11,9 @@ from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.pages.cohort.components.stats_panel import render_stats_panel
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
+
+# Diagnostic priority: higher value wins
+_DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
 
 
 @ui.page("/cohort/{cohort_name}")
@@ -30,6 +35,25 @@ def cohort_page(cohort_name: str) -> None:
                 ui.button("← Back to Home", on_click=lambda: ui.navigate.to("/"))
             return
 
+        # Load diagnostics per sample (highest priority wins)
+        sample_diag: Dict[str, str] = defaultdict(str)
+        for fname in ["snvs.tsv", "svs.tsv"]:
+            diag_file = store.data_dir / "diagnostics" / fname
+            if not diag_file.exists():
+                continue
+            with open(diag_file, "r") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    if row.get("Ignore", "0") == "1":
+                        continue
+                    sid = row.get("Sample", "")
+                    diag = row.get("Diagnostic", "")
+                    if not sid or not diag:
+                        continue
+                    current = sample_diag[sid]
+                    if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
+                        sample_diag[sid] = diag
+
         # Build flat list of all individuals from pedigree
         all_individuals: List[Dict[str, Any]] = []
         for family in cohort.families.values():
@@ -42,18 +66,28 @@ def cohort_page(cohort_name: str) -> None:
                         "Phenotype": sample.phenotype or "-",
                         "Father": sample.father_id or "-",
                         "Mother": sample.mother_id or "-",
+                        "Diagnostic": sample_diag.get(sample.sample_id, ""),
+                        "_diag_color": {
+                            "pathogenic": "#dc2626",
+                            "uncertain": "#f59e0b",
+                            "benign": "#16a34a",
+                            "conflicting": "#f59e0b",
+                        }.get(sample_diag.get(sample.sample_id, ""), ""),
                     }
                 )
 
-        # Collect unique phenotype values for multiselect options
+        # Collect unique values for multiselect filters
         phenotype_values = sorted(
             {ind["Phenotype"] for ind in all_individuals if ind["Phenotype"] != "-"}
         )
-
-        # Sex options for multiselect filter
         sex_values = sorted(
             {ind["Sex"] for ind in all_individuals if ind["Sex"] != "-"}
         )
+        # Diagnostic filter: include actual values + "NA" for undiagnosed
+        diag_values_raw = sorted(
+            {ind["Diagnostic"] for ind in all_individuals if ind["Diagnostic"]}
+        )
+        diag_filter_options = diag_values_raw + ["NA"]
 
         with ui.column().classes("w-full px-6 py-6"):
             # Cohort header
@@ -117,6 +151,19 @@ def cohort_page(cohort_name: str) -> None:
                             selected = set(pheno_vals)
                             filtered = [
                                 ind for ind in filtered if ind["Phenotype"] in selected
+                            ]
+
+                        # Diagnostic filter (multiselect with NA support)
+                        diag_vals = filters.get("Diagnostic") or []
+                        if diag_vals:
+                            selected_diag = set(diag_vals)
+                            has_na = "NA" in selected_diag
+                            actual_diag = selected_diag - {"NA"}
+                            filtered = [
+                                ind
+                                for ind in filtered
+                                if (ind["Diagnostic"] in actual_diag)
+                                or (has_na and not ind["Diagnostic"])
                             ]
 
                         # Has father checkbox
@@ -201,6 +248,18 @@ def cohort_page(cohort_name: str) -> None:
                                 "filter": {
                                     "type": "checkbox",
                                     "label": "Has mother",
+                                },
+                            },
+                            {
+                                "id": "Diagnostic",
+                                "header": "Diagnostic",
+                                "sortable": True,
+                                "cellType": "badge",
+                                "colorField": "_diag_color",
+                                "filter": {
+                                    "type": "multiselect",
+                                    "options": diag_filter_options,
+                                    "placeholder": "All",
                                 },
                             },
                         ],

@@ -1,11 +1,16 @@
 """Home page - displays available cohorts and quick search."""
 
 import asyncio
+import csv
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Dict
 
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.components.sample_dialog import show_sample_dialog
+from genetics_viz.models import Cohort
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.data_availability import (
@@ -14,6 +19,50 @@ from genetics_viz.utils.data_availability import (
 )
 from genetics_viz.utils.pedigree import load_family_pedigree
 from genetics_viz.utils.sharding import get_family_path, get_sample_path
+
+# Phenotype values that indicate "affected" (PED format: 2 = affected)
+_AFFECTED_VALUES = {"2", "2.0"}
+
+# Diagnostic priority for "highest" resolution
+_DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
+
+
+def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
+    """Compute affected and diagnostic counts for a cohort.
+
+    Returns dict with: affected, diagnosed, diag_pct
+    """
+    affected = 0
+    all_sample_ids = set()
+    for fam in cohort.families.values():
+        for s in fam.samples:
+            all_sample_ids.add(s.sample_id)
+            if s.phenotype in _AFFECTED_VALUES:
+                affected += 1
+
+    # Load diagnostics per sample (highest priority wins)
+    sample_diag: Dict[str, str] = defaultdict(str)
+    for fname in ["snvs.tsv", "svs.tsv"]:
+        diag_file = data_dir / "diagnostics" / fname
+        if not diag_file.exists():
+            continue
+        with open(diag_file, "r") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                if row.get("Ignore", "0") == "1":
+                    continue
+                sample = row.get("Sample", "")
+                diag = row.get("Diagnostic", "")
+                if sample not in all_sample_ids or not diag:
+                    continue
+                current = sample_diag[sample]
+                if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
+                    sample_diag[sample] = diag
+
+    diagnosed = sum(1 for d in sample_diag.values() if d == "pathogenic")
+    diag_pct = (diagnosed / affected * 100) if affected > 0 else 0
+
+    return {"affected": affected, "diagnosed": diagnosed, "diag_pct": diag_pct}
 
 
 @ui.page("/")
@@ -259,6 +308,7 @@ async def home_page() -> None:
             with ui.row().classes("w-full flex-wrap gap-4"):
                 for cohort in sorted(store.cohorts.values(), key=lambda c: c.name):
                     cohort_name = cohort.name  # Capture name for lambda
+                    stats = _compute_cohort_stats(cohort, store.data_dir)
                     with (
                         ui.card()
                         .classes(
@@ -275,20 +325,41 @@ async def home_page() -> None:
                             )
 
                         with ui.card_section():
-                            with ui.row().classes("gap-6"):
+                            with ui.row().classes("gap-4"):
                                 with ui.column().classes("items-center"):
                                     ui.label(str(cohort.num_families)).classes(
-                                        "text-3xl font-bold text-blue-600"
+                                        "text-2xl font-bold text-blue-600"
                                     )
                                     ui.label("Families").classes(
-                                        "text-sm text-gray-500"
+                                        "text-xs text-gray-500"
                                     )
 
                                 with ui.column().classes("items-center"):
                                     ui.label(str(cohort.num_samples)).classes(
-                                        "text-3xl font-bold text-green-600"
+                                        "text-2xl font-bold text-green-600"
                                     )
-                                    ui.label("Samples").classes("text-sm text-gray-500")
+                                    ui.label("Samples").classes("text-xs text-gray-500")
+
+                                with ui.column().classes("items-center"):
+                                    ui.label(str(stats["affected"])).classes(
+                                        "text-2xl font-bold text-orange-600"
+                                    )
+                                    ui.label("Affected").classes(
+                                        "text-xs text-gray-500"
+                                    )
+
+                                with ui.column().classes("items-center"):
+                                    ui.label(str(stats["diagnosed"])).classes(
+                                        "text-2xl font-bold text-red-600"
+                                    )
+                                    pct_text = (
+                                        f"{stats['diag_pct']:.0f}%"
+                                        if stats["affected"] > 0
+                                        else "-"
+                                    )
+                                    ui.label(f"Diagnosed ({pct_text})").classes(
+                                        "text-xs text-gray-500"
+                                    )
 
                         with ui.card_section().classes("bg-gray-50"):
                             ui.label(f"📄 {cohort.pedigree_file.name}").classes(

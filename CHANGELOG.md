@@ -5,6 +5,13 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-04-03
+
+### Added
+- **Version number in header** — displays version below the app name in the header bar
+- **Cohort card statistics** — home page cohort cards now show affected count, pathogenic diagnostic count, and diagnostic yield percentage alongside families and samples
+- **Diagnostic column in cohort table** — new Diagnostic column with colored badges (pathogenic/uncertain/benign) and multiselect filter (including NA for undiagnosed) on the cohort detail page
+
 ## [0.7.0] - 2026-04-03
 
 ### Added
