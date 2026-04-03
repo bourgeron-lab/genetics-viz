@@ -57,11 +57,14 @@ def _is_sharded(base_dir: Path, entity_type: str) -> bool:
 def get_entity_path(data_dir: Path, entity_type: str, entity_id: str) -> Path:
     """Return the full filesystem path for an entity (sample or family).
 
-    Automatically detects sharded vs flat layout.
+    Uses a try-sharded-first strategy: checks the sharded path first,
+    falls back to flat. This handles hybrid directories where both
+    shard buckets and direct entity folders coexist.
     """
-    if _is_sharded(data_dir, entity_type):
-        shard1, shard2 = compute_shard_prefix(entity_id)
-        return data_dir / entity_type / shard1 / shard2 / entity_id
+    shard1, shard2 = compute_shard_prefix(entity_id)
+    sharded_path = data_dir / entity_type / shard1 / shard2 / entity_id
+    if sharded_path.is_dir():
+        return sharded_path
     return data_dir / entity_type / entity_id
 
 
@@ -69,9 +72,11 @@ def get_entity_url_segment(data_dir: Path, entity_type: str, entity_id: str) -> 
     """Return the relative URL path segment for an entity.
 
     E.g. 'samples/J/Z/C000EZJ' (sharded) or 'samples/C000EZJ' (flat).
+    Mirrors get_entity_path logic: tries sharded first, falls back to flat.
     """
-    if _is_sharded(data_dir, entity_type):
-        shard1, shard2 = compute_shard_prefix(entity_id)
+    shard1, shard2 = compute_shard_prefix(entity_id)
+    sharded_path = data_dir / entity_type / shard1 / shard2 / entity_id
+    if sharded_path.is_dir():
         return f"{entity_type}/{shard1}/{shard2}/{entity_id}"
     return f"{entity_type}/{entity_id}"
 
