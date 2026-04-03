@@ -5,6 +5,19 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-04-03
+
+### Added
+- **Quick Search on home page** — search samples by barcode or families by FID with async O(1) sharded filesystem lookup; results show data availability badges and action buttons
+- **Sample visualization dialog** — fullscreen IGV.js viewer with bedgraph (CNV), CRAM (alignments), and VAF tracks for any sample, with locus navigation input
+- **Standalone family page** (`/family/{fid}`) — browse family data independently of any cohort/project, with data availability panel, member table, diagnostics, and analysis tabs (Wombat, SVs)
+- **Standalone pedigree parser** (`utils/pedigree.py`) — parses per-family pedigree files with extended column name support (FatherBarcode, MotherBarcode, Pheno_*)
+- **Data availability checker** (`utils/data_availability.py`) — checks existence of data files for samples and families
+
+### Changed
+- `show_sv_dialog()` and `show_variant_dialog()` accept optional `family_members_override` and `sample_parents_override` parameters for standalone pages without cohort context (backward compatible)
+- **Sharding detection** — replaced "all children must be single-char" heuristic with try-sharded-first strategy to support hybrid directories with both shard buckets and direct entity folders
+
 ## [0.6.9] - 2026-03-24
 
 ### Added
