@@ -59,10 +59,16 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
                 if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
                     sample_diag[sample] = diag
 
-    diagnosed = sum(1 for d in sample_diag.values() if d == "pathogenic")
-    diag_pct = (diagnosed / affected * 100) if affected > 0 else 0
+    pathogenic = sum(1 for d in sample_diag.values() if d == "pathogenic")
+    uncertain_only = sum(1 for d in sample_diag.values() if d == "uncertain")
+    diag_pct = (pathogenic / affected * 100) if affected > 0 else 0
 
-    return {"affected": affected, "diagnosed": diagnosed, "diag_pct": diag_pct}
+    return {
+        "affected": affected,
+        "pathogenic": pathogenic,
+        "uncertain_only": uncertain_only,
+        "diag_pct": diag_pct,
+    }
 
 
 @ui.page("/")
@@ -349,15 +355,20 @@ async def home_page() -> None:
                                     )
 
                                 with ui.column().classes("items-center"):
-                                    ui.label(str(stats["diagnosed"])).classes(
-                                        "text-2xl font-bold text-red-600"
-                                    )
                                     pct_text = (
                                         f"{stats['diag_pct']:.0f}%"
                                         if stats["affected"] > 0
                                         else "-"
                                     )
-                                    ui.label(f"Diagnosed ({pct_text})").classes(
+                                    with ui.row().classes("items-baseline gap-1"):
+                                        ui.label(str(stats["pathogenic"])).classes(
+                                            "text-2xl font-bold text-red-600"
+                                        )
+                                        ui.label("/").classes("text-sm text-gray-400")
+                                        ui.label(str(stats["uncertain_only"])).classes(
+                                            "text-2xl font-bold text-amber-500"
+                                        )
+                                    ui.label(f"Pat / Unc ({pct_text})").classes(
                                         "text-xs text-gray-500"
                                     )
 
