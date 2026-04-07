@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-04-07
+
+### Added
+- **Family navigation arrows** — prev/next arrow buttons on the cohort family page header to navigate between families in the current project. Hidden for single-family cohorts; previous hidden on first family, next hidden on last.
+
 ## [0.7.2] - 2026-04-07
 
 ### Added

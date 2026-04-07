@@ -123,13 +123,39 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 ui.label("/").classes("text-gray-400")
                 ui.label(family_id).classes("font-semibold")
 
-            # Family header
+            # Family header with prev/next navigation
+            sorted_fids = sorted(cohort.families.keys())
+            current_idx = (
+                sorted_fids.index(family_id) if family_id in sorted_fids else -1
+            )
+
             with ui.row().classes("items-center gap-4 mb-6"):
                 ui.label(f"👨‍👩‍👧‍👦 Family: {family_id}").classes(
                     "text-3xl font-bold text-blue-900"
                 )
                 ui.badge(f"{family.num_samples} members").props("color=blue")
                 ui.badge(f"{family.num_founders} founders").props("color=teal")
+
+                if len(sorted_fids) > 1 and current_idx >= 0:
+                    ui.space()
+                    if current_idx > 0:
+                        prev_fid = sorted_fids[current_idx - 1]
+                        ui.button(
+                            icon="arrow_back",
+                            on_click=lambda _, f=prev_fid: ui.navigate.to(
+                                f"/cohort/{cohort_name}/family/{f}"
+                            ),
+                        ).props("flat round color=blue").tooltip(
+                            f"Previous: {prev_fid}"
+                        )
+                    if current_idx < len(sorted_fids) - 1:
+                        next_fid = sorted_fids[current_idx + 1]
+                        ui.button(
+                            icon="arrow_forward",
+                            on_click=lambda _, f=next_fid: ui.navigate.to(
+                                f"/cohort/{cohort_name}/family/{f}"
+                            ),
+                        ).props("flat round color=blue").tooltip(f"Next: {next_fid}")
 
             members_data = cohort.get_family_members(family_id)
 
