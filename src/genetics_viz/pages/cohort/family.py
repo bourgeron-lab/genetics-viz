@@ -1,5 +1,6 @@
 """Family detail page - displays family members and analysis tabs."""
 
+from datetime import datetime
 from typing import Dict, List
 
 from nicegui import ui
@@ -9,8 +10,14 @@ from genetics_viz.components.diagnostic_loader import (
     load_family_diagnostics,
 )
 from genetics_viz.components.header import create_header
+from genetics_viz.components.notes_loader import (
+    delete_note,
+    ensure_notes_file,
+    load_family_notes,
+    save_note,
+)
 from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
-from genetics_viz.utils.auth import check_auth
+from genetics_viz.utils.auth import can_write, check_auth, get_current_user
 from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
 from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
@@ -262,12 +269,125 @@ def family_page(cohort_name: str, family_id: str) -> None:
                         }}
                     """)
 
-                # ---- Diagnostics panel (right column) ----
-                with ui.card().classes("flex-1"):
-                    with ui.column().classes("p-4 gap-2"):
-                        ui.label("Diagnostics").classes(
-                            "text-lg font-semibold text-blue-700"
-                        )
+                # ---- Right column: Notes + Diagnostics ----
+                with ui.column().classes("flex-1 gap-4"):
+                    # ---- Notes panel ----
+                    with ui.card().classes("w-full"):
+                        with ui.column().classes("p-4 gap-2"):
+                            with ui.row().classes("items-center gap-2"):
+                                ui.label("Notes").classes(
+                                    "text-lg font-semibold text-blue-700"
+                                )
+                                ui.icon("info_outline", color="grey").classes(
+                                    "text-sm cursor-help"
+                                ).tooltip(
+                                    "User-provided information relative to"
+                                    " the family or some of its samples"
+                                )
+
+                            @ui.refreshable
+                            def render_notes_panel():
+                                notes_file = store.data_dir / "notes" / "notes.tsv"
+                                ensure_notes_file(notes_file)
+                                entries = load_family_notes(notes_file, family_id)
+
+                                if can_write():
+                                    with ui.row().classes("w-full items-end gap-2"):
+                                        note_input = (
+                                            ui.input(placeholder="Add a note...")
+                                            .props("outlined dense")
+                                            .classes("flex-1")
+                                        )
+                                        sample_options = {"": "Family"} | {
+                                            m["Sample ID"]: m["Sample ID"]
+                                            for m in members_data
+                                        }
+                                        sample_select = (
+                                            ui.select(sample_options, value="")
+                                            .props("outlined dense")
+                                            .classes("w-36")
+                                        )
+
+                                        def add_note():
+                                            msg = (
+                                                note_input.value.strip()
+                                                if note_input.value
+                                                else ""
+                                            )
+                                            if not msg:
+                                                return
+                                            save_note(
+                                                notes_file,
+                                                family_id,
+                                                sample_select.value or "",
+                                                msg,
+                                                get_current_user(),
+                                                datetime.now().isoformat(),
+                                            )
+                                            render_notes_panel.refresh()
+
+                                        ui.button(icon="add", on_click=add_note).props(
+                                            "flat dense color=blue"
+                                        )
+
+                                if not entries:
+                                    ui.label("No notes").classes(
+                                        "text-gray-400 text-sm italic"
+                                    )
+                                else:
+                                    for entry in entries:
+                                        with ui.row().classes(
+                                            "items-center gap-2 w-full px-2"
+                                            " py-1 border-b border-gray-100"
+                                        ):
+                                            ui.label(entry.get("Message", "")).classes(
+                                                "text-sm flex-1"
+                                            )
+                                            sample_val = entry.get("Sample", "")
+                                            if sample_val:
+                                                ui.badge(sample_val).props(
+                                                    "color=blue outline"
+                                                ).classes("text-xs")
+                                            ui.label(entry.get("User", "")).classes(
+                                                "text-xs text-gray-400"
+                                            )
+                                            ts = entry.get("Timestamp", "")
+                                            if ts:
+                                                short_ts = ts[:16].replace("T", " ")
+                                                ui.label(short_ts).classes(
+                                                    "text-xs text-gray-400"
+                                                )
+                                            if can_write():
+
+                                                def make_del(e_ts, e_user):
+                                                    def handler():
+                                                        delete_note(
+                                                            notes_file,
+                                                            family_id,
+                                                            e_ts,
+                                                            e_user,
+                                                        )
+                                                        render_notes_panel.refresh()
+
+                                                    return handler
+
+                                                ui.button(
+                                                    icon="close",
+                                                    on_click=make_del(
+                                                        ts,
+                                                        entry.get("User", ""),
+                                                    ),
+                                                ).props("flat dense size=xs color=red")
+
+                            render_notes_panel()
+                            data_table_refreshers.append(render_notes_panel.refresh)
+
+                    # ---- Diagnostics panel ----
+                    with ui.card().classes("w-full"):
+                        with ui.column().classes("p-4 gap-2"):
+                            ui.label("Diagnostics").classes(
+                                "text-lg font-semibold text-blue-700"
+                            )
 
                         @ui.refreshable
                         def render_diagnostics_panel():
