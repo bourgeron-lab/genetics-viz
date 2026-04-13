@@ -20,25 +20,41 @@ from genetics_viz.utils.data_availability import (
 from genetics_viz.utils.pedigree import load_family_pedigree
 from genetics_viz.utils.sharding import get_family_path, get_sample_path
 
-# Phenotype values that indicate "affected" (PED format: 2 = affected)
-_AFFECTED_VALUES = {"2", "2.0"}
-
 # Diagnostic priority for "highest" resolution
 _DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
 
+# Display order and labels for phenotype categories
+_PHENO_ORDER = ["2", "1", "-9"]
+_PHENO_LABELS = {"2": "2 (affected)", "1": "1 (unaffected)", "-9": "-9 (unknown)"}
+
+
+def _normalize_pheno(pheno: str | None) -> str:
+    """Normalize a phenotype value to '1', '2', or '-9'.
+
+    Strips trailing .0 and maps None/empty to '-9' (unknown).
+    Any unknown value is bucketed under '-9'.
+    """
+    if pheno is None or pheno == "":
+        return "-9"
+    # Strip trailing .0 from float-stringified values
+    if pheno.endswith(".0"):
+        pheno = pheno[:-2]
+    if pheno in ("1", "2", "-9"):
+        return pheno
+    return "-9"
+
 
 def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
-    """Compute affected and diagnostic counts for a cohort.
+    """Compute per-phenotype counts and diagnostic breakdown for a cohort.
 
-    Returns dict with: affected, diagnosed, diag_pct
+    Returns dict with:
+        per_pheno: {pheno_key: {"n": int, "pathogenic": int, "uncertain": int}}
     """
-    affected = 0
-    all_sample_ids = set()
+    # Build sample_id -> normalized phenotype map
+    sample_pheno: Dict[str, str] = {}
     for fam in cohort.families.values():
         for s in fam.samples:
-            all_sample_ids.add(s.sample_id)
-            if s.phenotype in _AFFECTED_VALUES:
-                affected += 1
+            sample_pheno[s.sample_id] = _normalize_pheno(s.phenotype)
 
     # Load diagnostics per sample (highest priority wins)
     sample_diag: Dict[str, str] = defaultdict(str)
@@ -53,22 +69,26 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
                     continue
                 sample = row.get("Sample", "")
                 diag = row.get("Diagnostic", "")
-                if sample not in all_sample_ids or not diag:
+                if sample not in sample_pheno or not diag:
                     continue
                 current = sample_diag[sample]
                 if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
                     sample_diag[sample] = diag
 
-    pathogenic = sum(1 for d in sample_diag.values() if d == "pathogenic")
-    uncertain_only = sum(1 for d in sample_diag.values() if d == "uncertain")
-    diag_pct = (pathogenic / affected * 100) if affected > 0 else 0
-
-    return {
-        "affected": affected,
-        "pathogenic": pathogenic,
-        "uncertain_only": uncertain_only,
-        "diag_pct": diag_pct,
+    # Bucket by phenotype
+    per_pheno: Dict[str, Dict[str, int]] = {
+        key: {"n": 0, "pathogenic": 0, "uncertain": 0} for key in _PHENO_ORDER
     }
+    for sample_id, pheno in sample_pheno.items():
+        bucket = per_pheno[pheno]
+        bucket["n"] += 1
+        diag = sample_diag.get(sample_id, "")
+        if diag == "pathogenic":
+            bucket["pathogenic"] += 1
+        elif diag == "uncertain":
+            bucket["uncertain"] += 1
+
+    return {"per_pheno": per_pheno}
 
 
 @ui.page("/")
@@ -331,7 +351,8 @@ async def home_page() -> None:
                             )
 
                         with ui.card_section():
-                            with ui.row().classes("gap-4"):
+                            # Top-line summary: Families + Samples
+                            with ui.row().classes("gap-6 mb-3"):
                                 with ui.column().classes("items-center"):
                                     ui.label(str(cohort.num_families)).classes(
                                         "text-2xl font-bold text-blue-600"
@@ -346,31 +367,55 @@ async def home_page() -> None:
                                     )
                                     ui.label("Samples").classes("text-xs text-gray-500")
 
-                                with ui.column().classes("items-center"):
-                                    ui.label(str(stats["affected"])).classes(
-                                        "text-2xl font-bold text-orange-600"
+                            # Per-phenotype breakdown table
+                            per_pheno = stats["per_pheno"]
+                            non_empty = [
+                                p for p in _PHENO_ORDER if per_pheno[p]["n"] > 0
+                            ]
+                            if non_empty:
+                                with ui.grid(columns=4).classes(
+                                    "gap-x-3 gap-y-1 text-xs w-full"
+                                ):
+                                    # Header row
+                                    ui.label("Pheno").classes(
+                                        "text-gray-500 font-semibold"
                                     )
-                                    ui.label("Affected").classes(
-                                        "text-xs text-gray-500"
+                                    ui.label("N").classes(
+                                        "text-gray-500 font-semibold text-right"
                                     )
+                                    ui.label("Pat/Unc").classes(
+                                        "text-gray-500 font-semibold text-right"
+                                    )
+                                    ui.label("%").classes(
+                                        "text-gray-500 font-semibold text-right"
+                                    )
+                                    # Data rows
+                                    for pheno_key in non_empty:
+                                        bucket = per_pheno[pheno_key]
+                                        n = bucket["n"]
+                                        pat = bucket["pathogenic"]
+                                        unc = bucket["uncertain"]
+                                        diag_pct = (pat + unc) / n * 100 if n > 0 else 0
 
-                                with ui.column().classes("items-center"):
-                                    pct_text = (
-                                        f"{stats['diag_pct']:.0f}%"
-                                        if stats["affected"] > 0
-                                        else "-"
-                                    )
-                                    with ui.row().classes("items-baseline gap-1"):
-                                        ui.label(str(stats["pathogenic"])).classes(
-                                            "text-2xl font-bold text-red-600"
+                                        ui.label(_PHENO_LABELS[pheno_key]).classes(
+                                            "text-gray-700"
                                         )
-                                        ui.label("/").classes("text-sm text-gray-400")
-                                        ui.label(str(stats["uncertain_only"])).classes(
-                                            "text-2xl font-bold text-amber-500"
+                                        ui.label(str(n)).classes(
+                                            "text-gray-700 text-right"
                                         )
-                                    ui.label(f"Pat / Unc ({pct_text})").classes(
-                                        "text-xs text-gray-500"
-                                    )
+                                        with ui.row().classes(
+                                            "gap-0.5 justify-end items-baseline"
+                                        ):
+                                            ui.label(str(pat)).classes(
+                                                "text-red-600 font-semibold"
+                                            )
+                                            ui.label("/").classes("text-gray-400")
+                                            ui.label(str(unc)).classes(
+                                                "text-amber-500 font-semibold"
+                                            )
+                                        ui.label(f"{diag_pct:.0f}%").classes(
+                                            "text-gray-700 text-right"
+                                        )
 
                         with ui.card_section().classes("bg-gray-50"):
                             ui.label(f"📄 {cohort.pedigree_file.name}").classes(
