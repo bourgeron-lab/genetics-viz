@@ -25,7 +25,7 @@ _DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
 
 # Display order and labels for phenotype categories
 _PHENO_ORDER = ["2", "1", "-9"]
-_PHENO_LABELS = {"2": "2 (affected)", "1": "1 (unaffected)", "-9": "-9 (unknown)"}
+_PHENO_LABELS = {"2": "2 (aff)", "1": "1 (unaff)", "-9": "-9 (unk)"}
 
 
 def _normalize_pheno(pheno: str | None) -> str:
@@ -373,49 +373,54 @@ async def home_page() -> None:
                                 p for p in _PHENO_ORDER if per_pheno[p]["n"] > 0
                             ]
                             if non_empty:
-                                with ui.grid(columns=4).classes(
-                                    "gap-x-3 gap-y-1 text-xs w-full"
+                                with ui.element("div").classes(
+                                    "border border-gray-300 rounded-md"
+                                    " overflow-hidden w-full"
                                 ):
-                                    # Header row
-                                    ui.label("Pheno").classes(
-                                        "text-gray-500 font-semibold"
-                                    )
-                                    ui.label("N").classes(
-                                        "text-gray-500 font-semibold text-right"
-                                    )
-                                    ui.label("Pat/Unc").classes(
-                                        "text-gray-500 font-semibold text-right"
-                                    )
-                                    ui.label("%").classes(
-                                        "text-gray-500 font-semibold text-right"
-                                    )
-                                    # Data rows
-                                    for pheno_key in non_empty:
-                                        bucket = per_pheno[pheno_key]
-                                        n = bucket["n"]
-                                        pat = bucket["pathogenic"]
-                                        unc = bucket["uncertain"]
-                                        diag_pct = (pat + unc) / n * 100 if n > 0 else 0
+                                    with ui.grid(columns=4).classes(
+                                        "gap-x-3 gap-y-1 text-xs w-full px-2 py-1"
+                                    ):
+                                        # Header row (separator below via border-b)
+                                        _hdr = (
+                                            "text-gray-500 font-semibold"
+                                            " border-b border-gray-200 pb-1"
+                                            " whitespace-nowrap"
+                                        )
+                                        ui.label("Pheno").classes(_hdr)
+                                        ui.label("N").classes(_hdr + " text-right")
+                                        ui.label("Pat/Unc").classes(
+                                            _hdr + " text-right"
+                                        )
+                                        ui.label("%").classes(_hdr + " text-right")
+                                        # Data rows
+                                        for pheno_key in non_empty:
+                                            bucket = per_pheno[pheno_key]
+                                            n = bucket["n"]
+                                            pat = bucket["pathogenic"]
+                                            unc = bucket["uncertain"]
+                                            diag_pct = (
+                                                (pat + unc) / n * 100 if n > 0 else 0
+                                            )
 
-                                        ui.label(_PHENO_LABELS[pheno_key]).classes(
-                                            "text-gray-700"
-                                        )
-                                        ui.label(str(n)).classes(
-                                            "text-gray-700 text-right"
-                                        )
-                                        with ui.row().classes(
-                                            "gap-0.5 justify-end items-baseline"
-                                        ):
-                                            ui.label(str(pat)).classes(
-                                                "text-red-600 font-semibold"
+                                            ui.label(_PHENO_LABELS[pheno_key]).classes(
+                                                "text-gray-700 whitespace-nowrap"
                                             )
-                                            ui.label("/").classes("text-gray-400")
-                                            ui.label(str(unc)).classes(
-                                                "text-amber-500 font-semibold"
+                                            ui.label(str(n)).classes(
+                                                "text-gray-700 text-right"
                                             )
-                                        ui.label(f"{diag_pct:.0f}%").classes(
-                                            "text-gray-700 text-right"
-                                        )
+                                            with ui.row().classes(
+                                                "gap-0.5 justify-end items-baseline"
+                                            ):
+                                                ui.label(str(pat)).classes(
+                                                    "text-red-600 font-semibold"
+                                                )
+                                                ui.label("/").classes("text-gray-400")
+                                                ui.label(str(unc)).classes(
+                                                    "text-amber-500 font-semibold"
+                                                )
+                                            ui.label(f"{diag_pct:.0f}%").classes(
+                                                "text-gray-700 text-right"
+                                            )
 
                         with ui.card_section().classes("bg-gray-50"):
                             ui.label(f"📄 {cohort.pedigree_file.name}").classes(

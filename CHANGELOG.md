@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-04-07
+
+### Changed
+- **Cohort card phenotype table styling** — shortened phenotype labels (`2 (aff)`, `1 (unaff)`, `-9 (unk)`) with `whitespace-nowrap` to prevent wrapping; wrapped the table in a rounded border with a separator line between the header row and data rows.
+
 ## [0.7.5] - 2026-04-07
 
 ### Changed
