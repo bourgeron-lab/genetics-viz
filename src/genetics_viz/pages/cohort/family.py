@@ -198,48 +198,38 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                 "size=sm flat dense"
                             ).classes("text-xs")
 
-                        # Create HTML table with checkboxes and member info
-                        table_html = """
-                    <table class="w-full text-sm">
-                        <thead class="bg-blue-100">
-                            <tr>
-                                <th class="px-3 py-2 text-left font-semibold">Select</th>
-                                <th class="px-3 py-2 text-left font-semibold"></th>
-                                <th class="px-3 py-2 text-left font-semibold">Sample ID</th>
-                                <th class="px-3 py-2 text-left font-semibold">Father</th>
-                                <th class="px-3 py-2 text-left font-semibold">Mother</th>
-                                <th class="px-3 py-2 text-left font-semibold">Sex</th>
-                                <th class="px-3 py-2 text-left font-semibold">Phenotype</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                    """
+                        # Native NiceGUI grid layout — no JS DOM manipulation.
+                        # Each row is a CSS grid container; checkboxes and
+                        # buttons are placed directly in their cells.
+                        _GRID_STYLE = (
+                            "display: grid;"
+                            " grid-template-columns:"
+                            " auto auto 1fr 1fr 1fr auto auto;"
+                            " gap: 0;"
+                            " align-items: center;"
+                        )
 
+                        # Header row
+                        with (
+                            ui.element("div")
+                            .classes("w-full bg-blue-100 text-sm")
+                            .style(_GRID_STYLE)
+                        ):
+                            for header in (
+                                "Select",
+                                "",
+                                "Sample ID",
+                                "Father",
+                                "Mother",
+                                "Sex",
+                                "Phenotype",
+                            ):
+                                ui.label(header).classes("px-3 py-2 font-semibold")
+
+                        # Data rows
                         for idx, member in enumerate(members_data):
                             sample_id = member["Sample ID"]
                             bg_class = "bg-white" if idx % 2 == 0 else "bg-gray-50"
-                            table_html += f'''
-                            <tr class="{bg_class} border-b border-gray-200">
-                                <td class="px-3 py-2" id="checkbox-cell-{idx}"></td>
-                                <td class="px-3 py-2" id="only-button-cell-{idx}"></td>
-                                <td class="px-3 py-2 font-medium">{sample_id}</td>
-                                <td class="px-3 py-2 text-gray-600">{member.get("Father", "-")}</td>
-                                <td class="px-3 py-2 text-gray-600">{member.get("Mother", "-")}</td>
-                                <td class="px-3 py-2 text-gray-600">{member.get("Sex", "-")}</td>
-                                <td class="px-3 py-2 text-gray-600">{member.get("Phenotype", "-")}</td>
-                            </tr>
-                        '''
-
-                        table_html += """
-                        </tbody>
-                    </table>
-                    """
-
-                        ui.html(table_html, sanitize=False)
-
-                        # Create checkboxes and insert them into the table cells
-                        for idx, member in enumerate(members_data):
-                            sample_id = member["Sample ID"]
 
                             def make_change_handler(sid):
                                 def handler(e):
@@ -254,13 +244,6 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                                 return handler
 
-                            with ui.element().classes(f"checkbox-cell-{idx}"):
-                                member_checkboxes[sample_id] = ui.checkbox(
-                                    "",
-                                    value=True,
-                                    on_change=make_change_handler(sample_id),
-                                )
-
                             def make_only_handler(sid):
                                 def handler():
                                     selected_members["value"] = [sid]
@@ -271,65 +254,41 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                                 return handler
 
-                            with ui.element().classes(f"only-button-cell-{idx}"):
-                                ui.button(
-                                    "only", on_click=make_only_handler(sample_id)
-                                ).props("size=xs flat dense color=blue").classes(
-                                    "text-xs"
+                            with (
+                                ui.element("div")
+                                .classes(
+                                    f"w-full {bg_class} border-b border-gray-200 text-sm"
                                 )
-
-                        # Move checkboxes and only buttons into table cells.
-                        # The static <table> HTML and the NiceGUI element
-                        # wrappers are sent asynchronously, so wrap in a polling
-                        # loop with timeout to wait for them to appear in DOM.
-                        ui.run_javascript(f"""
-                        (function moveCells() {{
-                            let attempts = 0;
-                            const MAX_ATTEMPTS = 30;  // ~3s at 100ms intervals
-                            const N = {len(members_data)};
-
-                            function tryMove() {{
-                                let allDone = true;
-                                for (let i = 0; i < N; i++) {{
-                                    const checkboxCell = document.getElementById(
-                                        'checkbox-cell-' + i
-                                    );
-                                    const onlyCell = document.getElementById(
-                                        'only-button-cell-' + i
-                                    );
-                                    if (!checkboxCell || !onlyCell) {{
-                                        allDone = false;
-                                        continue;
-                                    }}
-                                    // Move checkbox if it's not already in the cell
-                                    if (checkboxCell.childElementCount === 0) {{
-                                        const cb = document.querySelector(
-                                            '.checkbox-cell-' + i
-                                        );
-                                        if (cb) {{
-                                            checkboxCell.appendChild(cb);
-                                        }} else {{
-                                            allDone = false;
-                                        }}
-                                    }}
-                                    if (onlyCell.childElementCount === 0) {{
-                                        const ob = document.querySelector(
-                                            '.only-button-cell-' + i
-                                        );
-                                        if (ob) {{
-                                            onlyCell.appendChild(ob);
-                                        }} else {{
-                                            allDone = false;
-                                        }}
-                                    }}
-                                }}
-                                if (!allDone && ++attempts < MAX_ATTEMPTS) {{
-                                    setTimeout(tryMove, 100);
-                                }}
-                            }}
-                            setTimeout(tryMove, 100);
-                        }})();
-                    """)
+                                .style(_GRID_STYLE)
+                            ):
+                                # Select column (checkbox)
+                                with ui.element("div").classes("px-3 py-2"):
+                                    member_checkboxes[sample_id] = ui.checkbox(
+                                        "",
+                                        value=True,
+                                        on_change=make_change_handler(sample_id),
+                                    )
+                                # "only" button column
+                                with ui.element("div").classes("px-3 py-2"):
+                                    ui.button(
+                                        "only", on_click=make_only_handler(sample_id)
+                                    ).props("size=xs flat dense color=blue").classes(
+                                        "text-xs"
+                                    )
+                                # Data columns
+                                ui.label(sample_id).classes("px-3 py-2 font-medium")
+                                ui.label(member.get("Father", "-")).classes(
+                                    "px-3 py-2 text-gray-600"
+                                )
+                                ui.label(member.get("Mother", "-")).classes(
+                                    "px-3 py-2 text-gray-600"
+                                )
+                                ui.label(member.get("Sex", "-")).classes(
+                                    "px-3 py-2 text-gray-600"
+                                )
+                                ui.label(member.get("Phenotype", "-")).classes(
+                                    "px-3 py-2 text-gray-600"
+                                )
 
                 # ---- Right column: Notes + Diagnostics ----
                 with ui.column().classes("flex-1 gap-4"):

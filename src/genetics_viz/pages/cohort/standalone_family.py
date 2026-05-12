@@ -200,43 +200,36 @@ async def standalone_family_page(family_id: str) -> None:
                                     "size=sm flat dense"
                                 ).classes("text-xs")
 
-                            # Member table
-                            table_html = """
-                            <table class="w-full text-sm">
-                                <thead class="bg-blue-100">
-                                    <tr>
-                                        <th class="px-3 py-2 text-left font-semibold">Select</th>
-                                        <th class="px-3 py-2 text-left font-semibold"></th>
-                                        <th class="px-3 py-2 text-left font-semibold">Sample ID</th>
-                                        <th class="px-3 py-2 text-left font-semibold">Father</th>
-                                        <th class="px-3 py-2 text-left font-semibold">Mother</th>
-                                        <th class="px-3 py-2 text-left font-semibold">Sex</th>
-                                        <th class="px-3 py-2 text-left font-semibold">Phenotype</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                            """
+                            # Native NiceGUI grid layout — no JS DOM manipulation.
+                            _GRID_STYLE = (
+                                "display: grid;"
+                                " grid-template-columns:"
+                                " auto auto 1fr 1fr 1fr auto auto;"
+                                " gap: 0;"
+                                " align-items: center;"
+                            )
 
+                            # Header row
+                            with (
+                                ui.element("div")
+                                .classes("w-full bg-blue-100 text-sm")
+                                .style(_GRID_STYLE)
+                            ):
+                                for header in (
+                                    "Select",
+                                    "",
+                                    "Sample ID",
+                                    "Father",
+                                    "Mother",
+                                    "Sex",
+                                    "Phenotype",
+                                ):
+                                    ui.label(header).classes("px-3 py-2 font-semibold")
+
+                            # Data rows
                             for idx, member in enumerate(members_data):
                                 sid = member["Sample ID"]
                                 bg = "bg-white" if idx % 2 == 0 else "bg-gray-50"
-                                table_html += f'''
-                                <tr class="{bg} border-b border-gray-200">
-                                    <td class="px-3 py-2" id="sf-cb-{idx}"></td>
-                                    <td class="px-3 py-2" id="sf-only-{idx}"></td>
-                                    <td class="px-3 py-2 font-medium">{sid}</td>
-                                    <td class="px-3 py-2 text-gray-600">{member.get("Father", "-")}</td>
-                                    <td class="px-3 py-2 text-gray-600">{member.get("Mother", "-")}</td>
-                                    <td class="px-3 py-2 text-gray-600">{member.get("Sex", "-")}</td>
-                                    <td class="px-3 py-2 text-gray-600">{member.get("Phenotype", "-")}</td>
-                                </tr>
-                                '''
-
-                            table_html += "</tbody></table>"
-                            ui.html(table_html, sanitize=False)
-
-                            for idx, member in enumerate(members_data):
-                                sid = member["Sample ID"]
 
                                 def make_change(s):
                                     def handler(e):
@@ -255,11 +248,6 @@ async def standalone_family_page(family_id: str) -> None:
 
                                     return handler
 
-                                with ui.element().classes(f"sf-cb-{idx}"):
-                                    member_checkboxes[sid] = ui.checkbox(
-                                        "", value=True, on_change=make_change(sid)
-                                    )
-
                                 def make_only(s):
                                     def handler():
                                         selected_members["value"] = [s]
@@ -270,23 +258,38 @@ async def standalone_family_page(family_id: str) -> None:
 
                                     return handler
 
-                                with ui.element().classes(f"sf-only-{idx}"):
-                                    ui.button("only", on_click=make_only(sid)).props(
-                                        "size=xs flat dense color=blue"
-                                    ).classes("text-xs")
-
-                            ui.run_javascript(
-                                f"""
-                                for (let i = 0; i < {len(members_data)}; i++) {{
-                                    const cb = document.querySelector('.sf-cb-' + i);
-                                    const cbCell = document.getElementById('sf-cb-' + i);
-                                    if (cb && cbCell) cbCell.appendChild(cb);
-                                    const only = document.querySelector('.sf-only-' + i);
-                                    const onlyCell = document.getElementById('sf-only-' + i);
-                                    if (only && onlyCell) onlyCell.appendChild(only);
-                                }}
-                                """
-                            )
+                                with (
+                                    ui.element("div")
+                                    .classes(
+                                        f"w-full {bg} border-b border-gray-200 text-sm"
+                                    )
+                                    .style(_GRID_STYLE)
+                                ):
+                                    with ui.element("div").classes("px-3 py-2"):
+                                        member_checkboxes[sid] = ui.checkbox(
+                                            "",
+                                            value=True,
+                                            on_change=make_change(sid),
+                                        )
+                                    with ui.element("div").classes("px-3 py-2"):
+                                        ui.button(
+                                            "only", on_click=make_only(sid)
+                                        ).props(
+                                            "size=xs flat dense color=blue"
+                                        ).classes("text-xs")
+                                    ui.label(sid).classes("px-3 py-2 font-medium")
+                                    ui.label(member.get("Father", "-")).classes(
+                                        "px-3 py-2 text-gray-600"
+                                    )
+                                    ui.label(member.get("Mother", "-")).classes(
+                                        "px-3 py-2 text-gray-600"
+                                    )
+                                    ui.label(member.get("Sex", "-")).classes(
+                                        "px-3 py-2 text-gray-600"
+                                    )
+                                    ui.label(member.get("Phenotype", "-")).classes(
+                                        "px-3 py-2 text-gray-600"
+                                    )
 
                     # ---- Right column: Notes + Diagnostics ----
                     with ui.column().classes("flex-1 gap-4"):

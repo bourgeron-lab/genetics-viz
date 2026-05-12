@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] - 2026-04-08
+
+### Fixed
+- **Family page member table** — rebuilt the member selection table using native NiceGUI CSS-grid layout instead of a static HTML table + JS DOM moves. The previous approach was fragile because Vue/NiceGUI reconciliation would revert the manual moves. Checkboxes and "only" buttons now render reliably inside their cells. Same fix applied to standalone family page.
+
 ## [0.7.7] - 2026-04-08
 
 ### Fixed
