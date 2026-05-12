@@ -170,36 +170,53 @@ class DataTable:
 
         # Use JS setTimeout instead of ui.timer to avoid creating a NiceGUI
         # element that can lose its parent slot when @ui.refreshable re-renders.
+        # Use a bounded polling loop instead of MutationObserver — polling is
+        # more reliable here since we know exactly which element to look for,
+        # and avoids the race where the element appears between the initial
+        # getElementById and observer.observe() calls.
         ui.run_javascript(f"""
-            setTimeout(function() {{
-                (function initDT() {{
-                    // Wait for TanStack library to load
+            (function() {{
+                var attempts = 0;
+                var MAX_ATTEMPTS = 150;  // ~30s at 200ms intervals
+
+                function tryInit() {{
+                    // Already initialized (re-render guard)
+                    if (window['_dt_{inst_id}']) return;
+
+                    // Wait for TanStack library + DataTable class
                     if (!window.TanStackTable || !window.DataTable) {{
-                        setTimeout(initDT, 200);
+                        if (++attempts < MAX_ATTEMPTS) {{
+                            setTimeout(tryInit, 200);
+                        }} else {{
+                            console.error(
+                                'TanStack Table library did not load for '
+                                + '{inst_id}'
+                            );
+                        }}
                         return;
                     }}
-                    if (window['_dt_{inst_id}']) return;
+
+                    // Wait for container element in DOM
                     var el = document.getElementById('{inst_id}');
                     if (el) {{
-                        window['_dt_{inst_id}'] = new DataTable({config}, {data});
+                        window['_dt_{inst_id}'] = new DataTable(
+                            {config}, {data}
+                        );
                         return;
                     }}
-                    // Element not in DOM yet (e.g. inactive tab panel).
-                    // Use MutationObserver to init when it appears.
-                    var obs = new MutationObserver(function() {{
-                        var el = document.getElementById('{inst_id}');
-                        if (el && !window['_dt_{inst_id}']) {{
-                            obs.disconnect();
-                            clearTimeout(obsTimeout);
-                            window['_dt_{inst_id}'] = new DataTable({config}, {data});
-                        }}
-                    }});
-                    obs.observe(document.body, {{ childList: true, subtree: true }});
-                    var obsTimeout = setTimeout(function() {{
-                        obs.disconnect();
-                    }}, 30000);
-                }})();
-            }}, 100);
+
+                    if (++attempts < MAX_ATTEMPTS) {{
+                        setTimeout(tryInit, 200);
+                    }} else {{
+                        console.error(
+                            'DataTable container {inst_id} never appeared '
+                            + 'in DOM'
+                        );
+                    }}
+                }}
+
+                setTimeout(tryInit, 100);
+            }})();
         """)
 
     def update_data(self, rows: list[dict[str, Any]]) -> None:

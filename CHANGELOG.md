@@ -5,6 +5,12 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - 2026-04-08
+
+### Fixed
+- **Family page member table checkboxes** — fixed timing bug where checkboxes and "only" buttons sometimes rendered below the table instead of inside the Select column. The DOM-move JavaScript now polls for both source elements and target cells with bounded retries.
+- **DataTable container race condition** — replaced fragile MutationObserver with a bounded polling loop in `tanstack_table.py`. Fixes intermittent issue where the Wombat/SVs dataframe wouldn't render and required a page reload.
+
 ## [0.7.6] - 2026-04-07
 
 ### Changed

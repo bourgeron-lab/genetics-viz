@@ -278,21 +278,57 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                     "text-xs"
                                 )
 
-                        # Move checkboxes and only buttons into table cells using JavaScript
+                        # Move checkboxes and only buttons into table cells.
+                        # The static <table> HTML and the NiceGUI element
+                        # wrappers are sent asynchronously, so wrap in a polling
+                        # loop with timeout to wait for them to appear in DOM.
                         ui.run_javascript(f"""
-                        for (let i = 0; i < {len(members_data)}; i++) {{
-                            const checkbox = document.querySelector('.checkbox-cell-' + i);
-                            const checkboxCell = document.getElementById('checkbox-cell-' + i);
-                            if (checkbox && checkboxCell) {{
-                                checkboxCell.appendChild(checkbox);
+                        (function moveCells() {{
+                            let attempts = 0;
+                            const MAX_ATTEMPTS = 30;  // ~3s at 100ms intervals
+                            const N = {len(members_data)};
+
+                            function tryMove() {{
+                                let allDone = true;
+                                for (let i = 0; i < N; i++) {{
+                                    const checkboxCell = document.getElementById(
+                                        'checkbox-cell-' + i
+                                    );
+                                    const onlyCell = document.getElementById(
+                                        'only-button-cell-' + i
+                                    );
+                                    if (!checkboxCell || !onlyCell) {{
+                                        allDone = false;
+                                        continue;
+                                    }}
+                                    // Move checkbox if it's not already in the cell
+                                    if (checkboxCell.childElementCount === 0) {{
+                                        const cb = document.querySelector(
+                                            '.checkbox-cell-' + i
+                                        );
+                                        if (cb) {{
+                                            checkboxCell.appendChild(cb);
+                                        }} else {{
+                                            allDone = false;
+                                        }}
+                                    }}
+                                    if (onlyCell.childElementCount === 0) {{
+                                        const ob = document.querySelector(
+                                            '.only-button-cell-' + i
+                                        );
+                                        if (ob) {{
+                                            onlyCell.appendChild(ob);
+                                        }} else {{
+                                            allDone = false;
+                                        }}
+                                    }}
+                                }}
+                                if (!allDone && ++attempts < MAX_ATTEMPTS) {{
+                                    setTimeout(tryMove, 100);
+                                }}
                             }}
-                            
-                            const onlyButton = document.querySelector('.only-button-cell-' + i);
-                            const onlyButtonCell = document.getElementById('only-button-cell-' + i);
-                            if (onlyButton && onlyButtonCell) {{
-                                onlyButtonCell.appendChild(onlyButton);
-                            }}
-                        }}
+                            setTimeout(tryMove, 100);
+                        }})();
                     """)
 
                 # ---- Right column: Notes + Diagnostics ----
