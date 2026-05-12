@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.9] - 2026-04-08
+
+### Added
+- **Help menu in header bar** — small `help_outline` icon button (right side, before the user menu) with three options: Email (mailto to the Teams channel address with "Bug report" subject), Teams channel (opens the genetics-viz channel in a new tab), and Report bug (opens a new GitHub issue in a new tab).
+
 ## [0.7.8] - 2026-04-08
 
 ### Fixed

@@ -135,6 +135,48 @@ def create_header(cohort_name: str | None = None) -> None:
             elif dir_options:
                 ui.label(f"📁 {dir_options[0]['label']}").classes("text-sm opacity-75")
 
+            # Help menu
+            _MAILTO = (
+                "mailto:96e626ca.pasteurfr.onmicrosoft.com@emea.teams.ms"
+                "?subject=Bug%20report"
+            )
+            _TEAMS_URL = (
+                "https://teams.microsoft.com/l/channel/"
+                "19%3Af6165ca30232476b89a6faf84cbcede7%40thread.tacv2/"
+                "genetics-viz?groupId=d78bea08-70bb-4484-a4f8-2597008bd925"
+                "&tenantId=096815dc-d9eb-4bc3-a5a3-53c77e7d34e2"
+            )
+            _GITHUB_ISSUE_URL = (
+                "https://github.com/bourgeron-lab/genetics-viz/issues/new"
+            )
+
+            with (
+                ui.button(icon="help_outline")
+                .props("flat color=white round")
+                .tooltip("Help")
+            ):
+                with ui.menu():
+                    with ui.menu_item(
+                        on_click=lambda: ui.navigate.to(_MAILTO),
+                    ):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("mail")
+                            ui.label("Email")
+                    with ui.menu_item(
+                        on_click=lambda: ui.navigate.to(_TEAMS_URL, new_tab=True),
+                    ):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("chat")
+                            ui.label("Teams channel")
+                    with ui.menu_item(
+                        on_click=lambda: ui.navigate.to(
+                            _GITHUB_ISSUE_URL, new_tab=True
+                        ),
+                    ):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("bug_report")
+                            ui.label("Report bug")
+
             # User menu
             username = get_current_user()
             with ui.button(icon="person").props("flat color=white round"):
