@@ -1,5 +1,9 @@
 """Admin page for managing users."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
+
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
@@ -31,7 +35,11 @@ def admin_users_page() -> None:
         # User list
         user_container = ui.column().classes("w-full mb-6")
 
-        def _show_password_dialog(title: str, password: str) -> None:
+        def _show_password_dialog(
+            title: str,
+            password: str,
+            on_close: Callable[[], None] | None = None,
+        ) -> None:
             """Show a dialog with a generated password to copy."""
             with ui.dialog() as dlg, ui.card().classes("p-6 min-w-[400px]"):
                 ui.label(title).classes("text-lg font-semibold mb-4")
@@ -56,6 +64,8 @@ def admin_users_page() -> None:
                     ui.button("Close", on_click=dlg.close).props(
                         "color=blue unelevated"
                     )
+            if on_close is not None:
+                dlg.on("hide", lambda: on_close())
             dlg.open()
 
         def refresh_users() -> None:
@@ -144,9 +154,10 @@ def admin_users_page() -> None:
                                         )
                                         new_pw = generate_random_password()
                                         target.password = hash_password(new_pw)
-                                        save_config(cfg)
                                         _show_password_dialog(
-                                            f"New password for {uname}", new_pw
+                                            f"New password for {uname}",
+                                            new_pw,
+                                            on_close=lambda: save_config(cfg),
                                         )
 
                                     return handler
@@ -245,11 +256,12 @@ def admin_users_page() -> None:
                             role=role,
                         )
                     )
-                    save_config(config)
-
                     username_input.value = ""
-                    refresh_users()
-                    _show_password_dialog(f"Password for {uname}", raw_pw)
+                    _show_password_dialog(
+                        f"Password for {uname}",
+                        raw_pw,
+                        on_close=lambda: (save_config(config), refresh_users()),
+                    )
 
                 ui.button("Add User", icon="person_add", on_click=add_user).props(
                     "color=blue unelevated"
