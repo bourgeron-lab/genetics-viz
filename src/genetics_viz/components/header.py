@@ -1,9 +1,13 @@
 """Header component for genetics-viz."""
 
-from nicegui import app, ui
+from __future__ import annotations
+
+from nicegui import app, context, ui
 
 from genetics_viz import __version__
+from genetics_viz.models import ChangeReport
 from genetics_viz.utils.auth import get_current_user, is_admin
+from genetics_viz.utils.change_monitor import check_now, subscribe
 from genetics_viz.utils.data import get_data_dir_options, get_data_store
 
 
@@ -135,6 +139,26 @@ def create_header(cohort_name: str | None = None) -> None:
             elif dir_options:
                 ui.label(f"📁 {dir_options[0]['label']}").classes("text-sm opacity-75")
 
+            # Refresh button
+            async def _manual_refresh() -> None:
+                reports = await check_now()
+                if any(r.has_changes for r in reports):
+                    for r in reports:
+                        for line in r.summary_lines():
+                            ui.notify(line, type="positive", position="top-right")
+                    ui.notify("Refreshing page...", type="info", position="top-right")
+                    await ui.run_javascript(
+                        "setTimeout(() => window.location.reload(), 500)"
+                    )
+                else:
+                    ui.notify("No changes detected", type="info", position="top-right")
+
+            (
+                ui.button(icon="refresh", on_click=_manual_refresh)
+                .props("flat color=white round")
+                .tooltip("Check for data changes")
+            )
+
             # Help menu
             _MAILTO = (
                 "mailto:96e626ca.pasteurfr.onmicrosoft.com@emea.teams.ms"
@@ -207,3 +231,22 @@ def create_header(cohort_name: str | None = None) -> None:
                         ui.navigate.to("/login")
 
                     ui.menu_item("Logout", on_click=logout)
+
+    # Per-client change notification subscription
+    client = context.client
+    if not getattr(client, "_change_monitor_subscribed", False):
+
+        async def _on_change(report: ChangeReport) -> None:
+            try:
+                store = get_data_store()
+            except RuntimeError:
+                return
+            if str(store.data_dir) != report.data_dir:
+                return
+            with client:
+                for line in report.summary_lines():
+                    ui.notify(line, type="info", position="top-right", timeout=10_000)
+
+        unsub = subscribe(_on_change)
+        client.on_disconnect(unsub)
+        client._change_monitor_subscribed = True  # type: ignore[attr-defined]

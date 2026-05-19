@@ -18,6 +18,7 @@ from nicegui import app as nicegui_app
 from nicegui import ui
 
 from genetics_viz.config_model import load_config
+from genetics_viz.utils.change_monitor import start_polling, stop_polling
 from genetics_viz.utils.data import get_static_prefix_map, init_all_data_stores
 
 # Import pages to register routes — this triggers all @ui.page decorators.
@@ -75,6 +76,9 @@ def _init_from_config(config_file: Path) -> None:
     # Register static file routes for each data directory
     for path_str, prefix in get_static_prefix_map().items():
         nicegui_app.add_static_files(prefix, path_str)
+
+    nicegui_app.on_startup(lambda: start_polling(interval=config.poll_interval))
+    nicegui_app.on_shutdown(stop_polling)
 
 
 # Auto-initialize when module is reloaded (for --reload mode)

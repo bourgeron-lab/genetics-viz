@@ -121,6 +121,11 @@ def get_static_prefix_map() -> dict[str, str]:
     return _static_prefix_map
 
 
+def get_all_data_stores() -> dict[str, DataStore]:
+    """Return the full {path_str: DataStore} mapping (read-only access for the poller)."""
+    return _data_stores
+
+
 # ---------------------------------------------------------------------------
 # Hot-add / remove (for admin page)
 # ---------------------------------------------------------------------------

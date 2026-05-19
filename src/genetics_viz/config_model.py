@@ -40,6 +40,7 @@ class AppConfig:
     data_directories: list[DataDirectoryConfig] = field(default_factory=list)
     user_list: list[UserConfig] = field(default_factory=list)
     storage_secret: str = ""
+    poll_interval: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +126,14 @@ def load_config(config_path: Path) -> AppConfig:
     if secret_was_missing:
         storage_secret = secrets.token_hex(32)
 
+    poll_interval = int(raw.get("poll_interval", 30))
+
     config = AppConfig(
         config_path=config_path,
         data_directories=dirs,
         user_list=users,
         storage_secret=storage_secret,
+        poll_interval=poll_interval,
     )
     _app_config = config
 

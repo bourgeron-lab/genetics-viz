@@ -5,10 +5,15 @@ This module provides classes for loading and managing cohort data,
 including pedigree information, families, and samples.
 """
 
+from __future__ import annotations
+
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 # Standard pedigree column names (positional, no header)
 PEDIGREE_COLUMNS = ["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"]
@@ -273,6 +278,38 @@ class Cohort:
 
 
 @dataclass
+class DirectorySnapshot:
+    """Point-in-time snapshot of a DataStore's cohort directory state."""
+
+    cohort_mtimes: dict[str, float] = field(default_factory=dict)
+    cohort_names: frozenset[str] = field(default_factory=frozenset)
+
+
+@dataclass
+class ChangeReport:
+    """Describes what changed between two directory snapshots."""
+
+    data_dir: str
+    added_cohorts: list[str] = field(default_factory=list)
+    removed_cohorts: list[str] = field(default_factory=list)
+    modified_cohorts: list[str] = field(default_factory=list)
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.added_cohorts or self.removed_cohorts or self.modified_cohorts)
+
+    def summary_lines(self) -> list[str]:
+        lines: list[str] = []
+        if self.added_cohorts:
+            lines.append(f"New cohorts: {', '.join(self.added_cohorts)}")
+        if self.removed_cohorts:
+            lines.append(f"Removed cohorts: {', '.join(self.removed_cohorts)}")
+        if self.modified_cohorts:
+            lines.append(f"Updated cohorts: {', '.join(self.modified_cohorts)}")
+        return lines
+
+
+@dataclass
 class DataStore:
     """
     Central data store for all cohorts in a data directory.
@@ -283,6 +320,7 @@ class DataStore:
     data_dir: Path
     cohorts: dict[str, Cohort] = field(default_factory=dict)
     _loaded: bool = field(default=False, repr=False)
+    _snapshot: DirectorySnapshot | None = field(default=None, repr=False)
 
     @property
     def cohorts_dir(self) -> Path:
@@ -315,6 +353,63 @@ class DataStore:
                 print(f"Warning: Failed to load cohort {cohort_path.name}: {e}")
 
         self._loaded = True
+        self._snapshot = self.take_snapshot()
+
+    def take_snapshot(self) -> DirectorySnapshot:
+        """Stat the cohort directory and return a lightweight snapshot of mtimes."""
+        mtimes: dict[str, float] = {}
+        if self.cohorts_dir.exists():
+            for cohort_path in self.cohorts_dir.iterdir():
+                if not cohort_path.is_dir():
+                    continue
+                ped = cohort_path / f"{cohort_path.name}.pedigree.tsv"
+                if ped.exists():
+                    mtimes[cohort_path.name] = ped.stat().st_mtime
+        return DirectorySnapshot(
+            cohort_mtimes=mtimes,
+            cohort_names=frozenset(mtimes),
+        )
+
+    @staticmethod
+    def compare_snapshot(
+        old: DirectorySnapshot, new: DirectorySnapshot
+    ) -> ChangeReport:
+        """Compare two snapshots and return a report of what changed."""
+        added = sorted(new.cohort_names - old.cohort_names)
+        removed = sorted(old.cohort_names - new.cohort_names)
+        modified = sorted(
+            name
+            for name in old.cohort_names & new.cohort_names
+            if old.cohort_mtimes[name] != new.cohort_mtimes[name]
+        )
+        return ChangeReport(
+            data_dir="",
+            added_cohorts=added,
+            removed_cohorts=removed,
+            modified_cohorts=modified,
+        )
+
+    def reload(self) -> None:
+        """Re-scan the data directory and atomically replace the cohorts dict."""
+        if not self.cohorts_dir.exists():
+            return
+
+        new_cohorts: dict[str, Cohort] = {}
+        for cohort_path in sorted(self.cohorts_dir.iterdir()):
+            if not cohort_path.is_dir():
+                continue
+            pedigree_file = cohort_path / f"{cohort_path.name}.pedigree.tsv"
+            if not pedigree_file.exists():
+                continue
+            try:
+                cohort = Cohort.from_directory(cohort_path)
+                new_cohorts[cohort.name] = cohort
+            except Exception as e:
+                logger.warning("Failed to load cohort %s: %s", cohort_path.name, e)
+
+        self.cohorts = new_cohorts
+        self._loaded = True
+        self._snapshot = self.take_snapshot()
 
     def get_cohort(self, name: str) -> Cohort | None:
         """Get a cohort by name."""
