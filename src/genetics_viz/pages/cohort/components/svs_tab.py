@@ -45,6 +45,15 @@ _GENE_BADGE_COLUMNS = {
 }
 
 
+def probe_svs_data(data_dir: Path, family_id: str) -> bool:
+    """Check whether SVs data exists for this family."""
+    svs_dir = get_family_path(data_dir, family_id) / "svs"
+    aberrations_file = (
+        svs_dir / "wisecondorx" / f"{family_id}_aberrations.annotated.bed"
+    )
+    return aberrations_file.exists()
+
+
 def render_svs_tab(
     store: Any,
     family_id: str,
@@ -69,21 +78,45 @@ def render_svs_tab(
         )
         return
 
+    # Pre-check WisecondorX data to determine tab state
+    wcx_dir = svs_dir / "wisecondorx"
+    wcx_file = wcx_dir / f"{family_id}_aberrations.annotated.bed"
+    wcx_count: int | None = None
+    if wcx_file.exists():
+        df = parse_wisecondorx_bed_for_display(wcx_file)
+        wcx_count = 0 if df is None else len(df)
+
     # Create subtabs for different SV callers
     with ui.tabs().classes("w-full") as svs_subtabs:
-        wisecondorx_tab = ui.tab("WisecondorX")
+        if wcx_count is not None and wcx_count > 0:
+            wisecondorx_tab = ui.tab("WisecondorX", label=f"WisecondorX ({wcx_count})")
+        else:
+            wisecondorx_tab = ui.tab("WisecondorX")
+            if wcx_count == 0:
+                # File exists but empty — disable to signal "step ran, no results"
+                wisecondorx_tab.props("disable")
+            elif wcx_count is None:
+                # File doesn't exist
+                wisecondorx_tab.props("disable")
 
     with ui.tab_panels(svs_subtabs, value=wisecondorx_tab).classes("w-full"):
         # WisecondorX subtab
         with ui.tab_panel(wisecondorx_tab):
-            render_wisecondorx_subtab(
-                store=store,
-                family_id=family_id,
-                svs_dir=svs_dir,
-                selected_members=selected_members,
-                data_table_refreshers=data_table_refreshers,
-                cohort_name=cohort_name,
-            )
+            if wcx_count is None:
+                ui.label("No WisecondorX data available").classes(
+                    "text-gray-500 italic"
+                )
+            elif wcx_count == 0:
+                ui.label("No aberrations found").classes("text-gray-500 italic")
+            else:
+                render_wisecondorx_subtab(
+                    store=store,
+                    family_id=family_id,
+                    svs_dir=svs_dir,
+                    selected_members=selected_members,
+                    data_table_refreshers=data_table_refreshers,
+                    cohort_name=cohort_name,
+                )
 
 
 def render_wisecondorx_subtab(

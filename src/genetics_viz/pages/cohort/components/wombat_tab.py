@@ -1,6 +1,10 @@
 """Wombat tab component for family page."""
 
+from __future__ import annotations
+
+import logging
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 import polars as pl
@@ -55,6 +59,17 @@ from genetics_viz.utils.cytobands import (
     VALIDATION_COLORS,
     norm_chrom,
 )
+
+
+def probe_wombat_data(data_dir: Path, family_id: str) -> bool:
+    """Check whether any wombat result files exist for this family."""
+    wombat_dir = get_family_path(data_dir, family_id) / "wombat"
+    if not wombat_dir.exists():
+        return False
+    pattern = re.compile(
+        rf"{re.escape(family_id)}\.rare\.([^.]+)\.annotated\.(.+?)\.tsv$"
+    )
+    return any(pattern.match(f.name) for f in wombat_dir.glob("*.tsv"))
 
 
 def render_wombat_tab(
@@ -112,20 +127,71 @@ def render_wombat_tab(
     # Create dictionaries to store data for each wombat config
     wombat_data: Dict[str, Dict[str, Any]] = {}
 
-    # Create subtabs for each wombat config
+    # Pre-load DataFrames to determine which configs have data
+    config_dfs: Dict[str, pl.DataFrame] = {}
+    config_has_data: Dict[str, bool] = {}
+    for wf in wombat_files:
+        try:
+            df = pl.read_csv(
+                wf["file_path"],
+                separator="\t",
+                infer_schema_length=10000,
+                schema_overrides=get_schema_overrides(),
+                null_values=[".", ""],
+            )
+            _drop = get_dropped_columns() & set(df.columns)
+            if _drop:
+                df = df.drop(list(_drop))
+            if len(df) == 0:
+                config_has_data[wf["wombat_config"]] = False
+            else:
+                config_has_data[wf["wombat_config"]] = True
+                config_dfs[wf["wombat_config"]] = df
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to pre-load %s", wf["file_path"], exc_info=True
+            )
+            config_has_data[wf["wombat_config"]] = False
+
+    # Create subtabs — disable empty ones, add variant count badges
     with ui.tabs().classes("w-full") as wombat_subtabs:
         subtab_refs = {}
         for wf in wombat_files:
-            subtab_refs[wf["wombat_config"]] = ui.tab(wf["wombat_config"])
+            cname = wf["wombat_config"]
+            has_data = config_has_data.get(cname, False)
+            if has_data:
+                label = f"{cname} ({len(config_dfs[cname])})"
+            else:
+                label = cname
+            tab = ui.tab(cname, label=label)
+            if not has_data:
+                tab.props("disable")
+            subtab_refs[cname] = tab
+
+    # Pick first enabled sub-tab as default
+    first_active = next(
+        (
+            subtab_refs[wf["wombat_config"]]
+            for wf in wombat_files
+            if config_has_data.get(wf["wombat_config"], False)
+        ),
+        list(subtab_refs.values())[0],
+    )
 
     with (
-        ui.tab_panels(wombat_subtabs, value=list(subtab_refs.values())[0])
+        ui.tab_panels(wombat_subtabs, value=first_active)
         .props("keep-alive")
         .classes("w-full")
     ):
         for wf in wombat_files:
             with ui.tab_panel(subtab_refs[wf["wombat_config"]]):
                 config_name = wf["wombat_config"]
+
+                if not config_has_data.get(config_name, False):
+                    ui.label("No variants found").classes("text-gray-500 italic mt-4")
+                    continue
+
+                df = config_dfs[config_name]
 
                 with ui.card().classes("w-full p-4"):
                     ui.label(f"Wombat Configuration: {wf['wombat_config']}").classes(
@@ -142,23 +208,6 @@ def render_wombat_tab(
 
                 # Display TSV content in a table
                 try:
-                    df = pl.read_csv(
-                        wf["file_path"],
-                        separator="\t",
-                        infer_schema_length=10000,
-                        schema_overrides=get_schema_overrides(),
-                        null_values=[".", ""],
-                    )
-                    _drop = get_dropped_columns() & set(df.columns)
-                    if _drop:
-                        df = df.drop(list(_drop))
-
-                    if len(df) == 0:
-                        ui.label("No data available").classes(
-                            "text-gray-500 italic mt-4"
-                        )
-                        continue
-
                     # Group by variant and sample, aggregating other columns
                     grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
 

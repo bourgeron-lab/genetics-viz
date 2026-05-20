@@ -16,9 +16,12 @@ from genetics_viz.components.notes_loader import (
     load_family_notes,
     save_note,
 )
-from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
+from genetics_viz.pages.cohort.components.svs_tab import probe_svs_data, render_svs_tab
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
-from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
+from genetics_viz.pages.cohort.components.wombat_tab import (
+    probe_wombat_data,
+    render_wombat_tab,
+)
 from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import GeneScorer, get_gene_scorer
@@ -483,16 +486,31 @@ def family_page(cohort_name: str, family_id: str) -> None:
                         render_diagnostics_panel()
                         data_table_refreshers.append(render_diagnostics_panel.refresh)
 
+            # Pre-check data existence for each analysis tab
+            has_wombat = probe_wombat_data(store.data_dir, family_id)
+            has_svs = probe_svs_data(store.data_dir, family_id)
+
             # Track loading state for each tab
             wombat_state = {"loaded": False}
             svs_state = {"loaded": False}
+
+            # Pick the first enabled tab as the default
+            default_tab_name = (
+                "wombat" if has_wombat else "svs" if has_svs else "wombat"
+            )
 
             # Analysis tabs section
             with ui.tabs().classes("w-full") as tabs:
                 wombat_tab = ui.tab("Wombat")
                 svs_tab = ui.tab("SVs")
+                if not has_wombat:
+                    wombat_tab.props("disable")
+                if not has_svs:
+                    svs_tab.props("disable")
 
-            with ui.tab_panels(tabs, value=wombat_tab).classes("w-full"):
+            default_tab = wombat_tab if default_tab_name == "wombat" else svs_tab
+
+            with ui.tab_panels(tabs, value=default_tab).classes("w-full"):
                 # Wombat tab panel
                 with ui.tab_panel(wombat_tab).classes(
                     "border border-gray-300 rounded-lg p-4"
@@ -500,7 +518,11 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                     @ui.refreshable
                     def wombat_content():
-                        if wombat_state["loaded"]:
+                        if not has_wombat:
+                            ui.label("No Wombat data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif wombat_state["loaded"]:
                             render_wombat_tab(
                                 store=store,
                                 family_id=family_id,
@@ -526,7 +548,11 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                     @ui.refreshable
                     def svs_content():
-                        if svs_state["loaded"]:
+                        if not has_svs:
+                            ui.label("No SVs data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif svs_state["loaded"]:
                             render_svs_tab(
                                 store=store,
                                 family_id=family_id,
@@ -545,23 +571,39 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                     svs_content()
 
-            # Load Wombat tab data asynchronously (it's the default active tab)
-            def load_wombat_async():
-                wombat_state["loaded"] = True
-                wombat_content.refresh()
+            # Load the default tab data asynchronously
+            if has_wombat:
 
-            ui.timer(0.1, load_wombat_async, once=True)
+                def load_wombat_async():
+                    wombat_state["loaded"] = True
+                    wombat_content.refresh()
 
-            # Lazy load SVS tab when clicked
+                ui.timer(0.1, load_wombat_async, once=True)
+            elif has_svs:
+                # SVs is the default tab when Wombat has no data
+                def load_svs_default():
+                    svs_state["loaded"] = True
+                    svs_content.refresh()
+
+                ui.timer(0.1, load_svs_default, once=True)
+
+            # Lazy load tabs when clicked
             def on_tab_change(e):
                 tab_value = e.args
-                if tab_value == "SVs" and not svs_state["loaded"]:
+                if tab_value == "Wombat" and not wombat_state["loaded"] and has_wombat:
 
-                    def load_svs_async():
+                    def load_wombat_lazy():
+                        wombat_state["loaded"] = True
+                        wombat_content.refresh()
+
+                    ui.timer(0.1, load_wombat_lazy, once=True)
+                elif tab_value == "SVs" and not svs_state["loaded"] and has_svs:
+
+                    def load_svs_lazy():
                         svs_state["loaded"] = True
                         svs_content.refresh()
 
-                    ui.timer(0.1, load_svs_async, once=True)
+                    ui.timer(0.1, load_svs_lazy, once=True)
 
             tabs.on("update:model-value", on_tab_change)
 
