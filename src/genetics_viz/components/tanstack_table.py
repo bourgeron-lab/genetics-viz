@@ -11,7 +11,10 @@ from typing import Any, Callable
 
 from nicegui import ui
 
-TANSTACK_CDN = "https://cdn.jsdelivr.net/npm/@tanstack/table-core/+esm"
+# Pin the major version: the v9 API dropped `getCoreRowModel` in favour of
+# feature objects, so an unpinned URL breaks as soon as jsDelivr's `latest`
+# moves on.
+TANSTACK_CDN = "https://cdn.jsdelivr.net/npm/@tanstack/table-core@8.21.3/+esm"
 
 _STATIC_DIR = Path(__file__).parent.parent / "static"
 _JS_PATH = _STATIC_DIR / "js" / "data_table.js"
