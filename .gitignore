@@ -10,3 +10,6 @@ wheels/
 .venv
 src/genetics_viz/.DS_Store
 .nicegui/
+
+# Claude Code local state (worktrees, settings)
+.claude/
