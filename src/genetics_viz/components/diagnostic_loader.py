@@ -190,12 +190,20 @@ def load_family_diagnostics(
     sv_file: Path,
     family_id: str,
     sample_ids: List[str],
-) -> List[Dict[str, str]]:
-    """Load all diagnostic entries for a family and set of samples.
+) -> List[Dict[str, Any]]:
+    """Load the diagnostic entries for a family and set of samples.
 
-    Returns a list of raw row dicts (one per diagnostic entry).
+    Entries several curators recorded for the same variant and sample are
+    merged into one row, so a variant never appears twice: ``User`` lists every
+    curator who recorded it and ``Diagnostic`` is their shared verdict, or
+    ``"conflicting"`` when they disagree - the aggregation
+    :func:`add_diagnostic_status_to_row` already applies to the variant tables.
+    ``_entries`` keeps the individual records, newest first, so a caller can
+    show which curator recorded what.
+
+    Returns one row dict per (source, variant, sample).
     """
-    entries: List[Dict[str, str]] = []
+    grouped: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
     sample_set = set(sample_ids)
 
     for diag_file in [snv_file, sv_file]:
@@ -210,6 +218,44 @@ def load_family_diagnostics(
                     and row.get("Sample") in sample_set
                     and row.get("Ignore", "0") != "1"
                 ):
-                    entries.append({**row, "_source": source})
+                    key = (source, row.get("Variant", ""), row.get("Sample", ""))
+                    grouped.setdefault(key, []).append(row)
+
+    entries: List[Dict[str, Any]] = []
+    for (source, _variant, _sample), rows in grouped.items():
+        rows = sorted(rows, key=lambda r: r.get("Timestamp", ""), reverse=True)
+        verdicts = {r.get("Diagnostic", "") for r in rows}
+        # dict.fromkeys de-duplicates while keeping the newest-first order, in
+        # case one curator recorded the same variant more than once.
+        users = list(dict.fromkeys(r.get("User", "") for r in rows if r.get("User")))
+        entries.append(
+            {
+                **rows[0],
+                "_source": source,
+                "_entries": rows,
+                "Diagnostic": (
+                    rows[0].get("Diagnostic", "")
+                    if len(verdicts) == 1
+                    else "conflicting"
+                ),
+                "User": ", ".join(users),
+            }
+        )
 
     return entries
+
+
+def format_diagnostic_contributors(entry: Dict[str, Any]) -> str:
+    """Summarise who recorded what for a merged :func:`load_family_diagnostics` row.
+
+    Reads the ``_entries`` the row was merged from and returns a line such as
+    ``"alice: pathogenic (2026-03-01) - bob: benign (2026-04-02)"``, which tells
+    the reader who disagreed when the row is marked ``"conflicting"``.
+    """
+    parts = []
+    for row in entry.get("_entries", []):
+        user = row.get("User", "") or "unknown"
+        verdict = row.get("Diagnostic", "") or "?"
+        date = row.get("Timestamp", "").split(" ")[0].split("T")[0]
+        parts.append(f"{user}: {verdict} ({date})" if date else f"{user}: {verdict}")
+    return " - ".join(parts)

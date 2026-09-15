@@ -8,6 +8,7 @@ from nicegui import ui
 
 from genetics_viz.components.diagnostic_loader import (
     ensure_diagnostic_file,
+    format_diagnostic_contributors,
     load_family_diagnostics,
 )
 from genetics_viz.components.header import create_header
@@ -363,9 +364,15 @@ async def standalone_family_page(family_id: str) -> None:
                                         ui.label(entry.get("Sample", "")).classes(
                                             "text-xs text-gray-600"
                                         )
-                                        ui.label(entry.get("User", "")).classes(
-                                            "text-xs text-gray-400"
-                                        )
+                                        # One row can merge several curators, so
+                                        # spell out who recorded what on hover.
+                                        user_label = ui.label(
+                                            entry.get("User", "")
+                                        ).classes("text-xs text-gray-400")
+                                        if len(entry.get("_entries", [])) > 1:
+                                            user_label.tooltip(
+                                                format_diagnostic_contributors(entry)
+                                            )
 
                             render_diagnostics()
                             data_table_refreshers.append(render_diagnostics.refresh)
