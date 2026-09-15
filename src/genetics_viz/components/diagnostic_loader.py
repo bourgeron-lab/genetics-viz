@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Tuple
 
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
 
+# Verdict used when curators disagree on the same variant for the same sample.
+CONFLICTING_DIAGNOSTIC = "conflicting"
+
 # TSV header for diagnostics files
 DIAGNOSTIC_HEADER = (
     "FID\tVariant\tGene\tImpact\tSample\tUser\tTimestamp\tComment\tIgnore\tDiagnostic\n"
@@ -95,7 +98,7 @@ def add_diagnostic_status_to_row(
         unique_diagnostics = set(diagnostic_values)
 
         if len(unique_diagnostics) > 1:
-            row["Diagnostic"] = "conflicting"
+            row["Diagnostic"] = CONFLICTING_DIAGNOSTIC
         else:
             row["Diagnostic"] = diagnostic_values[0]
 
@@ -193,17 +196,27 @@ def load_family_diagnostics(
 ) -> List[Dict[str, Any]]:
     """Load the diagnostic entries for a family and set of samples.
 
-    Entries several curators recorded for the same variant and sample are
-    merged into one row, so a variant never appears twice: ``User`` lists every
-    curator who recorded it and ``Diagnostic`` is their shared verdict, or
-    ``"conflicting"`` when they disagree - the aggregation
-    :func:`add_diagnostic_status_to_row` already applies to the variant tables.
-    ``_entries`` keeps the individual records, newest first, so a caller can
-    show which curator recorded what.
+    Rows are merged twice over, so a variant is listed once per verdict rather
+    than once per saved record:
 
-    Returns one row dict per (source, variant, sample).
+    * Curators first. Several curators recording the same variant for the same
+      sample are one assessment - ``"conflicting"`` when they disagree, which is
+      the aggregation :func:`add_diagnostic_status_to_row` already applies to
+      the variant tables.
+    * Then individuals. Samples whose assessment reached the *same* verdict for
+      a variant fold into one row. Samples that reached different verdicts stay
+      on separate rows, because a variant can legitimately be pathogenic in an
+      affected child and benign in a parent, and collapsing that would report a
+      per-individual assessment as a curator disagreement.
+
+    ``Sample`` therefore lists every individual the row covers, in the pedigree
+    order of ``sample_ids``, and ``User`` every curator involved, newest first.
+    ``_entries`` keeps the underlying records so a caller can show who recorded
+    what - see :func:`format_diagnostic_contributors`.
+
+    Returns one row dict per (source, variant, verdict).
     """
-    grouped: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
+    per_sample: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
     sample_set = set(sample_ids)
 
     for diag_file in [snv_file, sv_file]:
@@ -219,26 +232,34 @@ def load_family_diagnostics(
                     and row.get("Ignore", "0") != "1"
                 ):
                     key = (source, row.get("Variant", ""), row.get("Sample", ""))
-                    grouped.setdefault(key, []).append(row)
+                    per_sample.setdefault(key, []).append(row)
 
-    entries: List[Dict[str, Any]] = []
-    for (source, _variant, _sample), rows in grouped.items():
-        rows = sorted(rows, key=lambda r: r.get("Timestamp", ""), reverse=True)
+    # Settle each sample's verdict, then key by it so same-verdict samples meet.
+    merged: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
+    for (source, variant, _sample), rows in per_sample.items():
         verdicts = {r.get("Diagnostic", "") for r in rows}
-        # dict.fromkeys de-duplicates while keeping the newest-first order, in
-        # case one curator recorded the same variant more than once.
+        verdict = next(iter(verdicts)) if len(verdicts) == 1 else CONFLICTING_DIAGNOSTIC
+        merged.setdefault((source, variant, verdict), []).extend(rows)
+
+    sample_order = {sid: i for i, sid in enumerate(sample_ids)}
+    entries: List[Dict[str, Any]] = []
+    for (source, _variant, verdict), rows in merged.items():
+        rows = sorted(rows, key=lambda r: r.get("Timestamp", ""), reverse=True)
+        # dict.fromkeys de-duplicates while preserving order, for the curator
+        # who recorded one variant twice and the sample carrying two records.
         users = list(dict.fromkeys(r.get("User", "") for r in rows if r.get("User")))
+        samples = sorted(
+            dict.fromkeys(r.get("Sample", "") for r in rows if r.get("Sample")),
+            key=lambda s: sample_order.get(s, len(sample_order)),
+        )
         entries.append(
             {
                 **rows[0],
                 "_source": source,
                 "_entries": rows,
-                "Diagnostic": (
-                    rows[0].get("Diagnostic", "")
-                    if len(verdicts) == 1
-                    else "conflicting"
-                ),
+                "Diagnostic": verdict,
                 "User": ", ".join(users),
+                "Sample": ", ".join(samples),
             }
         )
 
@@ -250,12 +271,18 @@ def format_diagnostic_contributors(entry: Dict[str, Any]) -> str:
 
     Reads the ``_entries`` the row was merged from and returns a line such as
     ``"alice: pathogenic (2026-03-01) - bob: benign (2026-04-02)"``, which tells
-    the reader who disagreed when the row is marked ``"conflicting"``.
+    the reader who disagreed when the row is marked ``"conflicting"``. A row
+    covering more than one individual names the sample each record was made
+    against, since the curator alone no longer identifies it.
     """
+    records = entry.get("_entries", [])
+    show_sample = len({r.get("Sample", "") for r in records}) > 1
     parts = []
-    for row in entry.get("_entries", []):
-        user = row.get("User", "") or "unknown"
+    for row in records:
+        who = row.get("User", "") or "unknown"
+        if show_sample:
+            who = f"{who} on {row.get('Sample', '?')}"
         verdict = row.get("Diagnostic", "") or "?"
         date = row.get("Timestamp", "").split(" ")[0].split("T")[0]
-        parts.append(f"{user}: {verdict} ({date})" if date else f"{user}: {verdict}")
+        parts.append(f"{who}: {verdict} ({date})" if date else f"{who}: {verdict}")
     return " - ".join(parts)
