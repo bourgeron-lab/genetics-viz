@@ -59,6 +59,7 @@ from genetics_viz.utils.clinvar import (
     format_clinvar_display,
     get_clinvar_color,
 )
+from genetics_viz.utils.tsv import read_tsv_or_none
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
     format_consequence_display,
@@ -1239,13 +1240,14 @@ def search_cohort_page(cohort_name: str) -> None:
                 try:
                     # --- Helper: load a single wombat file ---
                     def _load_wombat_file(file_path: Path) -> Optional[pl.DataFrame]:
-                        _df = pl.read_csv(
+                        _df = read_tsv_or_none(
                             file_path,
-                            separator="\t",
                             infer_schema_length=10000,
                             schema_overrides=get_schema_overrides(),
                             null_values=[".", ""],
                         )
+                        if _df is None:
+                            return None
                         _drop = get_dropped_columns() & set(_df.columns)
                         if _drop:
                             _df = _df.drop(list(_drop))
