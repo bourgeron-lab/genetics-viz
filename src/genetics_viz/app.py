@@ -12,6 +12,7 @@ This is the main entry point for the application. All pages are modular:
 """
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from nicegui import app as nicegui_app
@@ -30,6 +31,20 @@ from genetics_viz.pages import (  # noqa: F401
     search,
     validation,
 )
+
+
+@nicegui_app.get("/health")
+def health() -> dict:
+    """Liveness probe and version report, used by the deployment's status job.
+
+    Deliberately unauthenticated so the F5 pool monitor and CI can reach it.
+    Reports nothing beyond liveness and the running release.
+    """
+    try:
+        running = version("genetics-viz")
+    except PackageNotFoundError:
+        running = "unknown"
+    return {"status": "ok", "version": running}
 
 
 def run_app(
