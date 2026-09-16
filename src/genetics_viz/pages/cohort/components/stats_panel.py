@@ -10,6 +10,7 @@ from nicegui import run, ui
 
 from genetics_viz.models import Cohort, DataStore
 from genetics_viz.utils.genesets import load_genesets
+from genetics_viz.utils.tsv import read_tsv_or_none
 
 
 def _discover_wombat_configs(store: DataStore, cohort: Cohort) -> List[str]:
@@ -55,12 +56,13 @@ def _count_variants_per_sample(
     If geneset_genes is provided, only count variants where VEP_SYMBOL
     overlaps the gene set. Returns {sample_id: variant_count}.
     """
-    df = pl.read_csv(
+    df = read_tsv_or_none(
         tsv_path,
-        separator="\t",
         infer_schema_length=0,
         null_values=[".", ""],
     )
+    if df is None:
+        return {}
 
     # Ensure required columns exist
     required = {"#CHROM", "POS", "REF", "ALT", "sample"}

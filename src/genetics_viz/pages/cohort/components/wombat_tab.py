@@ -12,6 +12,7 @@ from nicegui import ui
 
 from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.utils.sharding import get_family_path
+from genetics_viz.utils.tsv import read_tsv_or_none
 from genetics_viz.components.filters import create_validation_filter_menu
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
@@ -132,17 +133,20 @@ def render_wombat_tab(
     config_has_data: Dict[str, bool] = {}
     for wf in wombat_files:
         try:
-            df = pl.read_csv(
+            # An empty file comes back as None: wombat leaves one behind when a
+            # step had nothing to report, so it needs no warning - the sub-tab
+            # is simply disabled below, same as a header-only file.
+            df = read_tsv_or_none(
                 wf["file_path"],
-                separator="\t",
                 infer_schema_length=10000,
                 schema_overrides=get_schema_overrides(),
                 null_values=[".", ""],
             )
-            _drop = get_dropped_columns() & set(df.columns)
-            if _drop:
-                df = df.drop(list(_drop))
-            if len(df) == 0:
+            if df is not None:
+                _drop = get_dropped_columns() & set(df.columns)
+                if _drop:
+                    df = df.drop(list(_drop))
+            if df is None or len(df) == 0:
                 config_has_data[wf["wombat_config"]] = False
             else:
                 config_has_data[wf["wombat_config"]] = True

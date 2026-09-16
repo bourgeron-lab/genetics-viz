@@ -8,6 +8,7 @@ from nicegui import ui
 
 from genetics_viz.components.diagnostic_loader import (
     ensure_diagnostic_file,
+    format_diagnostic_contributors,
     load_family_diagnostics,
 )
 from genetics_viz.components.header import create_header
@@ -18,6 +19,9 @@ from genetics_viz.components.notes_loader import (
     save_note,
 )
 from genetics_viz.components.sample_dialog import show_sample_dialog
+from genetics_viz.pages.cohort.components.member_selector import (
+    render_member_selector,
+)
 from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
 from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
 from genetics_viz.pages.cohort.family import (
@@ -164,132 +168,15 @@ async def standalone_family_page(family_id: str) -> None:
             selected_members: Dict[str, List[str]] = {
                 "value": [m["Sample ID"] for m in members_data]
             }
-            member_checkboxes: dict = {}
             data_table_refreshers: List = []
 
             if members_data:
                 with ui.row().classes("w-full gap-4 items-start"):
-                    with ui.card().classes("flex-1"):
-                        # Member selection checkboxes
-                        with ui.column().classes("p-4 bg-blue-50"):
-                            with ui.row().classes("items-center gap-2 mb-2"):
-                                ui.label("Select Members to Display:").classes(
-                                    "font-semibold text-blue-800"
-                                )
-
-                                def select_all():
-                                    selected_members["value"] = [
-                                        m["Sample ID"] for m in members_data
-                                    ]
-                                    for cb in member_checkboxes.values():
-                                        cb.value = True
-                                    for refresher in data_table_refreshers:
-                                        refresher()
-
-                                def select_none():
-                                    selected_members["value"] = []
-                                    for cb in member_checkboxes.values():
-                                        cb.value = False
-                                    for refresher in data_table_refreshers:
-                                        refresher()
-
-                                ui.button("All", on_click=select_all).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-                                ui.button("None", on_click=select_none).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-
-                            # Native NiceGUI grid layout — no JS DOM manipulation.
-                            _GRID_STYLE = (
-                                "display: grid;"
-                                " grid-template-columns:"
-                                " auto auto 1fr 1fr 1fr auto auto;"
-                                " gap: 0;"
-                                " align-items: center;"
-                            )
-
-                            # Header row
-                            with (
-                                ui.element("div")
-                                .classes("w-full bg-blue-100 text-sm")
-                                .style(_GRID_STYLE)
-                            ):
-                                for header in (
-                                    "Select",
-                                    "",
-                                    "Sample ID",
-                                    "Father",
-                                    "Mother",
-                                    "Sex",
-                                    "Phenotype",
-                                ):
-                                    ui.label(header).classes("px-3 py-2 font-semibold")
-
-                            # Data rows
-                            for idx, member in enumerate(members_data):
-                                sid = member["Sample ID"]
-                                bg = "bg-white" if idx % 2 == 0 else "bg-gray-50"
-
-                                def make_change(s):
-                                    def handler(e):
-                                        if (
-                                            e.value
-                                            and s not in selected_members["value"]
-                                        ):
-                                            selected_members["value"].append(s)
-                                        elif (
-                                            not e.value
-                                            and s in selected_members["value"]
-                                        ):
-                                            selected_members["value"].remove(s)
-                                        for refresher in data_table_refreshers:
-                                            refresher()
-
-                                    return handler
-
-                                def make_only(s):
-                                    def handler():
-                                        selected_members["value"] = [s]
-                                        for s_id, cb in member_checkboxes.items():
-                                            cb.value = s_id == s
-                                        for refresher in data_table_refreshers:
-                                            refresher()
-
-                                    return handler
-
-                                with (
-                                    ui.element("div")
-                                    .classes(
-                                        f"w-full {bg} border-b border-gray-200 text-sm"
-                                    )
-                                    .style(_GRID_STYLE)
-                                ):
-                                    with ui.element("div").classes("px-3 py-2"):
-                                        member_checkboxes[sid] = ui.checkbox(
-                                            "",
-                                            value=True,
-                                            on_change=make_change(sid),
-                                        )
-                                    with ui.element("div").classes("px-3 py-2"):
-                                        ui.button(
-                                            "only", on_click=make_only(sid)
-                                        ).props(
-                                            "size=xs flat dense color=blue"
-                                        ).classes("text-xs")
-                                    ui.label(sid).classes("px-3 py-2 font-medium")
-                                    ui.label(member.get("Father", "-")).classes(
-                                        "px-3 py-2 text-gray-600"
-                                    )
-                                    ui.label(member.get("Mother", "-")).classes(
-                                        "px-3 py-2 text-gray-600"
-                                    )
-                                    ui.label(member.get("Sex", "-")).classes(
-                                        "px-3 py-2 text-gray-600"
-                                    )
-                                    ui.label(member.get("Phenotype", "-")).classes(
-                                        "px-3 py-2 text-gray-600"
-                                    )
+                    render_member_selector(
+                        members_data=members_data,
+                        selected_members=selected_members,
+                        data_table_refreshers=data_table_refreshers,
+                    )
 
                     # ---- Right column: Notes + Diagnostics ----
                     with ui.column().classes("flex-1 gap-4"):
@@ -477,9 +364,15 @@ async def standalone_family_page(family_id: str) -> None:
                                         ui.label(entry.get("Sample", "")).classes(
                                             "text-xs text-gray-600"
                                         )
-                                        ui.label(entry.get("User", "")).classes(
-                                            "text-xs text-gray-400"
-                                        )
+                                        # One row can merge several curators, so
+                                        # spell out who recorded what on hover.
+                                        user_label = ui.label(
+                                            entry.get("User", "")
+                                        ).classes("text-xs text-gray-400")
+                                        if len(entry.get("_entries", [])) > 1:
+                                            user_label.tooltip(
+                                                format_diagnostic_contributors(entry)
+                                            )
 
                             render_diagnostics()
                             data_table_refreshers.append(render_diagnostics.refresh)
