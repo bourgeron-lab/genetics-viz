@@ -102,6 +102,13 @@ user_list:
     password: "<sha512-hex-digest>"
     role: reader
 
+# Optional. Root of the ancestry/PGS references tree, holding one
+# v<bundle_version>/ subdirectory per reference bundle. The version to use is
+# derived from the per-family data filenames, so it is not configured here.
+# Without this key, the Ancestry tab still plots each family's own samples but
+# cannot draw the reference panel behind them.
+ancestry_reference_dir: /path/to/references/ancestry-pgs
+
 # Auto-generated on first run — do not edit manually
 storage_secret: "<hex-string>"
 ```

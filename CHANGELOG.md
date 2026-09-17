@@ -5,6 +5,67 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-17
+
+### Added
+- **Ancestry tab on the family page** — the family's samples projected onto the versioned `ancestry-pgs` reference panel. Four scatter plots: PC1×PC2 and PC3×PC4 over the full panel, then the same pair zoomed to a window covering the family plus every reference sample of the regions predicted for it (~13× magnification for a single-region family). The reference cloud is one series per region, so the legend toggles regions, and it is `silent` so it never steals a tooltip from a family point. Family samples are labelled diamonds filled with their predicted region colour, red-bordered when flagged as outliers. Above the plots, a table of predicted region, population, both confidences, kNN distances, local reference density and the outlier flag.
+- **Polygenic Scores tab** — the per-family `pgs_zscore.tsv`, which the pipeline writes wide (one row per sample, ~100 score columns), transposed to one row per trait and one column per member, with a diverging colour scale on the z-scores and a text filter on the trait name.
+- **`ancestry_reference_dir` config key** — root of the references tree. The bundle version subdirectory is derived per family from its own filename tag (`apgs_b1.0.0` → `v1.0.0`), so each family is plotted against the panel it was actually projected onto rather than a globally pinned one. The reference panel is cached per bundle and read once, not per page load.
+- **`config/ancestry.yaml`** — colourblind-safe reference region colours and the PGS z-score colour scale.
+- Both tabs carry existence probes and are disabled for families with no `ancestry/` directory, which is currently the majority. They are wired into the cohort-scoped and the standalone family page.
+
+### Fixed
+- **`save_config` no longer drops unknown top-level keys.** It rewrites the whole YAML from known fields, so `poll_interval` was already being silently deleted the next time an administrator added a user or a data directory; `ancestry_reference_dir` would have inherited the same fate. Both are now emitted when they carry information.
+- A missing or unconfigured reference panel is treated as a degraded state rather than a failure: the Ancestry tab still plots the family's own samples and names the missing config key, instead of erroring.
+
+### Changed
+- CLAUDE.md structure listing corrected — the continuous-score config file is `config/continuous_scores.yaml`, not `config/score_colors.yaml`.
+
+## [0.9.2] - 2026-09-16
+
+### Added
+- **Tabbed family information panel** — Notes and Diagnostics moved into a **General** tab, joined by **Ancestry** and **Polygenic Scores** placeholders. General opens by default, and a half-typed note survives a visit to another tab.
+- **`/health` endpoint** — unauthenticated liveness probe reporting the running version from `importlib.metadata`, so a deployment can assert that the release it asked for is the one answering. Left unauthenticated on purpose so a pool monitor can use it instead of a bare TCP connect.
+
+### Changed
+- **Pedigree table is much shorter** — row pitch dropped from 73px to 29px and the table from 640px to 260px for an eight-member family, by removing the inter-row flex gap and using a dense checkbox.
+- The member table became a shared `render_member_selector` component, so the standalone family page — which carried a near-verbatim copy with the same bugs — is fixed by the same change.
+
+### Fixed
+- **Pedigree table alignment** — the grid style was applied to the header row and each member row separately, making every row an independent grid sized to its own content. Six of seven columns drifted by up to 75px. A single grid container now holds every cell.
+- **Diagnostics merged across curators** — a variant recorded by two curators appeared twice; it is now one row, with a tooltip listing each curator's own verdict and date.
+- **Diagnostics merged across individuals** — a variant reaching the same verdict in several family members is one row listing every barcode in pedigree order. Members that reached *different* verdicts stay on separate rows.
+- **Empty wombat files no longer log as failures** — wombat leaves a zero-byte file when a step had nothing to report (a family without two sequenced parents has no de novo mutations) and polars raises `NoDataError` on it, which was being caught by the handler meant for real failures and logging a traceback on every visit. A new `read_tsv_or_none` helper returns `None` for such a file, leaving `FileNotFoundError` to propagate.
+
+## [0.9.1] - 2026-08-25
+
+### Fixed
+- **Pinned TanStack table-core to 8.21.3 on the CDN** — the jsDelivr URL was unpinned, so it resolved to whatever npm tagged `latest`. TanStack Table v9.1.2 became `latest` and dropped the `getCoreRowModel` export, so every table threw `TanStack.getCoreRowModel is not a function` at load time and never rendered.
+
+## [0.9.0] - 2026-05-20
+
+### Added
+- **Top-level tab disabling** — the Wombat and SVs tabs on the family page are greyed out and unclickable when no data files exist for a family.
+- **Sub-tab disabling** — within Wombat, sub-tabs whose DataFrame is empty are disabled rather than showing blank content, distinguishing "step ran but found nothing" from "step was not run".
+- **Variant count badges** — enabled sub-tabs show a count, e.g. `config_name (42)`, so the volume is visible without opening the tab.
+- **Smart default selection** — the first tab with actual data is auto-selected, skipping disabled ones.
+- Lightweight `probe_wombat_data()` / `probe_svs_data()` helpers check for data existence without a full DataFrame load, so tab state can be decided before rendering.
+
+## [0.8.1] - 2026-05-19
+
+### Fixed
+- **Deferred config save until the password dialog is closed** — in admin user management, `save_config()` ran before showing the generated password, so the app could reload before the administrator had copied it. The YAML write now happens only when the dialog is dismissed.
+
+## [0.8.0] - 2026-05-19
+
+### Added
+- **Live data refresh** — filesystem changes are detected automatically; no restart when cohorts are added, removed or updated on disk.
+- **Background polling** — one server-wide task checks all data directories every 30 seconds for new, removed or modified cohort pedigree files, using `asyncio.to_thread()` for the stat calls so the event loop stays responsive.
+- **Toast notifications** — connected browsers are told what changed.
+- **Manual refresh button** in the header for an immediate check.
+- **Atomic reload** — `DataStore` rebuilds its cohort dict in a local variable before swapping, so concurrent page loads always see a consistent state.
+- **`poll_interval: <seconds>`** config key to adjust the polling interval (default 30).
+
 ## [0.7.9] - 2026-04-08
 
 ### Added

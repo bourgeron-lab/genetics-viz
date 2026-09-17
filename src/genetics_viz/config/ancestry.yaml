@@ -1,0 +1,40 @@
+# Ancestry / polygenic score display configuration.
+#
+# Consumed by utils/ancestry.py. The reference panel root itself is not here —
+# it is deployment-specific and comes from the ``ancestry_reference_dir`` key
+# of the application YAML config.
+
+# Colors for the reference panel regions, used both for the PCA scatter series
+# and for the predicted-region badges. Okabe-Ito derived, colorblind-safe.
+# ``unknown`` is the fallback for any region not listed here.
+region_colors:
+  EUR: "#0072b2" # blue
+  EAS: "#d55e00" # vermillion
+  AFR: "#009e73" # bluish green
+  CSA: "#cc79a7" # reddish purple
+  MID: "#e69f00" # orange
+  AMR: "#56b4e9" # sky blue
+  MAGHREB: "#8c564b" # brown
+  OCE: "#7f3fbf" # purple
+  unknown: "#94a3b8" # slate-400
+
+# Diverging color scale for PGS z-scores, evaluated first-match-wins by the
+# ``color_scale`` cell type. Clamped at +/-3; values in between render with the
+# table's default text color.
+pgs_zscore_thresholds:
+  - op: "<="
+    value: -3
+    color: "#1565c0" # blue-8
+    weight: "bold"
+  - op: "<="
+    value: -2
+    color: "#42a5f5" # blue-4
+    weight: "600"
+  - op: ">="
+    value: 3
+    color: "#b71c1c" # red-9
+    weight: "bold"
+  - op: ">="
+    value: 2
+    color: "#ef5350" # red-4
+    weight: "600"

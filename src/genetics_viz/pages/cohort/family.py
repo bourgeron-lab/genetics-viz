@@ -17,8 +17,16 @@ from genetics_viz.components.notes_loader import (
     load_family_notes,
     save_note,
 )
+from genetics_viz.pages.cohort.components.ancestry_tab import (
+    probe_ancestry_data,
+    render_ancestry_tab,
+)
 from genetics_viz.pages.cohort.components.member_selector import (
     render_member_selector,
+)
+from genetics_viz.pages.cohort.components.pgs_tab import (
+    probe_pgs_data,
+    render_pgs_tab,
 )
 from genetics_viz.pages.cohort.components.svs_tab import probe_svs_data, render_svs_tab
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
@@ -183,8 +191,6 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 with ui.column().classes("flex-1").style("gap: 0.5rem; min-width: 0"):
                     with ui.tabs().classes("w-full") as info_tabs:
                         general_tab = ui.tab("General")
-                        ancestry_tab = ui.tab("Ancestry")
-                        prs_tab = ui.tab("Polygenic Scores")
 
                     with ui.tab_panels(info_tabs, value=general_tab).classes("w-full"):
                         with ui.tab_panel(general_tab).classes(
@@ -391,43 +397,51 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                 render_diagnostics_panel.refresh
                             )
 
-                        with ui.tab_panel(ancestry_tab).classes(
-                            "w-full border border-gray-300 rounded-lg p-4"
-                        ):
-                            ui.label("Ancestry analysis — not yet implemented").classes(
-                                "text-gray-500 italic"
-                            )
-
-                        with ui.tab_panel(prs_tab).classes(
-                            "w-full border border-gray-300 rounded-lg p-4"
-                        ):
-                            ui.label("Polygenic scores — not yet implemented").classes(
-                                "text-gray-500 italic"
-                            )
-
             # Pre-check data existence for each analysis tab
             has_wombat = probe_wombat_data(store.data_dir, family_id)
             has_svs = probe_svs_data(store.data_dir, family_id)
+            has_ancestry = probe_ancestry_data(store.data_dir, family_id)
+            has_pgs = probe_pgs_data(store.data_dir, family_id)
 
             # Track loading state for each tab
             wombat_state = {"loaded": False}
             svs_state = {"loaded": False}
-
-            # Pick the first enabled tab as the default
-            default_tab_name = (
-                "wombat" if has_wombat else "svs" if has_svs else "wombat"
-            )
+            ancestry_state = {"loaded": False}
+            pgs_state = {"loaded": False}
 
             # Analysis tabs section
             with ui.tabs().classes("w-full") as tabs:
                 wombat_tab = ui.tab("Wombat")
                 svs_tab = ui.tab("SVs")
+                ancestry_tab = ui.tab("Ancestry")
+                pgs_tab = ui.tab("Polygenic Scores")
                 if not has_wombat:
                     wombat_tab.props("disable")
                 if not has_svs:
                     svs_tab.props("disable")
+                if not has_ancestry:
+                    ancestry_tab.props("disable")
+                if not has_pgs:
+                    pgs_tab.props("disable")
 
-            default_tab = wombat_tab if default_tab_name == "wombat" else svs_tab
+            # Pick the first enabled tab as the default
+            if has_wombat:
+                default_tab_name = "wombat"
+            elif has_svs:
+                default_tab_name = "svs"
+            elif has_ancestry:
+                default_tab_name = "ancestry"
+            elif has_pgs:
+                default_tab_name = "pgs"
+            else:
+                default_tab_name = "wombat"
+
+            default_tab = {
+                "wombat": wombat_tab,
+                "svs": svs_tab,
+                "ancestry": ancestry_tab,
+                "pgs": pgs_tab,
+            }[default_tab_name]
 
             with ui.tab_panels(tabs, value=default_tab).classes("w-full"):
                 # Wombat tab panel
@@ -490,39 +504,103 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                     svs_content()
 
+                # Ancestry tab panel
+                with ui.tab_panel(ancestry_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+
+                    @ui.refreshable
+                    def ancestry_content():
+                        if not has_ancestry:
+                            ui.label("No ancestry data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif ancestry_state["loaded"]:
+                            render_ancestry_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading ancestry...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    ancestry_content()
+
+                # Polygenic scores tab panel
+                with ui.tab_panel(pgs_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+
+                    @ui.refreshable
+                    def pgs_content():
+                        if not has_pgs:
+                            ui.label("No polygenic score data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif pgs_state["loaded"]:
+                            render_pgs_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading polygenic scores...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    pgs_content()
+
+            # Each tab loads its data on first view: keyed by the tab name that
+            # the "update:model-value" event reports.
+            lazy_tabs = {
+                "Wombat": (has_wombat, wombat_state, wombat_content),
+                "SVs": (has_svs, svs_state, svs_content),
+                "Ancestry": (has_ancestry, ancestry_state, ancestry_content),
+                "Polygenic Scores": (has_pgs, pgs_state, pgs_content),
+            }
+            tab_names = {
+                "wombat": "Wombat",
+                "svs": "SVs",
+                "ancestry": "Ancestry",
+                "pgs": "Polygenic Scores",
+            }
+
+            def make_loader(state, content):
+                def load():
+                    state["loaded"] = True
+                    content.refresh()
+
+                return load
+
             # Load the default tab data asynchronously
-            if has_wombat:
-
-                def load_wombat_async():
-                    wombat_state["loaded"] = True
-                    wombat_content.refresh()
-
-                ui.timer(0.1, load_wombat_async, once=True)
-            elif has_svs:
-                # SVs is the default tab when Wombat has no data
-                def load_svs_default():
-                    svs_state["loaded"] = True
-                    svs_content.refresh()
-
-                ui.timer(0.1, load_svs_default, once=True)
+            default_available, default_state, default_content = lazy_tabs[
+                tab_names[default_tab_name]
+            ]
+            if default_available:
+                ui.timer(0.1, make_loader(default_state, default_content), once=True)
 
             # Lazy load tabs when clicked
             def on_tab_change(e):
-                tab_value = e.args
-                if tab_value == "Wombat" and not wombat_state["loaded"] and has_wombat:
-
-                    def load_wombat_lazy():
-                        wombat_state["loaded"] = True
-                        wombat_content.refresh()
-
-                    ui.timer(0.1, load_wombat_lazy, once=True)
-                elif tab_value == "SVs" and not svs_state["loaded"] and has_svs:
-
-                    def load_svs_lazy():
-                        svs_state["loaded"] = True
-                        svs_content.refresh()
-
-                    ui.timer(0.1, load_svs_lazy, once=True)
+                entry = lazy_tabs.get(e.args)
+                if entry is None:
+                    return
+                available, state, content = entry
+                if available and not state["loaded"]:
+                    ui.timer(0.1, make_loader(state, content), once=True)
 
             tabs.on("update:model-value", on_tab_change)
 

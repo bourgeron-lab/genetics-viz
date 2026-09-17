@@ -41,6 +41,7 @@ class AppConfig:
     user_list: list[UserConfig] = field(default_factory=list)
     storage_secret: str = ""
     poll_interval: int = 30
+    ancestry_reference_dir: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +128,7 @@ def load_config(config_path: Path) -> AppConfig:
         storage_secret = secrets.token_hex(32)
 
     poll_interval = int(raw.get("poll_interval", 30))
+    ancestry_reference_dir = str(raw.get("ancestry_reference_dir", ""))
 
     config = AppConfig(
         config_path=config_path,
@@ -134,6 +136,7 @@ def load_config(config_path: Path) -> AppConfig:
         user_list=users,
         storage_secret=storage_secret,
         poll_interval=poll_interval,
+        ancestry_reference_dir=ancestry_reference_dir,
     )
     _app_config = config
 
@@ -170,6 +173,14 @@ def save_config(config: AppConfig) -> None:
         "storage_secret": config.storage_secret,
     }
 
+    # Emit the remaining top-level keys only when they carry information.
+    # ``save_config`` rewrites the whole file from known fields, so anything
+    # omitted here is silently dropped the next time an admin saves.
+    if config.ancestry_reference_dir:
+        data["ancestry_reference_dir"] = config.ancestry_reference_dir
+    if config.poll_interval != 30:
+        data["poll_interval"] = config.poll_interval
+
     with open(config.config_path, "w") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
@@ -187,3 +198,17 @@ def get_default_data_dir(config: AppConfig) -> str:
     if config.data_directories:
         return config.data_directories[0].path
     return ""
+
+
+def get_ancestry_reference_dir() -> Optional[Path]:
+    """Return the ancestry/PGS reference bundle root, or ``None`` when unset.
+
+    The directory holds one ``v<bundle_version>/`` subdirectory per reference
+    bundle; the version to use is derived from the per-family data filenames
+    rather than configured here.
+    """
+    if _app_config is None:
+        return None
+    if not _app_config.ancestry_reference_dir:
+        return None
+    return Path(_app_config.ancestry_reference_dir)

@@ -34,10 +34,11 @@ src/genetics_viz/
     sv_dialog.py                  # IGV SV inspection dialog
     diagnostic_dialog.py          # Diagnostic review dialog
   config/                         # YAML config files (loaded at module level)
+    ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
     clinvar_colors.yaml           # ClinVar significance term -> color
     column_names.yaml             # Column display names, groups, sorting, drop flags
     cytobands_hg38.tsv            # Cytoband data for ideogram rendering
-    score_colors.yaml             # Continuous score color ranges
+    continuous_scores.yaml        # Continuous score color ranges
     vep_consequences.yaml         # VEP consequence terms, impacts, colors
     view_presets.yaml             # Column visibility presets
   pages/
@@ -52,6 +53,8 @@ src/genetics_viz/
       cohort.py                   # Cohort overview page
       family.py                   # Family detail page with tabs
       components/
+        ancestry_tab.py           # Ancestry PCA tab (per-family)
+        pgs_tab.py                # Polygenic scores tab (per-family)
         wombat_tab.py             # WOMBAT analysis tab (per-family)
         dnm_tab.py                # DNM analysis tab (per-family)
         svs_tab.py                # SV analysis tab (per-family)
@@ -66,6 +69,7 @@ src/genetics_viz/
       all.py                      # Aggregated diagnostic page
       statistics.py               # Diagnostic statistics page
   utils/
+    ancestry.py                   # Ancestry/PGS file discovery, reference panel, colors
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
     cytobands.py                  # Cytoband, chromosome, ideogram constants
@@ -127,6 +131,12 @@ Config files (YAML) are loaded once at module level.
 - Use `get_sample_path(data_dir, id)` / `get_family_path(data_dir, id)` for filesystem paths.
 - Use `get_sample_url(data_dir, id)` / `get_family_url(data_dir, id)` for URL segments.
 - All functions in `utils/sharding.py`. Never construct `samples/{id}` or `families/{id}` paths manually.
+
+### Ancestry / Polygenic Scores
+- Per-family results live in `<family>/ancestry/`, named `<family_id>.apgs_b<bundle>_<filters>.<kind>.tsv` (kinds: `pcs`, `ancestry`, `pgs_zscore`). The bundle version contains dots, so discovery regexes need a lazy `(.+?)` capture, not `([^.]+)`.
+- The PCs are projections onto a **versioned** reference panel, so the panel a family is plotted against is the one named in its own filename tag. Config supplies only the root (`ancestry_reference_dir`); the `v<bundle>/bundle/labels/reference_pcs.tsv.gz` path below it is derived per family. Never read the reference root from the `.qc.json` files — they record the compute-cluster path.
+- A missing reference panel is a degraded state, not an error: the Ancestry tab still plots the family's own samples.
+- `utils/ancestry.py` holds discovery, probes, the cached reference panel, region colours, and the shared `NULL_VALUES` — the PGS z-score file writes the literal string `nan`, which must be nulled or polars types the column as a string and sorting breaks.
 
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.
