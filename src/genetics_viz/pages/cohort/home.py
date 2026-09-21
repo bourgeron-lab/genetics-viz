@@ -13,6 +13,11 @@ from genetics_viz.components.sample_dialog import show_sample_dialog
 from genetics_viz.models import Cohort
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.pedigree_labels import (
+    PHENO_LABELS,
+    PHENO_ORDER,
+    normalize_pheno,
+)
 from genetics_viz.utils.data_availability import (
     check_family_availability,
     check_sample_availability,
@@ -22,26 +27,6 @@ from genetics_viz.utils.sharding import get_family_path, get_sample_path
 
 # Diagnostic priority for "highest" resolution
 _DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
-
-# Display order and labels for phenotype categories
-_PHENO_ORDER = ["2", "1", "-9"]
-_PHENO_LABELS = {"2": "2 (aff)", "1": "1 (unaff)", "-9": "-9 (unk)"}
-
-
-def _normalize_pheno(pheno: str | None) -> str:
-    """Normalize a phenotype value to '1', '2', or '-9'.
-
-    Strips trailing .0 and maps None/empty to '-9' (unknown).
-    Any unknown value is bucketed under '-9'.
-    """
-    if pheno is None or pheno == "":
-        return "-9"
-    # Strip trailing .0 from float-stringified values
-    if pheno.endswith(".0"):
-        pheno = pheno[:-2]
-    if pheno in ("1", "2", "-9"):
-        return pheno
-    return "-9"
 
 
 def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
@@ -54,7 +39,7 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
     sample_pheno: Dict[str, str] = {}
     for fam in cohort.families.values():
         for s in fam.samples:
-            sample_pheno[s.sample_id] = _normalize_pheno(s.phenotype)
+            sample_pheno[s.sample_id] = normalize_pheno(s.phenotype)
 
     # Load diagnostics per sample (highest priority wins)
     sample_diag: Dict[str, str] = defaultdict(str)
@@ -77,7 +62,7 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
 
     # Bucket by phenotype
     per_pheno: Dict[str, Dict[str, int]] = {
-        key: {"n": 0, "pathogenic": 0, "uncertain": 0} for key in _PHENO_ORDER
+        key: {"n": 0, "pathogenic": 0, "uncertain": 0} for key in PHENO_ORDER
     }
     for sample_id, pheno in sample_pheno.items():
         bucket = per_pheno[pheno]
@@ -370,7 +355,7 @@ async def home_page() -> None:
                             # Per-phenotype breakdown table
                             per_pheno = stats["per_pheno"]
                             non_empty = [
-                                p for p in _PHENO_ORDER if per_pheno[p]["n"] > 0
+                                p for p in PHENO_ORDER if per_pheno[p]["n"] > 0
                             ]
                             if non_empty:
                                 with ui.element("div").classes(
@@ -402,7 +387,7 @@ async def home_page() -> None:
                                                 (pat + unc) / n * 100 if n > 0 else 0
                                             )
 
-                                            ui.label(_PHENO_LABELS[pheno_key]).classes(
+                                            ui.label(PHENO_LABELS[pheno_key]).classes(
                                                 "text-gray-700 whitespace-nowrap"
                                             )
                                             ui.label(str(n)).classes(

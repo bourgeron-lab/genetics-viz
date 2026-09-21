@@ -2,12 +2,20 @@
 
 import csv
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.pages.cohort.components.cohort_ancestry_tab import (
+    probe_cohort_ancestry_data,
+    render_cohort_ancestry_tab,
+)
+from genetics_viz.pages.cohort.components.cohort_pgs_tab import (
+    probe_cohort_pgs_data,
+    render_cohort_pgs_tab,
+)
 from genetics_viz.pages.cohort.components.stats_panel import render_stats_panel
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
@@ -98,10 +106,15 @@ def cohort_page(cohort_name: str) -> None:
                 ui.badge(f"{cohort.num_families} families").props("color=blue")
                 ui.badge(f"{cohort.num_samples} samples").props("color=teal")
 
-            # Shared filtered state for statistics panel
+            # Shared filtered state for the right-hand panels
             filtered_state: Dict[str, Any] = {
                 "individuals": list(all_individuals),
             }
+
+            # Refresh callbacks of the panels that follow the table filters.
+            # Only tabs that have actually been loaded register here, so a
+            # filter change never forces work for a tab never opened.
+            refreshers: List[Callable[[], None]] = []
 
             # Side-by-side layout: table + statistics panel
             with ui.row().classes("w-full items-start gap-4"):
@@ -185,6 +198,10 @@ def cohort_page(cohort_name: str) -> None:
 
                         if dt_ref["dt"]:
                             dt_ref["dt"].update_data(filtered)
+
+                        # Re-render the panels that follow the filters
+                        for refresher in refreshers:
+                            refresher()
 
                     dt = DataTable(
                         columns=[
@@ -270,9 +287,101 @@ def cohort_page(cohort_name: str) -> None:
                     )
                     dt_ref["dt"] = dt
 
-                # Right: statistics panel
-                with ui.column().classes("flex-1 min-w-[400px]"):
-                    render_stats_panel(store, cohort, filtered_state)
+                # Right: tabbed panel — Statistics, Ancestry, Polygenic Scores
+                has_ancestry = probe_cohort_ancestry_data(cohort)
+                has_pgs = probe_cohort_pgs_data(cohort)
+
+                # Each tab reads its TSVs on first view, not on first paint.
+                tab_state: Dict[str, Dict[str, bool]] = {
+                    "Ancestry": {"loaded": False},
+                    "Polygenic Scores": {"loaded": False},
+                }
+
+                # "min-width: 0" lets the flex item shrink below its content;
+                # without it the tab row and plots push the table sideways.
+                with ui.column().classes("flex-1 min-w-[400px]").style("min-width: 0"):
+                    with ui.tabs().classes("w-full") as panel_tabs:
+                        stats_tab = ui.tab("Statistics")
+                        ancestry_tab = ui.tab("Ancestry")
+                        pgs_tab = ui.tab("Polygenic Scores")
+                        if not has_ancestry:
+                            ancestry_tab.props("disable")
+                        if not has_pgs:
+                            pgs_tab.props("disable")
+
+                    with ui.tab_panels(panel_tabs, value=stats_tab).classes("w-full"):
+                        # Each renderer opens its own card, so the panels carry
+                        # no border of their own and the chrome is not doubled.
+                        with ui.tab_panel(stats_tab).classes("w-full p-0"):
+                            render_stats_panel(store, cohort, filtered_state)
+
+                        with ui.tab_panel(ancestry_tab).classes("w-full p-0"):
+
+                            @ui.refreshable
+                            def ancestry_content() -> None:
+                                if not has_ancestry:
+                                    ui.label(
+                                        "No cohort-level ancestry results"
+                                    ).classes("text-gray-500 italic")
+                                elif tab_state["Ancestry"]["loaded"]:
+                                    render_cohort_ancestry_tab(
+                                        store, cohort, filtered_state, refreshers
+                                    )
+                                else:
+                                    with ui.column().classes(
+                                        "w-full items-center justify-center py-16"
+                                    ):
+                                        ui.spinner(size="xl", color="blue")
+                                        ui.label("Loading ancestry...").classes(
+                                            "text-lg text-gray-600 mt-4"
+                                        )
+
+                            ancestry_content()
+
+                        with ui.tab_panel(pgs_tab).classes("w-full p-0"):
+
+                            @ui.refreshable
+                            def pgs_content() -> None:
+                                if not has_pgs:
+                                    ui.label(
+                                        "No cohort-level polygenic score results"
+                                    ).classes("text-gray-500 italic")
+                                elif tab_state["Polygenic Scores"]["loaded"]:
+                                    render_cohort_pgs_tab(
+                                        store, cohort, filtered_state, refreshers
+                                    )
+                                else:
+                                    with ui.column().classes(
+                                        "w-full items-center justify-center py-16"
+                                    ):
+                                        ui.spinner(size="xl", color="blue")
+                                        ui.label("Loading polygenic scores...").classes(
+                                            "text-lg text-gray-600 mt-4"
+                                        )
+
+                            pgs_content()
+
+                    lazy_tabs = {
+                        "Ancestry": (has_ancestry, ancestry_content),
+                        "Polygenic Scores": (has_pgs, pgs_content),
+                    }
+
+                    def on_panel_tab_change(e: Any) -> None:
+                        entry = lazy_tabs.get(e.args)
+                        if entry is None:
+                            return
+                        available, content = entry
+                        state = tab_state[e.args]
+                        if not available or state["loaded"]:
+                            return
+
+                        def load() -> None:
+                            state["loaded"] = True
+                            content.refresh()
+
+                        ui.timer(0.1, load, once=True)
+
+                    panel_tabs.on("update:model-value", on_panel_tab_change)
 
     except RuntimeError as e:
         ui.label(f"Error: {e}").classes("text-red-500")

@@ -8,8 +8,7 @@ reference sample of the regions predicted for it.
 """
 
 import logging
-import math
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 import polars as pl
 from nicegui import ui
@@ -18,6 +17,7 @@ from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
     NULL_VALUES,
     AncestryFiles,
+    Variant,
     find_ancestry_files,
     get_ancestry_dir,
     get_reference_pcs_path,
@@ -25,34 +25,21 @@ from genetics_viz.utils.ancestry import (
     load_reference_pcs,
     probe_ancestry_data,
 )
+from genetics_viz.utils.ancestry_plots import (
+    Window,
+    reference_series,
+    round_coord,
+    tooltip_formatter,
+    zoom_window,
+)
 from genetics_viz.utils.tsv import read_tsv_or_none
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["probe_ancestry_data", "render_ancestry_tab"]
 
-#: Axis bounds for one plot: ``((x_min, x_max), (y_min, y_max))``.
-Window = Tuple[Tuple[float, float], Tuple[float, float]]
-
 #: The two principal component pairs plotted, in display order.
 _PC_PAIRS = (("PC1", "PC2"), ("PC3", "PC4"))
-
-#: Coordinates are rounded before being serialised - the reference panel
-#: contributes ~6.7k points to each plot and dominates the payload.
-_COORD_PRECISION = 5
-
-#: Fraction of the span added on each side of a zoom window, so no point sits
-#: exactly on an axis. Padding only ever grows the window, so the guarantee
-#: that it covers the family and the assigned regions still holds.
-_ZOOM_PADDING = 0.03
-
-#: Pad applied when a zoom window's span is zero - a single sample, or samples
-#: sharing a coordinate. Without it the axis would collapse to min == max.
-_ZOOM_MIN_PAD = 1e-3
-
-#: Axis bounds are rounded one digit finer than the point coordinates, so a
-#: rounded point can never fall outside the window that contains it.
-_BOUND_PRECISION = _COORD_PRECISION + 1
 
 _REGION_TABLE_COLUMNS = (
     ("IID", "Sample"),
@@ -67,122 +54,11 @@ _REGION_TABLE_COLUMNS = (
 )
 
 
-def _round(value: Any) -> Optional[float]:
-    """Round a PC coordinate, returning None when it is not a number."""
-    try:
-        return round(float(value), _COORD_PRECISION)
-    except (TypeError, ValueError):
-        return None
-
-
-def _axis_bounds(values: List[float]) -> Optional[Tuple[float, float]]:
-    """Pad the extent of ``values`` into an axis range.
-
-    The padded bounds are then rounded outwards to a step derived from the
-    span. ECharts draws an explicit ``min``/``max`` as an end tick, so raw
-    bounds would label the axis with something like ``-0.169274`` next to the
-    round ticks beside it. Rounding outwards only grows the range, so every
-    value stays inside it.
-    """
-    if not values:
-        return None
-    low, high = min(values), max(values)
-    pad = (high - low) * _ZOOM_PADDING or _ZOOM_MIN_PAD
-    low, high = low - pad, high + pad
-
-    span = high - low
-    if span <= 0:  # unreachable while pad > 0, but keeps log10 safe
-        return round(low, _BOUND_PRECISION), round(high, _BOUND_PRECISION)
-    step = 10 ** math.floor(math.log10(span)) / 5
-    return (
-        round(math.floor(low / step) * step, _BOUND_PRECISION),
-        round(math.ceil(high / step) * step, _BOUND_PRECISION),
-    )
-
-
-def _zoom_window(
-    rows: List[Dict],
-    reference: Optional[pl.DataFrame],
-    assigned_regions: List[str],
-    x_pc: str,
-    y_pc: str,
-) -> Optional[Window]:
-    """Compute the zoom window for one PC pair.
-
-    The window covers every family sample plus every reference sample of the
-    regions predicted for the family, so the family can be read against its own
-    ancestry cluster instead of the whole panel. With no predicted regions - an
-    ``ancestry.tsv`` that is missing or holds no region - it falls back to the
-    family's own extent.
-
-    Returns ``None`` when there is nothing to bound.
-    """
-    xs = [v for r in rows if (v := _round(r.get(x_pc))) is not None]
-    ys = [v for r in rows if (v := _round(r.get(y_pc))) is not None]
-
-    if reference is not None and assigned_regions:
-        assigned = reference.filter(pl.col("region").is_in(assigned_regions))
-        xs.extend(v for v in assigned[x_pc].to_list() if v is not None)
-        ys.extend(v for v in assigned[y_pc].to_list() if v is not None)
-
-    x_bounds, y_bounds = _axis_bounds(xs), _axis_bounds(ys)
-    if x_bounds is None or y_bounds is None:
-        return None
-    return x_bounds, y_bounds
-
-
-def _reference_series(
-    reference: pl.DataFrame,
-    x_pc: str,
-    y_pc: str,
-    window: Optional[Window] = None,
-) -> List[Dict]:
-    """Build one scatter series per reference region.
-
-    One series per region rather than one series overall, so the ECharts legend
-    toggles regions for free. The background is ``silent`` so it does not steal
-    tooltips from the family's own points.
-
-    When a ``window`` is given, every region's points are kept but those
-    outside the window are dropped: they would be clipped by the axes anyway,
-    and dropping them here keeps the payload down. The regions that survive are
-    the ones the legend offers, so a zoomed plot lists only what it can show.
-    """
-    if window is not None:
-        (x0, x1), (y0, y1) = window
-        reference = reference.filter(
-            pl.col(x_pc).is_between(x0, x1) & pl.col(y_pc).is_between(y0, y1)
-        )
-
-    series: List[Dict] = []
-    for (region,), group in reference.group_by(["region"], maintain_order=True):
-        points = []
-        for raw_x, raw_y in zip(group[x_pc].to_list(), group[y_pc].to_list()):
-            x, y = _round(raw_x), _round(raw_y)
-            if x is not None and y is not None:
-                points.append([x, y])
-        if not points:
-            continue
-        series.append(
-            {
-                "name": str(region),
-                "type": "scatter",
-                "data": points,
-                "symbolSize": 4,
-                "large": True,
-                "largeThreshold": 2000,
-                "silent": True,
-                "itemStyle": {"color": get_region_color(str(region)), "opacity": 0.45},
-            }
-        )
-    return series
-
-
 def _family_series(rows: List[Dict], x_pc: str, y_pc: str) -> Dict:
     """Build the foreground scatter series for the family's own samples."""
     data = []
     for row in rows:
-        x, y = _round(row.get(x_pc)), _round(row.get(y_pc))
+        x, y = round_coord(row.get(x_pc)), round_coord(row.get(y_pc))
         if x is None or y is None:
             continue
         region = row.get("region") or ""
@@ -223,27 +99,6 @@ def _family_series(rows: List[Dict], x_pc: str, y_pc: str) -> Dict:
     }
 
 
-def _tooltip_formatter(x_pc: str, y_pc: str) -> str:
-    """JS tooltip formatter showing the prediction for a family point.
-
-    The reference background is ``silent``, so only the family series reaches
-    this; the guard is there in case that ever changes.
-    """
-    return (
-        "function (p) {"
-        "  if (p.seriesName !== 'Family') { return ''; }"
-        "  var v = p.value;"
-        "  var conf = (v[4] === null || v[4] === undefined)"
-        "    ? '\u2014' : Number(v[4]).toFixed(2);"
-        "  return '<b>' + p.name + '</b><br/>'"
-        "    + 'Region: ' + v[2] + ' (' + conf + ')<br/>'"
-        "    + 'Population: ' + v[3] + '<br/>'"
-        f"    + '{x_pc}: ' + v[0].toFixed(4) + '<br/>'"
-        f"    + '{y_pc}: ' + v[1].toFixed(4);"
-        "}"
-    )
-
-
 def _plot_option(
     rows: List[Dict],
     reference: Optional[pl.DataFrame],
@@ -260,9 +115,7 @@ def _plot_option(
     the rendered window would not be the one that was computed.
     """
     series = (
-        _reference_series(reference, x_pc, y_pc, window)
-        if reference is not None
-        else []
+        reference_series(reference, x_pc, y_pc, window) if reference is not None else []
     )
     legend_names = [s["name"] for s in series]
     series.append(_family_series(rows, x_pc, y_pc))
@@ -284,7 +137,7 @@ def _plot_option(
         },
         # The ":" key prefix makes NiceGUI evaluate the value as a JS
         # function rather than passing it through as a string.
-        "tooltip": {"trigger": "item", ":formatter": _tooltip_formatter(x_pc, y_pc)},
+        "tooltip": {"trigger": "item", ":formatter": tooltip_formatter(x_pc, y_pc)},
         "legend": {"data": legend_names, "bottom": 0, "type": "scroll"},
         # The grid leaves room below for the x-axis name *and* the legend
         # underneath it; a smaller bottom margin makes the two collide.
@@ -408,42 +261,68 @@ def render_ancestry_tab(
         )
         return
 
-    try:
-        rows = _load_frames(files)
-    except Exception as e:
-        ui.label(f"Error reading ancestry files: {e}").classes("text-red-500 mt-4")
-        logger.warning("Failed to read ancestry files for %s", family_id, exc_info=True)
-        return
+    # Reloaded when the variant selector changes; every render reads from here.
+    state: Dict[str, Any] = {"files": files, "rows": None, "reference": None}
 
-    if rows is None:
+    def load_variant(variant: Optional[Variant] = None) -> bool:
+        """Read the frames for a variant. False when they cannot be read."""
+        selected = find_ancestry_files(store.data_dir, family_id, variant) or files
+        state["files"] = selected
+        try:
+            state["rows"] = _load_frames(selected)
+        except Exception:
+            logger.warning(
+                "Failed to read ancestry files for %s", family_id, exc_info=True
+            )
+            state["rows"] = None
+            return False
+        state["reference"] = load_reference_pcs(selected.bundle_version)
+        return state["rows"] is not None
+
+    if not load_variant():
         ui.label("No principal components in file").classes("text-gray-500 italic")
         return
 
-    reference = load_reference_pcs(files.bundle_version)
-
-    # Provenance line, plus a note when several bundle versions are present.
+    # Provenance line, with a selector when several variants are present.
     with ui.row().classes("items-center gap-2 mb-2"):
-        ui.label(files.label).classes("text-xs text-gray-500")
-        if files.other_variants:
-            others = ", ".join(f"{b} / {f}" for b, f in files.other_variants)
-            ui.icon("info_outline", color="grey").classes(
-                "text-sm cursor-help"
-            ).tooltip(f"Also present, not shown: {others}")
+        provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
 
-    if reference is None:
-        reference_path = get_reference_pcs_path(files.bundle_version)
-        detail = (
-            "set 'ancestry_reference_dir' in the application config"
-            if reference_path is None
-            else f"expected at {reference_path}"
-        )
-        ui.label(
-            f"Reference panel unavailable for bundle {files.bundle_version}"
-            f" — {detail}. Showing the family's samples only."
-        ).classes("text-orange-600 text-sm mb-2")
+    if len(files.all_variants) > 1:
+
+        def on_variant(event: Any) -> None:
+            bundle, tag = event.value.split(" / ", 1)
+            load_variant((bundle, tag))
+            provenance.text = state["files"].label
+            render_ancestry_content.refresh()
+
+        ui.select(
+            options=[f"{b} / {t}" for b, t in files.all_variants],
+            value=f"{files.bundle_version} / {files.filter_tag}",
+            label="Bundle / filters",
+            on_change=on_variant,
+        ).props("outlined dense").classes("w-64 mb-2")
 
     @ui.refreshable
     def render_ancestry_content() -> None:
+        rows = state["rows"]
+        reference = state["reference"]
+        if rows is None:
+            ui.label("No principal components in file").classes("text-gray-500 italic")
+            return
+
+        if reference is None:
+            reference_path = get_reference_pcs_path(state["files"].bundle_version)
+            detail = (
+                "set 'ancestry_reference_dir' in the application config"
+                if reference_path is None
+                else f"expected at {reference_path}"
+            )
+            ui.label(
+                f"Reference panel unavailable for bundle"
+                f" {state['files'].bundle_version} — {detail}."
+                f" Showing the family's samples only."
+            ).classes("text-orange-600 text-sm mb-2")
+
         selected = [r for r in rows if r.get("IID") in selected_members["value"]]
         if not selected:
             ui.label("No members selected").classes("text-gray-500 italic")
@@ -480,7 +359,7 @@ def render_ancestry_tab(
         ui.label(caption).classes("text-xs text-gray-500 mt-4")
         with ui.row().classes("w-full gap-4"):
             for x_pc, y_pc in _PC_PAIRS:
-                window = _zoom_window(selected, reference, assigned, x_pc, y_pc)
+                window = zoom_window(selected, reference, assigned, x_pc, y_pc)
                 ui.echart(
                     _plot_option(
                         selected,

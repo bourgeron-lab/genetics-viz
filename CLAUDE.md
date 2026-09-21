@@ -6,6 +6,8 @@ Project-level instructions for Claude Code.
 
 NiceGUI-based web application for genetics cohort data visualization. Uses TanStack tables for dataframes, Polars for data processing, and ECharts for plots. Managed with `uv`.
 
+Two deliberate exceptions to "ECharts for plots": `stats_panel.py` and the cohort PGS violins in `cohort_pgs_tab.py` use Plotly. ECharts has no violin or box series, and the two live as sibling tabs on the cohort page.
+
 ## Commands
 
 - **Run app**: `uv run genetics-viz /path/to/config.yaml`
@@ -55,6 +57,8 @@ src/genetics_viz/
       components/
         ancestry_tab.py           # Ancestry PCA tab (per-family)
         pgs_tab.py                # Polygenic scores tab (per-family)
+        cohort_ancestry_tab.py    # Ancestry PCA tab (cohort-wide)
+        cohort_pgs_tab.py         # Polygenic score violins (cohort-wide)
         wombat_tab.py             # WOMBAT analysis tab (per-family)
         dnm_tab.py                # DNM analysis tab (per-family)
         svs_tab.py                # SV analysis tab (per-family)
@@ -70,6 +74,7 @@ src/genetics_viz/
       statistics.py               # Diagnostic statistics page
   utils/
     ancestry.py                   # Ancestry/PGS file discovery, reference panel, colors
+    ancestry_plots.py             # Shared ECharts builders for the PCA scatters
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
     cytobands.py                  # Cytoband, chromosome, ideogram constants
@@ -77,6 +82,7 @@ src/genetics_viz/
     gene_scoring.py               # Gene scoring and color coding
     score_colors.py               # Continuous score color ranges
     vep.py                        # VEP consequence utilities (from YAML)
+    pedigree_labels.py            # Sex/phenotype code normalisation and labels
     sharding.py                   # Two-level sharded directory path resolution
     view_presets.py               # View preset loading with reload support
     column_names.py               # Column name/group/sorting/schema utilities
@@ -137,6 +143,10 @@ Config files (YAML) are loaded once at module level.
 - The PCs are projections onto a **versioned** reference panel, so the panel a family is plotted against is the one named in its own filename tag. Config supplies only the root (`ancestry_reference_dir`); the `v<bundle>/bundle/labels/reference_pcs.tsv.gz` path below it is derived per family. Never read the reference root from the `.qc.json` files — they record the compute-cluster path.
 - A missing reference panel is a degraded state, not an error: the Ancestry tab still plots the family's own samples.
 - `utils/ancestry.py` holds discovery, probes, the cached reference panel, region colours, and the shared `NULL_VALUES` — the PGS z-score file writes the literal string `nan`, which must be nulled or polars types the column as a string and sorting breaks.
+- **Cohort-level results** live in `cohorts/<name>/ancestry/<name>.apgs_b<bundle>_<tag>.<kind>.tsv` — same naming, cohort name as the prefix, plus an extra `family_id` column. `find_ancestry_files_in(directory, prefix)` serves both layouts; `find_cohort_ancestry_files(cohort)` and `find_ancestry_files(data_dir, family_id)` are the wrappers. Not every cohort has them.
+- **Several filter-tag variants of one bundle coexist** (`dp6gq15`, `dp10gq20` — minimum depth and GQ). `_tag_strictness` ranks them so the strictest wins by default; a plain string sort picks `dp6gq15` because "6" > "1" at the third character. Pages with more than one variant show a selector.
+- Plot builders shared by the family and cohort tabs live in `utils/ancestry_plots.py`. They are pure functions returning ECharts option/series dicts, so neither page component has to import the other's privates.
+- Normalise pedigree sex/phenotype through `utils/pedigree_labels.py` before grouping — some cohorts write the codes float-stringified (`-9.0`, `1.0`), which a bare comparison against `"-9"` misses.
 
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.

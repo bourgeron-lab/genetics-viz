@@ -13,6 +13,7 @@ from nicegui import ui
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
     NULL_VALUES,
+    Variant,
     find_ancestry_files,
     get_ancestry_dir,
     get_pgs_zscore_thresholds,
@@ -79,46 +80,62 @@ def render_pgs_tab(
         )
         return
 
-    try:
-        df = read_tsv_or_none(
-            files.pgs_zscore_path,
-            infer_schema_length=10000,
-            null_values=NULL_VALUES,
-        )
-    except Exception as e:
-        ui.label(f"Error reading file: {e}").classes("text-red-500 mt-4")
-        logger.warning("Failed to read %s", files.pgs_zscore_path, exc_info=True)
-        return
+    # Reloaded when the variant selector changes; every render reads from here.
+    state: Dict[str, Any] = {"files": files, "by_sample": {}, "scores": []}
 
-    if df is None or len(df) == 0:
+    def load_variant(variant: Optional[Variant] = None) -> bool:
+        """Read the z-scores for a variant. False when unreadable or empty."""
+        selected = find_ancestry_files(store.data_dir, family_id, variant) or files
+        state["files"] = selected
+        try:
+            df = read_tsv_or_none(
+                selected.pgs_zscore_path,
+                infer_schema_length=10000,
+                null_values=NULL_VALUES,
+            )
+        except Exception:
+            logger.warning("Failed to read %s", selected.pgs_zscore_path, exc_info=True)
+            return False
+        if df is None or len(df) == 0 or "IID" not in df.columns:
+            return False
+        state["scores"] = [c for c in df.columns if c not in ("IID", "family_id")]
+        state["by_sample"] = {
+            row["IID"]: row for row in df.to_dicts() if row.get("IID")
+        }
+        return bool(state["scores"])
+
+    if not load_variant():
         ui.label("No PGS z-scores in file").classes("text-gray-500 italic")
         return
 
-    if "IID" not in df.columns:
-        ui.label("PGS z-score file has no IID column").classes("text-red-500 mt-4")
-        return
-
-    score_names = [c for c in df.columns if c != "IID"]
-    if not score_names:
-        ui.label("PGS z-score file has no score columns").classes(
-            "text-gray-500 italic"
-        )
-        return
-
-    # Transpose: sample_id -> {score_name: value}
-    by_sample: Dict[str, Dict[str, Any]] = {
-        row["IID"]: row for row in df.to_dicts() if row.get("IID")
-    }
     thresholds = get_pgs_zscore_thresholds()
 
     with ui.row().classes("items-center gap-2 mb-2"):
-        ui.label(f"{len(score_names)} polygenic scores").classes(
+        count_label = ui.label(f"{len(state['scores'])} polygenic scores").classes(
             "text-lg font-semibold text-blue-700"
         )
-        ui.label(files.label).classes("text-xs text-gray-500")
+        provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
+
+    if len(files.all_variants) > 1:
+
+        def on_variant(event: Any) -> None:
+            bundle, tag = event.value.split(" / ", 1)
+            load_variant((bundle, tag))
+            provenance.text = state["files"].label
+            count_label.text = f"{len(state['scores'])} polygenic scores"
+            render_pgs_table.refresh()
+
+        ui.select(
+            options=[f"{b} / {t}" for b, t in files.all_variants],
+            value=f"{files.bundle_version} / {files.filter_tag}",
+            label="Bundle / filters",
+            on_change=on_variant,
+        ).props("outlined dense").classes("w-64 mb-2")
 
     @ui.refreshable
     def render_pgs_table() -> None:
+        by_sample = state["by_sample"]
+        score_names = state["scores"]
         members = [iid for iid in by_sample if iid in selected_members["value"]]
         if not members:
             ui.label("No members selected").classes("text-gray-500 italic")

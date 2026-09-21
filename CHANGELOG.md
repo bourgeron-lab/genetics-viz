@@ -5,6 +5,22 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-09-21
+
+### Added
+- **Ancestry and Polygenic Scores tabs on the cohort page** — the right-hand Statistics panel becomes three tabs. Both new tabs read the cohort-level pipeline output and follow the filters applied to the individuals table.
+- **Cohort Ancestry tab** — every cohort member on PC1×PC2 over the reference panel, which a checkbox (ticked by default) can hide. Points are coloured by predicted region and outlined red when flagged as outliers; the tooltip names the sample, region, population and confidence. Beside the plot, the region distribution as a pie plus a count/percent table. For EAGER that is 586 samples across 7 regions.
+- **Cohort Polygenic Scores tab** — violins of the cohort's z-scores for a selected trait. The grouping axis is Phenotype, Sex or predicted Region; an optional split draws each group as two sex halves; and a region multiselect restricts which samples are included. Group sizes are printed on the axis and the individual points are overlaid, because filtering by region can leave groups of a handful of samples.
+- **Bundle/filter-tag selector** on the cohort and family ancestry tabs, shown when a directory holds more than one variant.
+
+### Fixed
+- **The strictest filter-tag variant is now preferred.** Ancestry directories now hold two variants of the same bundle — `dp6gq15` and `dp10gq20` — and the tags were sorted as plain strings, so `dp6gq15` won because "6" sorts above "1" at the third character. The family tabs released in 0.10.0 therefore switched variant silently as soon as the second one appeared. Tags are now ranked by their depth and GQ thresholds.
+- Pedigree sex and phenotype codes written float-stringified (`-9.0`, `1.0`, as the PMS cohort does) were not recognised as their integer equivalents, so they grouped as unknown.
+
+### Changed
+- The shared PCA plot builders moved from the family Ancestry tab into `utils/ancestry_plots.py`, and the phenotype label helpers from `home.py` into `utils/pedigree_labels.py`, so the cohort tabs reuse them rather than importing another page's private functions.
+- The cohort violins are Plotly, the second deliberate exception to the project's ECharts default — ECharts has no violin series, and the sibling Statistics tab is already Plotly.
+
 ## [0.10.0] - 2026-09-17
 
 ### Added

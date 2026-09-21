@@ -83,6 +83,9 @@ _FILENAME_TMPL = r"{eid}\.apgs_b(?P<bundle>.+?)_(?P<filters>[^.]+)\.(?P<kind>pcs
 
 _KINDS = ("pcs", "ancestry", "pgs_zscore")
 
+#: A ``(bundle_version, filter_tag)`` pair identifying one set of result files.
+Variant = Tuple[str, str]
+
 
 @dataclass
 class AncestryFiles:
@@ -92,9 +95,20 @@ class AncestryFiles:
     bundle_version: str
     filter_tag: str
     paths: Dict[str, Path] = field(default_factory=dict)
-    #: Other ``(bundle_version, filter_tag)`` pairs present in the directory,
-    #: so a caller can warn rather than silently picking one.
-    other_variants: List[Tuple[str, str]] = field(default_factory=list)
+    #: Every ``(bundle_version, filter_tag)`` pair present in the directory,
+    #: best first, so a caller can offer the choice. Always includes the
+    #: selected one.
+    all_variants: List[Variant] = field(default_factory=list)
+
+    @property
+    def variant(self) -> Variant:
+        """The selected ``(bundle_version, filter_tag)`` pair."""
+        return (self.bundle_version, self.filter_tag)
+
+    @property
+    def other_variants(self) -> List[Variant]:
+        """The variants present but not selected."""
+        return [v for v in self.all_variants if v != self.variant]
 
     @property
     def pcs_path(self) -> Optional[Path]:
@@ -123,45 +137,116 @@ def _version_key(version: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 
+_TAG_RE = re.compile(r"^dp(?P<dp>\d+)gq(?P<gq>\d+)$")
+
+
+def _tag_strictness(tag: str) -> Tuple[int, int, int, str]:
+    """Sort key ranking a filter tag by how strictly it filtered genotypes.
+
+    Tags look like ``dp10gq20`` - minimum depth 10, minimum GQ 20. Sorted
+    descending, the strictest variant comes first, so ``dp10gq20`` is preferred
+    over ``dp6gq15``. A plain string sort would pick ``dp6gq15`` instead,
+    because "6" > "1" at the third character.
+
+    Unrecognised tags sort below every recognised one and fall back to
+    comparing the tag itself, keeping the order stable.
+    """
+    match = _TAG_RE.match(tag)
+    if match is None:
+        return (0, 0, 0, tag)
+    return (1, int(match.group("dp")), int(match.group("gq")), tag)
+
+
+def _variant_key(variant: Variant) -> Tuple[Tuple[int, ...], Tuple[int, int, int, str]]:
+    """Sort key for a variant: newest bundle first, then strictest filtering."""
+    bundle, tag = variant
+    return (_version_key(bundle), _tag_strictness(tag))
+
+
 def get_ancestry_dir(data_dir: Path, family_id: str) -> Path:
     """Return the ``ancestry/`` directory of a family (may not exist)."""
     return get_family_path(data_dir, family_id) / "ancestry"
 
 
-def find_ancestry_files(data_dir: Path, family_id: str) -> Optional[AncestryFiles]:
-    """Locate a family's ancestry result files.
-
-    When several bundle versions are present the highest is used and the rest
-    are reported in :attr:`AncestryFiles.other_variants`. Returns ``None`` when
-    the directory is missing or holds no recognised file.
-    """
-    ancestry_dir = get_ancestry_dir(data_dir, family_id)
-    if not ancestry_dir.is_dir():
-        return None
-
-    pattern = re.compile(_FILENAME_TMPL.format(eid=re.escape(family_id)))
-
-    # (bundle, filters) -> {kind: path}
-    variants: Dict[Tuple[str, str], Dict[str, Path]] = {}
-    for tsv_file in ancestry_dir.glob("*.tsv"):
+def _scan_variants(directory: Path, prefix: str) -> Dict[Variant, Dict[str, Path]]:
+    """Map every ``(bundle, tag)`` variant in ``directory`` to its files."""
+    pattern = re.compile(_FILENAME_TMPL.format(eid=re.escape(prefix)))
+    variants: Dict[Variant, Dict[str, Path]] = {}
+    for tsv_file in directory.glob("*.tsv"):
         match = pattern.match(tsv_file.name)
         if not match:
             continue
         key = (match.group("bundle"), match.group("filters"))
         variants.setdefault(key, {})[match.group("kind")] = tsv_file
+    return variants
 
+
+def find_ancestry_files_in(
+    directory: Path, prefix: str, variant: Optional[Variant] = None
+) -> Optional[AncestryFiles]:
+    """Locate ancestry result files named ``<prefix>.apgs_b<bundle>_<tag>.*``.
+
+    Used for both layouts: a family's ``ancestry/`` directory, where the prefix
+    is the family ID, and a cohort's, where it is the cohort name.
+
+    Without an explicit ``variant``, the newest bundle and then the strictest
+    filter tag wins - see :func:`_tag_strictness`. Every variant found is
+    reported in :attr:`AncestryFiles.all_variants` so a caller can offer the
+    choice. Returns ``None`` when the directory is missing, holds no recognised
+    file, or does not hold the requested variant.
+    """
+    if not directory.is_dir():
+        return None
+
+    variants = _scan_variants(directory, prefix)
     if not variants:
         return None
 
-    keys = sorted(variants, key=lambda k: (_version_key(k[0]), k[1]), reverse=True)
-    bundle, filters = keys[0]
+    ordered = sorted(variants, key=_variant_key, reverse=True)
+    if variant is None:
+        selected = ordered[0]
+    elif variant in variants:
+        selected = variant
+    else:
+        return None
+
+    bundle, tag = selected
     return AncestryFiles(
-        directory=ancestry_dir,
+        directory=directory,
         bundle_version=bundle,
-        filter_tag=filters,
-        paths=variants[(bundle, filters)],
-        other_variants=keys[1:],
+        filter_tag=tag,
+        paths=variants[selected],
+        all_variants=ordered,
     )
+
+
+def find_ancestry_files(
+    data_dir: Path, family_id: str, variant: Optional[Variant] = None
+) -> Optional[AncestryFiles]:
+    """Locate a family's ancestry result files."""
+    return find_ancestry_files_in(
+        get_ancestry_dir(data_dir, family_id), family_id, variant
+    )
+
+
+def get_cohort_ancestry_dir(cohort: Any) -> Path:
+    """Return the ``ancestry/`` directory of a cohort (may not exist).
+
+    Takes a :class:`~genetics_viz.models.Cohort`; typed loosely to keep this
+    module free of a models import.
+    """
+    return cohort.path / "ancestry"
+
+
+def find_cohort_ancestry_files(
+    cohort: Any, variant: Optional[Variant] = None
+) -> Optional[AncestryFiles]:
+    """Locate a cohort's ancestry result files.
+
+    Cohort-level files carry an extra ``family_id`` column that the per-family
+    ones do not.
+    """
+    return find_ancestry_files_in(get_cohort_ancestry_dir(cohort), cohort.name, variant)
 
 
 def _probe(data_dir: Path, family_id: str, kind: str) -> bool:
