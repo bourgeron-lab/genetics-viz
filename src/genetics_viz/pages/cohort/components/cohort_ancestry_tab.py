@@ -158,17 +158,18 @@ def _render_region_summary(rows: List[Dict]) -> None:
             }
             for region, n in counts
         ]
+        # No legend and no slice labels: the table beside the pie already
+        # names every region with its colour, count and share, and at seven
+        # slices the labels collide with each other and with the legend.
         ui.echart(
             {
                 "tooltip": {"trigger": "item"},
-                "legend": {"type": "scroll", "orient": "vertical", "left": "left"},
                 "series": [
                     {
                         "type": "pie",
-                        "radius": "70%",
-                        "center": ["65%", "50%"],
+                        "radius": ["35%", "75%"],
                         "data": pie_data,
-                        "label": {"formatter": "{b}: {d}%"},
+                        "label": {"show": False},
                     }
                 ],
             }
@@ -178,7 +179,9 @@ def _render_region_summary(rows: List[Dict]) -> None:
             {
                 "region": region,
                 "n": n,
-                "pct": round(100 * n / total, 1),
+                # Pre-formatted: the "number" cell type would render this as
+                # "60.4000", which reads oddly for a percentage.
+                "pct": f"{100 * n / total:.1f}%",
                 "region_color": get_region_color(region),
             }
             for region, n in counts
@@ -204,8 +207,6 @@ def _render_region_summary(rows: List[Dict]) -> None:
                         "id": "pct",
                         "header": "%",
                         "sortable": True,
-                        "sorting": "numerical",
-                        "cellType": "number",
                     },
                 ],
                 rows=table_rows,

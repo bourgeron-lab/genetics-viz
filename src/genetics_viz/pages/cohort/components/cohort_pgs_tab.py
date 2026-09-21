@@ -138,6 +138,13 @@ def _group_label(kind: str, group: str, n: int) -> str:
     return f"{base}<br>n={n}"
 
 
+def _fill(hex_color: str) -> str:
+    """Translucent fill for a violin body, so the overlaid points stay legible."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},0.35)"
+
+
 def _group_color(kind: str, group: str) -> str:
     """Colour for a group on the chosen axis."""
     if kind == _GROUP_SEX:
@@ -314,7 +321,7 @@ def render_cohort_pgs_tab(
             counts = {g: sum(len(v) for v in grouped[g].values()) for g in order}
             labels = {g: _group_label(group_by, g, counts[g]) for g in order}
 
-            ui.label(f"{len(paired)} individuals with a {trait} score").classes(
+            ui.label(f"{len(paired)} individuals scored for {trait}").classes(
                 "text-xs text-gray-500"
             )
 
@@ -337,12 +344,13 @@ def render_cohort_pgs_tab(
                             name=sex_label(sex),
                             side=side,
                             line_color=_SEX_COLORS.get(sex, "#7f7f7f"),
+                            fillcolor=_fill(_SEX_COLORS.get(sex, "#7f7f7f")),
                             points="all",
                             jitter=0.3,
                             pointpos=0,
                             box_visible=True,
                             meanline_visible=True,
-                            scalemode="count",
+                            width=0.8,
                         )
                     )
                 fig.update_layout(violinmode="overlay", violingap=0)
@@ -355,12 +363,13 @@ def render_cohort_pgs_tab(
                             y=values,
                             name=labels[group].replace("<br>", " "),
                             line_color=_group_color(group_by, group),
+                            fillcolor=_fill(_group_color(group_by, group)),
                             points="all",
                             jitter=0.3,
                             pointpos=0,
                             box_visible=True,
                             meanline_visible=True,
-                            scalemode="count",
+                            width=0.8,
                         )
                     )
                 fig.update_layout(violinmode="group")
