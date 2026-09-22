@@ -95,7 +95,12 @@ def create_header(cohort_name: str | None = None) -> None:
 
                 ui.select(
                     options=cohort_names,
-                    value=cohort_name,
+                    # A value outside the options raises, which turned every
+                    # unknown cohort in the URL into a 500 and left the pages'
+                    # own "not found" handling unreachable. Now a cohort
+                    # directory with no pedigree -- which is listed on the home
+                    # page but not in this dropdown -- reaches that handling.
+                    value=cohort_name if cohort_name in cohort_names else None,
                     label="Project",
                     on_change=on_project_change,
                 ).props("outlined dense dark color=white label-color=white").classes(

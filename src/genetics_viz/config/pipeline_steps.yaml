@@ -1,0 +1,81 @@
+# Display metadata for the ghfc-ngs workflow steps reported in
+# ``.ghfc-ngs.state.json``. See COHORT_STATE.md in bourgeron-lab/ghfc-ngs.
+#
+# Consumed by utils/cohort_state.py. This file says only how to LABEL a step:
+# genetics-viz never measures completion itself, the pipeline does. Adding a
+# path here would mean re-deriving the pipeline's own planning logic, which it
+# would drift from, and it is unaffordable anyway on a network-mounted data
+# directory.
+#
+# Order below is display order. A step reported by the pipeline but absent here
+# is appended under its raw name, so a new workflow step degrades to an
+# unlabelled row rather than disappearing.
+
+steps:
+  alignment:
+    label: "Alignment"
+    unit: "samples"
+    note: >-
+      Counts CRAMs. A sample whose coverage bedgraph is missing still counts as
+      done, because only the bedgraph is regenerated, never the alignment.
+  deepvariant_sample:
+    label: "DeepVariant (per sample)"
+    unit: "samples"
+  deepvariant_family:
+    label: "Joint calling (per family)"
+    unit: "families"
+  annotation:
+    label: "Annotation (VEP)"
+    unit: "families"
+  wombat:
+    label: "WOMBAT"
+    unit: "families"
+  wisecondorx:
+    label: "WisecondorX CNVs"
+    unit: "samples"
+  ancestry:
+    label: "Ancestry & PGS"
+    unit: "families"
+    note: >-
+      Not measured unless the step was requested: the pipeline skips the whole
+      ancestry planning pass otherwise, so there is nothing to report.
+  snvs_cohort:
+    label: "Cohort merge"
+    unit: "cohort"
+    note: "Cohort-level: done is 0 or 1 out of 1, not a count of families."
+  extractor:
+    label: "Variant extractor"
+    unit: "families"
+    note: >-
+      Never measured. The pipeline has no on-disk completeness check for this
+      step, so no honest number exists.
+
+# Chip appearance per ``last_run.status``.
+run_status:
+  success:
+    label: "success"
+    color: "green"
+    icon: "check_circle"
+  running:
+    label: "running"
+    color: "blue"
+    icon: "sync"
+  failed:
+    label: "failed"
+    color: "red"
+    icon: "error"
+  interrupted:
+    label: "interrupted"
+    color: "orange"
+    icon: "pause_circle"
+
+# Fallbacks for a status the pipeline may add later, and for a cohort with no
+# state file at all.
+default_status:
+  label: "unknown"
+  color: "grey"
+  icon: "help"
+no_record_status:
+  label: "no run recorded"
+  color: "grey"
+  icon: "history_toggle_off"

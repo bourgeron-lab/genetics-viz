@@ -176,6 +176,8 @@ data_directory/
 ├── cohorts/
 │   ├── cohort1/
 │   │   ├── cohort1.pedigree.tsv
+│   │   ├── cohort1.params.yml (optional: ghfc-ngs workflow parameters)
+│   │   ├── .ghfc-ngs.state.json (optional: written by the workflow, run record)
 │   │   ├── wombat/
 │   │   │   └── cohort1.rare.*.*.results.tsv (cohort-wide search files)
 │   │   └── families/
@@ -203,6 +205,24 @@ data_directory/
 ```
 
 ### Required Files
+
+A cohort is any directory under `cohorts/`, and the directory name is the cohort name. A
+directory whose `<name>.pedigree.tsv` is missing or unreadable is listed on the home page as an
+incomplete cohort rather than being skipped, and is not explorable until the pedigree is in
+place.
+
+#### Optional Workflow Files
+
+`cohort1.params.yml` is the parameter file the [ghfc-ngs](https://github.com/bourgeron-lab/ghfc-ngs)
+workflow was launched with. When it is present, the cohort page gains two tabs: **Parameters**,
+which shows the file verbatim, and **Status**, which shows per-step pipeline progress. The home
+page card gains a foldable **Status** item with the same per-step breakdown.
+
+`.ghfc-ngs.state.json` is the workflow's own run record (see `COHORT_STATE.md` in the ghfc-ngs
+repository) and is written only by the pipeline. It supplies the run status, timings and the
+per-step completion counts; genetics-viz reads it and never measures completion itself. Its
+absence is reported as "no run recorded", which is not the same as the cohort never having been
+processed.
 
 #### Pedigree File Format
 

@@ -7,7 +7,9 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from genetics_viz.models import ChangeReport, DataStore
+from genetics_viz.utils.cohort_state import clear_sha_cache, clear_state_cache
 from genetics_viz.utils.data import get_all_data_stores
+from genetics_viz.utils.pipeline_params import clear_params_cache
 from genetics_viz.utils.sharding import clear_sharding_cache
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,14 @@ async def _check_store(store: DataStore, path_str: str) -> ChangeReport | None:
     logger.info("Changes detected in %s: %s", path_str, report.summary_lines())
     await asyncio.to_thread(store.reload)
     clear_sharding_cache()
+    # A pedigree edit changes what drift detection compares against, and a
+    # params edit changes the step list, so neither cached answer survives a
+    # detected change. (The run record itself is not watched -- the pipeline
+    # rewrites it on every run and reload re-parses every pedigree -- so its
+    # reader is keyed on the file's own stat and picks up rewrites by itself.)
+    clear_params_cache()
+    clear_state_cache()
+    clear_sha_cache()
     return report
 
 

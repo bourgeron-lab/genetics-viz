@@ -8,6 +8,7 @@ including pedigree information, families, and samples.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +70,9 @@ class Cohort:
     name: str
     path: Path
     pedigree_file: Path
+    #: The ghfc-ngs workflow parameters file, when the directory has one.
+    #: Resolved during discovery so a page render never stats for it.
+    params_file: Path | None = None
     families: dict[str, Family] = field(default_factory=dict)
     _dataframe: pl.DataFrame | None = field(default=None, repr=False)
 
@@ -122,11 +126,14 @@ class Cohort:
         return df
 
     @classmethod
-    def from_directory(cls, path: Path) -> "Cohort":
+    def from_directory(cls, path: Path, params_file: Path | None = None) -> "Cohort":
         """
         Create a Cohort from a directory containing a pedigree file.
 
         The pedigree file should be named {cohort_name}.pedigree.tsv
+
+        ``params_file`` is passed in by the directory scan, which has already
+        looked for it; it is resolved here when called directly.
         """
         name = path.name
         pedigree_file = path / f"{name}.pedigree.tsv"
@@ -134,7 +141,18 @@ class Cohort:
         if not pedigree_file.exists():
             raise FileNotFoundError(f"Pedigree file not found: {pedigree_file}")
 
-        cohort = cls(name=name, path=path, pedigree_file=pedigree_file)
+        if params_file is None:
+            # Deferred for the same reason as in _iter_cohort_dirs.
+            from genetics_viz.utils.pipeline_params import find_params_file
+
+            params_file = find_params_file(path, name)
+
+        cohort = cls(
+            name=name,
+            path=path,
+            pedigree_file=pedigree_file,
+            params_file=params_file,
+        )
         cohort._parse_pedigree()
         return cohort
 
@@ -277,10 +295,77 @@ class Cohort:
         return data
 
 
+@dataclass(frozen=True)
+class CohortStub:
+    """A cohorts/ directory with no pedigree file.
+
+    A cohort is a directory under ``cohorts/``; the pedigree is what makes it
+    explorable. A directory missing one is reported rather than skipped, so a
+    cohort that exists but is not ready to browse is visible as such.
+    """
+
+    name: str
+    path: Path
+    #: cohorts/<name>/<name>.pedigree.tsv.
+    expected_pedigree: Path
+    params_file: Path | None = None
+    #: Why the cohort is not explorable: "missing" when there is no pedigree
+    #: file, "unreadable" when there is one but it could not be parsed. The two
+    #: call for different fixes, so they are not collapsed into one message.
+    reason: str = "missing"
+    #: The parse error, when reason is "unreadable".
+    error: str | None = None
+
+
+def _iter_cohort_dirs(
+    cohorts_dir: Path,
+) -> Iterator[tuple[Path, Path, Path | None]]:
+    """Yield ``(directory, pedigree_file, params_file)`` for every cohort dir.
+
+    The single definition of cohort discovery: every directory under
+    ``cohorts/`` is a cohort. ``pedigree_file`` is the expected path and may not
+    exist -- callers decide what that means. ``params_file`` is resolved, so it
+    is None when the directory has none.
+
+    This exists because the same scan is needed by ``load``, ``take_snapshot``
+    and ``reload``; three hand-copied versions of it drifted the moment the
+    rules changed.
+    """
+    # Deferred: genetics_viz.utils.__init__ imports utils.data, which imports
+    # this module, so any utils import at module level here is a cycle.
+    from genetics_viz.utils.pipeline_params import find_params_file
+
+    if not cohorts_dir.exists():
+        return
+    for cohort_path in sorted(cohorts_dir.iterdir()):
+        if not cohort_path.is_dir():
+            continue
+        name = cohort_path.name
+        yield (
+            cohort_path,
+            cohort_path / f"{name}.pedigree.tsv",
+            find_params_file(cohort_path, name),
+        )
+
+
+def _mtime_or_zero(path: Path | None) -> float:
+    """Modification time of a watched file, 0.0 when it is absent."""
+    if path is None:
+        return 0.0
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 @dataclass
 class DirectorySnapshot:
     """Point-in-time snapshot of a DataStore's cohort directory state."""
 
+    #: Cohort directory name -> the newest mtime among the files that change
+    #: what the UI shows: the pedigree and the workflow parameters file. Every
+    #: cohort directory is keyed, including those with no pedigree, so one
+    #: appearing or gaining a pedigree registers as a change.
     cohort_mtimes: dict[str, float] = field(default_factory=dict)
     cohort_names: frozenset[str] = field(default_factory=frozenset)
 
@@ -318,7 +403,12 @@ class DataStore:
     """
 
     data_dir: Path
+    #: Pedigree-bearing cohorts only, so every existing consumer of this dict
+    #: -- the header dropdown, the validation pages, search -- keeps its meaning.
     cohorts: dict[str, Cohort] = field(default_factory=dict)
+    #: Cohort directories with no usable pedigree. Carded on the home page, but
+    #: not explorable.
+    incomplete_cohorts: list[CohortStub] = field(default_factory=list)
     _loaded: bool = field(default=False, repr=False)
     _snapshot: DirectorySnapshot | None = field(default=None, repr=False)
 
@@ -335,36 +425,72 @@ class DataStore:
         if not self.cohorts_dir.exists():
             raise FileNotFoundError(f"Cohorts directory not found: {self.cohorts_dir}")
 
-        self.cohorts = {}
-
-        for cohort_path in sorted(self.cohorts_dir.iterdir()):
-            if not cohort_path.is_dir():
-                continue
-
-            pedigree_file = cohort_path / f"{cohort_path.name}.pedigree.tsv"
-            if not pedigree_file.exists():
-                # Skip directories without pedigree files
-                continue
-
-            try:
-                cohort = Cohort.from_directory(cohort_path)
-                self.cohorts[cohort.name] = cohort
-            except Exception as e:
-                print(f"Warning: Failed to load cohort {cohort_path.name}: {e}")
-
+        self.cohorts, self.incomplete_cohorts = self._scan()
         self._loaded = True
         self._snapshot = self.take_snapshot()
 
+    def _scan(self) -> tuple[dict[str, Cohort], list[CohortStub]]:
+        """Scan the cohorts directory into loaded cohorts and pedigree-less stubs."""
+        cohorts: dict[str, Cohort] = {}
+        stubs: list[CohortStub] = []
+
+        for cohort_path, pedigree_file, params_file in _iter_cohort_dirs(
+            self.cohorts_dir
+        ):
+            if not pedigree_file.exists():
+                stubs.append(
+                    CohortStub(
+                        name=cohort_path.name,
+                        path=cohort_path,
+                        expected_pedigree=pedigree_file,
+                        params_file=params_file,
+                        reason="missing",
+                    )
+                )
+                continue
+
+            try:
+                cohort = Cohort.from_directory(cohort_path, params_file=params_file)
+                cohorts[cohort.name] = cohort
+            except Exception as e:
+                # The pedigree is there but unusable, which leaves the cohort
+                # just as unexplorable -- and needs a different fix than an
+                # absent file, so it is reported separately.
+                logger.warning("Failed to load cohort %s: %s", cohort_path.name, e)
+                stubs.append(
+                    CohortStub(
+                        name=cohort_path.name,
+                        path=cohort_path,
+                        expected_pedigree=pedigree_file,
+                        params_file=params_file,
+                        reason="unreadable",
+                        error=str(e),
+                    )
+                )
+
+        return cohorts, stubs
+
     def take_snapshot(self) -> DirectorySnapshot:
-        """Stat the cohort directory and return a lightweight snapshot of mtimes."""
-        mtimes: dict[str, float] = {}
-        if self.cohorts_dir.exists():
-            for cohort_path in self.cohorts_dir.iterdir():
-                if not cohort_path.is_dir():
-                    continue
-                ped = cohort_path / f"{cohort_path.name}.pedigree.tsv"
-                if ped.exists():
-                    mtimes[cohort_path.name] = ped.stat().st_mtime
+        """Stat the cohort directory and return a lightweight snapshot of mtimes.
+
+        Watches the pedigree and the workflow parameters file: the first decides
+        whether a cohort is explorable, the second whether its Parameters and
+        Status tabs exist.
+
+        ``.ghfc-ngs.state.json`` is deliberately *not* watched. The pipeline
+        rewrites it on every run, and a change here triggers ``reload``, which
+        re-parses every pedigree in the data directory; a status write must not
+        cost that. The state reader caches on the file's own stat instead, so it
+        picks up a rewrite without help from here.
+        """
+        mtimes = {
+            cohort_path.name: max(
+                _mtime_or_zero(pedigree_file), _mtime_or_zero(params_file)
+            )
+            for cohort_path, pedigree_file, params_file in _iter_cohort_dirs(
+                self.cohorts_dir
+            )
+        }
         return DirectorySnapshot(
             cohort_mtimes=mtimes,
             cohort_names=frozenset(mtimes),
@@ -394,20 +520,9 @@ class DataStore:
         if not self.cohorts_dir.exists():
             return
 
-        new_cohorts: dict[str, Cohort] = {}
-        for cohort_path in sorted(self.cohorts_dir.iterdir()):
-            if not cohort_path.is_dir():
-                continue
-            pedigree_file = cohort_path / f"{cohort_path.name}.pedigree.tsv"
-            if not pedigree_file.exists():
-                continue
-            try:
-                cohort = Cohort.from_directory(cohort_path)
-                new_cohorts[cohort.name] = cohort
-            except Exception as e:
-                logger.warning("Failed to load cohort %s: %s", cohort_path.name, e)
-
+        new_cohorts, new_stubs = self._scan()
         self.cohorts = new_cohorts
+        self.incomplete_cohorts = new_stubs
         self._loaded = True
         self._snapshot = self.take_snapshot()
 
