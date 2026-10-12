@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # publish.yml runs this before building a release.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: ruff check
+        run: uv run ruff check --output-format=github .
+      - name: ruff format
+        run: uv run ruff format --check .
+
+  test:
+    name: test (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --locked
+      - name: pytest (locked dependencies)
+        run: uv run pytest -m "not slow"
+
+  # Builds the wheel, installs it into a fresh environment the way production
+  # does (uvx: no lock file, newest versions the pyproject ranges allow), and
+  # runs the whole suite - the boot test included - against the installed
+  # package rather than the source tree.
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Build
+        run: uv build
+      - name: Check the wheel ships its data files
+        run: |
+          python3 - <<'EOF'
+          import glob, sys, zipfile
+          names = set(zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist())
+          required = [
+              "genetics_viz/config/roh.yaml",
+              "genetics_viz/config/vep_consequences.yaml",
+              "genetics_viz/config/cytobands_hg38.tsv",
+              "genetics_viz/config/genesets.tsv",
+              "genetics_viz/static/js/data_table.js",
+              "genetics_viz/static/css/data_table.css",
+          ]
+          missing = [n for n in required if n not in names]
+          if missing:
+              sys.exit(f"missing from the wheel: {missing}")
+          print(f"wheel OK ({len(names)} files)")
+          EOF
+      - name: Install the wheel without the lock file
+        run: |
+          uv venv /tmp/pkg-env
+          uv pip install --python /tmp/pkg-env/bin/python dist/*.whl pytest pytest-asyncio httpx
+          uv pip list --python /tmp/pkg-env/bin/python | grep -iE "^(genetics-viz|nicegui|polars|plotly) "
+      - name: CLI
+        run: /tmp/pkg-env/bin/genetics-viz --help
+      - name: pytest against the installed package
+        # Run from tests/ so the source tree is not importable: genetics_viz
+        # must come from the installed wheel.
+        working-directory: tests
+        run: /tmp/pkg-env/bin/python -m pytest -c ../pyproject.toml --rootdir .. .

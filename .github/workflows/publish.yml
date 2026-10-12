@@ -9,28 +9,38 @@ permissions:
   contents: read
 
 jobs:
+  # The full CI - lint, tests on every Python, the installed-wheel check - must
+  # pass before anything reaches PyPI. Production installs from there.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   build-and-publish:
     name: Build and publish to PyPI
+    needs: ci
     runs-on: ubuntu-latest
     environment: release
     permissions:
       id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
-    
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - uses: actions/checkout@v7
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v10
       with:
         python-version: '3.12'
-    
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
         enable-cache: true
-    
+
+    - name: Check the tag matches the package version
+      run: |
+        version=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+        if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+          echo "::error::Tag ${GITHUB_REF_NAME} does not match pyproject.toml version ${version}"
+          exit 1
+        fi
+
     - name: Build package
       run: uv build
-    
+
     - name: Publish package to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1

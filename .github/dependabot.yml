@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Keeps the workflow actions current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Proposes uv.lock bumps as pull requests, so CI tests a new version before
+  # the lock moves. Production does not read the lock (see upstream.yml); this
+  # keeps the tested versions close to what production actually installs.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 5
