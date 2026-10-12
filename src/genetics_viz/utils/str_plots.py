@@ -16,6 +16,11 @@ _THRESHOLDS = (
     ("pathogenic_min", "pathogenic ≥", "pathogenic"),
 )
 
+#: Label position per threshold line. The intermediate threshold often sits
+#: one unit past normal (HTT: 26 / 27); written along its line rather than
+#: above it, its label does not overprint the normal one.
+_LABEL_POSITION = {"intermediate_min": "insideEndTop"}
+
 
 def _num(value: Any) -> Optional[float]:
     try:
@@ -95,7 +100,10 @@ def distribution_option(
             "xAxis": v,
             "name": f"{label} {v:g}",
             "lineStyle": {"color": status_info(cls)["color"], "type": "dashed"},
-            "label": {"formatter": f"{label} {v:g}", "position": "end"},
+            "label": {
+                "formatter": f"{label} {v:g}",
+                "position": _LABEL_POSITION.get(col, "end"),
+            },
         }
         for col, label, cls in _THRESHOLDS
         if (v := limits.get(col)) is not None and v <= x_max

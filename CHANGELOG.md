@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Loci:** how many of the individuals shown are pathogenic, carrier or intermediate at each locus. Beside them, the founders' 99.9th percentile and maximum and the "common" flag, both computed over the whole cohort.
   - **Flagged genotypes:** each shown individual's flagged calls, with allele badges and cohort percentile, linked to the family.
   - A locus opens the founders' distribution with the shown flagged individuals marked, the 25 longest at most.
+- **STR validation for curators.** The family STR tab's locus dialog lists the locus's validations and, for curators and administrators, has a form: member, present / absent / uncertain, inheritance, curated repeat count and comment.
+  - Validations are saved to `validations/strs.tsv`, keyed `<chrom>:<pos>-<end>:<LOCUS>`. The same file layout as `snvs.tsv` and `svs.tsv` means the shared loader and badges read it unchanged.
+  - The writer refuses viewers server-side, not only by hiding the button.
+  - A validated member's cell in the EH table carries the ✓ / ✗ / ? / ⚡ badge.
+  - The All validations and Statistics pages list STR beside SNV and SV, with a type filter and their own colour. An STR row opens its family page.
 - `ExpansionHunter (STR)` label for the step in the Workflow status. An STR flag in the sample dialog's availability badges.
 
 ## [0.14.0] - 2026-10-12

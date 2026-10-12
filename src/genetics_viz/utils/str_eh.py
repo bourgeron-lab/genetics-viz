@@ -31,6 +31,7 @@ import yaml
 
 from .sharding import get_family_path, get_sample_path
 from .tsv import read_tsv_or_none
+from .validation_badges import STATUS_CFG
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +346,16 @@ def allele_badges(row: Dict[str, Any], percentile: Any = None) -> List[Dict[str,
     return badges
 
 
+def validation_badge(status: str) -> Dict[str, str]:
+    """The curators' aggregated status as a cell badge: symbol, status colour."""
+    cfg = STATUS_CFG.get(status, {})
+    return {
+        "label": cfg.get("symbol") or status,
+        "color": cfg.get("color", "#9e9e9e"),
+        "tooltip": f"Curator validation: {status}",
+    }
+
+
 def is_transmission(row: Dict[str, Any]) -> bool:
     """A child's longest allele above both parents', at a non-normal status.
 
@@ -408,6 +419,7 @@ def family_locus_rows(
     members: List[Member],
     selected: List[str],
     context: Optional[CohortContext] = None,
+    validations: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """Pivot a family genotype table to one row per locus, most severe first.
 
@@ -415,7 +427,8 @@ def family_locus_rows(
     ``m<i>_max`` (the longest allele, for sorting), ``i`` being their index in
     ``members`` so the column ids stay stable when the selection changes. The
     worst status, flags and cohort columns are computed over the selected
-    members only.
+    members only. ``validations`` maps ``(locus, sample)`` to the curators'
+    aggregated status, drawn as one more badge in the member's cell.
     """
     loci_by_name: Dict[str, Dict[str, Any]] = {}
     if context is not None and context.loci is not None:
@@ -475,6 +488,9 @@ def family_locus_rows(
                 row[key] = "–"
                 continue
             row[f"{key}_badges"] = allele_badges(g, percentiles.get((sample, locus)))
+            validated = (validations or {}).get((locus, sample))
+            if validated:
+                row[f"{key}_badges"].append(validation_badge(validated))
             row[f"{key}_max"] = longest_allele(g)
             row[key] = ""
             s = status_info(g.get("status"))

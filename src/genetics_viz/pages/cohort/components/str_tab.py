@@ -13,12 +13,17 @@ opens that distribution and the members' REViewer images.
 
 import asyncio
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import polars as pl
 from nicegui import ui
 
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.components.validation_loader import (
+    add_validation_status_to_row,
+    load_validation_map,
+)
+from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.data import get_static_prefix
 from genetics_viz.utils.sharding import get_sample_url
 from genetics_viz.utils.str_eh import (
@@ -43,6 +48,14 @@ from genetics_viz.utils.str_eh import (
     thresholds_text,
 )
 from genetics_viz.utils.str_plots import distribution_option
+from genetics_viz.utils.str_validation import (
+    INHERITANCES,
+    VALIDATIONS,
+    read_str_validations,
+    save_str_validation,
+    str_validation_file,
+    str_variant_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +252,8 @@ def render_eh_subtab(
             ui.label("No members selected").classes("text-gray-500 italic")
             return
 
-        rows = family_locus_rows(fam, members, selected, context)
+        validations = _validation_statuses(store.data_dir, family_id, fam)
+        rows = family_locus_rows(fam, members, selected, context, validations)
         if state["hide_normal"]:
             rows = [r for r in rows if r["worst_rank"] >= 1]
 
@@ -301,12 +315,14 @@ def render_eh_subtab(
             if locus:
                 show_eh_locus_dialog(
                     store,
+                    family_id,
                     fam,
                     members,
                     selected,
                     state["context"],
                     state["label"],
                     locus,
+                    on_saved=content.refresh,
                 )
 
         DataTable(
@@ -325,16 +341,145 @@ def render_eh_subtab(
         ui.timer(0.05, load_context, once=True)
 
 
+def _validation_statuses(
+    data_dir: Any, family_id: str, fam: pl.DataFrame
+) -> Dict[Tuple[str, str], str]:
+    """``(locus, sample)`` -> the curators' aggregated status, ignored rows left out."""
+    vmap = load_validation_map(str_validation_file(data_dir), family_id)
+    if not vmap:
+        return {}
+    out: Dict[Tuple[str, str], str] = {}
+    cols = ["locus", "chrom", "pos", "end", "sample"]
+    for r in fam.select(cols).unique().to_dicts():
+        key = str_variant_key(r["chrom"], r["pos"], r["end"], r["locus"])
+        if (key, r["sample"]) in vmap:
+            row: Dict[str, Any] = {}
+            add_validation_status_to_row(row, vmap, key, r["sample"])
+            if row["Validation"]:
+                out[(r["locus"], r["sample"])] = row["Validation"]
+    return out
+
+
+def _render_validation(
+    data_dir: Any,
+    family_id: str,
+    locus: str,
+    info: Dict[str, Any],
+    details: List[Dict[str, Any]],
+    dialog: Any,
+    on_saved: Optional[Callable[[], None]],
+) -> None:
+    """The locus's validation history, and the form for curators."""
+    key = str_variant_key(info.get("chrom"), info.get("pos"), info.get("end"), locus)
+    ui.label("Validation").classes("text-base font-semibold text-blue-700 mt-2")
+    history = read_str_validations(data_dir, family_id, key)
+    if history:
+        ui.table(
+            columns=[
+                {"name": field, "label": label, "field": field, "align": "left"}
+                for field, label in (
+                    ("Sample", "Sample"),
+                    ("Validation", "Validation"),
+                    ("Inheritance", "Inheritance"),
+                    ("CuratedRepeats", "Curated repeats"),
+                    ("User", "User"),
+                    ("Comment", "Comment"),
+                    ("Date", "Date"),
+                )
+            ],  # fmt: skip
+            rows=[
+                {
+                    **h,
+                    "Date": (h.get("Timestamp") or "")[:10],
+                    "Validation": h.get("Validation", "")
+                    + (" (ignored)" if h.get("Ignore") == "1" else ""),
+                    "id": i,
+                }
+                for i, h in enumerate(history)
+            ],
+            row_key="id",
+        ).props("dense flat").classes("w-full")
+    else:
+        ui.label("No validation recorded at this locus.").classes(
+            "text-sm text-gray-500 italic"
+        )
+
+    if not can_write():
+        ui.label("Curators and administrators can record validations.").classes(
+            "text-xs text-gray-500"
+        )
+        return
+
+    worst = max(details, key=lambda r: status_info(r.get("status"))["rank"])
+    with ui.row().classes("items-end gap-3 w-full flex-wrap mt-2"):
+        member = (
+            ui.select(
+                [r["sample"] for r in details], value=worst["sample"], label="Member"
+            )
+            .props("outlined dense")
+            .classes("w-40")
+        )
+        validation = (
+            ui.select(VALIDATIONS, value="present", label="Validation")
+            .props("outlined dense")
+            .classes("w-36")
+        )
+        inheritance = (
+            ui.select(INHERITANCES, value="unknown", label="Inheritance")
+            .props("outlined dense")
+            .classes("w-40")
+        )
+        repeats = (
+            ui.input("Curated repeats (optional)")
+            .props("outlined dense")
+            .classes("w-44")
+        )
+        comment = ui.input("Comment").props("outlined dense").classes("flex-1 min-w-48")
+
+        def save() -> None:
+            try:
+                save_str_validation(
+                    data_dir,
+                    family_id=family_id,
+                    variant_key=key,
+                    sample=member.value,
+                    user=get_current_user() or "",
+                    validation=validation.value,
+                    inheritance=inheritance.value,
+                    curated_repeats=repeats.value or "",
+                    comment=(comment.value or "").strip(),
+                )
+            except (PermissionError, ValueError) as ex:
+                ui.notify(str(ex), type="negative")
+                return
+            except OSError as ex:
+                ui.notify(f"Could not save the validation: {ex}", type="negative")
+                return
+            ui.notify(
+                f"STR validation saved: {member.value} {validation.value} at {locus}",
+                type="positive",
+            )
+            dialog.close()
+            if on_saved is not None:
+                on_saved()
+
+        ui.button("Save validation", icon="save", on_click=save).props(
+            "color=primary"
+        ).mark("str-validation-save")
+
+
 def show_eh_locus_dialog(
     store: Any,
+    family_id: str,
     fam: pl.DataFrame,
     members: List[Member],
     selected: List[str],
     context: Optional[CohortContext],
     label: str,
     locus: str,
+    on_saved: Optional[Callable[[], None]] = None,
 ) -> None:
-    """One locus: the cohort distribution, each member's call, their REViewer images."""
+    """One locus: the cohort distribution, each member's call and validations, REViewer."""
     details = [
         r for r in member_details(fam, locus, context) if r["sample"] in selected
     ]
@@ -434,6 +579,10 @@ def show_eh_locus_dialog(
             ],
             row_key="sample",
         ).props("dense flat").classes("w-full")
+
+        _render_validation(
+            store.data_dir, family_id, locus, info, details, dialog, on_saved
+        )
 
         ui.label("REViewer").classes("text-base font-semibold text-blue-700 mt-2")
         prefix = get_static_prefix()
