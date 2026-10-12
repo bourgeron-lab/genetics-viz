@@ -84,8 +84,11 @@ CYTOBANDS = _load_cytobands()
 
 
 def norm_chrom(raw: str) -> str:
-    """Normalise a chromosome string: strip 'chr' prefix, uppercase, M→MT."""
-    c = str(raw).replace("chr", "").upper()
+    """Normalise a chromosome string: strip a 'chr' prefix in any case, uppercase, M→MT."""
+    c = str(raw).strip()
+    if c[:3].lower() == "chr":
+        c = c[3:]
+    c = c.upper()
     return "MT" if c == "M" else c
 
 
