@@ -101,7 +101,7 @@ async def validation_statistics_page() -> None:
                             "text-xs font-semibold text-gray-600"
                         )
                         with ui.button(icon="person", color="blue").props("flat dense"):
-                            with ui.menu() as user_menu:
+                            with ui.menu():
                                 with ui.column().classes("p-2 gap-1"):
                                     user_checkboxes = {}
                                     for user in all_unique_users:

@@ -668,7 +668,7 @@ def show_sv_dialog(
                                                 ui.label(str(value)).classes(
                                                     "text-base text-gray-900 font-medium"
                                                 )
-                                        except:
+                                        except (TypeError, ValueError):
                                             ui.label(
                                                 str(value) if value is not None else "-"
                                             ).classes(
@@ -716,7 +716,7 @@ def show_sv_dialog(
                                                 ui.label(str(value)).classes(
                                                     "text-base text-gray-900 font-medium"
                                                 )
-                                        except:
+                                        except (TypeError, ValueError):
                                             ui.label(
                                                 str(value) if value is not None else "-"
                                             ).classes(

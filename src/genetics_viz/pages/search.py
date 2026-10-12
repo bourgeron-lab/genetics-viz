@@ -64,7 +64,6 @@ from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
     format_consequence_display,
     get_consequence_color,
-    get_consequence_impact,
 )
 
 

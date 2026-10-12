@@ -1,9 +1,6 @@
 """Cohort pages module."""
 
-# Import all page modules to register their routes
-from genetics_viz.pages.cohort import cohort, family, home, standalone_family
-
-# Export page functions for direct access if needed
+# Importing the page functions imports their modules, which registers the routes.
 from genetics_viz.pages.cohort.cohort import cohort_page
 from genetics_viz.pages.cohort.family import family_page
 from genetics_viz.pages.cohort.home import home_page

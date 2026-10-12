@@ -45,7 +45,6 @@ from genetics_viz.utils.clinvar import (
 )
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
-    VEP_CONSEQUENCE_PRIORITY,
     format_consequence_display,
     get_consequence_color,
     get_highest_consequence_term,
