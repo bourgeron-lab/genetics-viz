@@ -53,6 +53,7 @@ def run_app(
     host: str = "127.0.0.1",
     port: int = 8080,
     reload: bool = False,
+    show: bool = False,
 ) -> None:
     """Initialize and run the NiceGUI application.
 
@@ -61,6 +62,8 @@ def run_app(
         host: Host address to bind the server to.
         port: Port to run the server on.
         reload: Enable auto-reload for development.
+        show: Open a browser tab on start. Off by default: the app runs as a
+            server, where there is no browser to open.
     """
     # Store config in environment for reload mode
     if reload:
@@ -68,6 +71,7 @@ def run_app(
         os.environ["GENETICS_VIZ_HOST"] = host
         os.environ["GENETICS_VIZ_PORT"] = str(port)
         os.environ["GENETICS_VIZ_RELOAD"] = "1"
+        os.environ["GENETICS_VIZ_SHOW"] = "1" if show else "0"
 
     _init_from_config(config_file)
 
@@ -76,6 +80,7 @@ def run_app(
         host=host,
         port=port,
         reload=reload,
+        show=show,
         title="Genetics-Viz",
         favicon="🧬",
         dark=False,
@@ -109,6 +114,7 @@ if os.environ.get("GENETICS_VIZ_RELOAD") == "1":
             host=host,
             port=port,
             reload=True,
+            show=os.environ.get("GENETICS_VIZ_SHOW") == "1",
             title="Genetics-Viz",
             favicon="🧬",
             dark=False,
