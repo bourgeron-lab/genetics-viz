@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.15.0] - 2026-10-12
 
 ### Added
 - **STR tab on the family page**, with an **EH** (ExpansionHunter) sub-tab, for the ghfc-ngs `expansionhunter` step. Other STR callers will add sibling sub-tabs.
