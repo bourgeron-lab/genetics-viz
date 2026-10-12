@@ -83,6 +83,7 @@ src/genetics_viz/
         roh_tab.py                # Runs of homozygosity tab (per-family)
         str_tab.py                # STR tab (per-family): EH sub-tab + locus dialog
         cohort_roh_tab.py         # Runs of homozygosity sub-tab + islands dialog (cohort-wide)
+        cohort_str_tab.py         # STR sub-tab (cohort-wide): loci counts + flagged genotypes
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
         status_panel.py           # Pipeline run status (Workflow tab + home card)
@@ -208,6 +209,7 @@ Config files (YAML) are loaded once at module level.
 - **Classes and statuses are the pipeline's.** The app only colours and words them, from `config/str.yaml`. `str_plots.allele_class` mirrors the pipeline's order (pathogenic, intermediate, normal, above_normal) only to colour histogram bars.
 - **Member column ids are `m<index>`, not sample IDs.** TanStack reads a dot in an accessor key as a path, and the index into the family's member list keeps the ids stable when the member selection changes.
 - **Cohort context is optional and loads off-thread** (`load_cohort_context`, cached on `(path, mtime, size)`). The EH table is built only once the context is in. Built earlier, it would be replaced before the browser mounted it, and its container observer would time out.
+- **The cohort panel (`cohort_str_tab.py`) counts only the filtered individuals.** Rows are restricted by `restrict_to`, a semi-join on `(family_id, sample)`, since a sample can sit in two families. The founders' statistics and the "common" flag stay whole-cohort, from `loci.tsv`. Flagged genotypes come from the genotype table already in memory, not `flags.tsv`.
 - REViewer images: `reviewer_filename` in `str.yaml`, looked up in the sample's `str/expansionhunter/`, and shown with `loading="lazy"` because they run to a megabyte each.
 
 ### Cohort Discovery
@@ -233,7 +235,7 @@ Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: 
 The page has two levels of tabs, and they are separate mechanisms.
 
 - **Page-level, full width**: `General` (the individuals table plus the right-hand panels that follow its filters) and `Workflow`. `Workflow` is *created only when the cohort has a params file* — absent, not disabled — and its own lazy loader is the only `async` one, because it warms the run-record and document caches off-thread before rendering.
-- **Right-hand panel, inside `General`**: `Statistics` / `Ancestry` / `Polygenic Scores` / `ROH`, nested inside the General tab panel. Anything describing the pipeline run belongs on `Workflow` instead: it is a property of the cohort, not of the current filter, and does not fit a 400px column.
+- **Right-hand panel, inside `General`**: `Statistics` / `Ancestry` / `Polygenic Scores` / `ROH` / `STR`, nested inside the General tab panel. Anything describing the pipeline run belongs on `Workflow` instead: it is a property of the cohort, not of the current filter, and does not fit a 400px column.
 - Both levels use the same lazy pattern — a `{"loaded": False}` dict, a `@ui.refreshable` body with `_loading(...)`, and `ui.timer(0.1, load, once=True)` on tab change. The inner level keys `tab_state` and `lazy_tabs` by the exact tab label and `tab_state[e.args]` is an unguarded lookup, so a label must be added to both dicts or removed from both.
 - `render_status_panel(cohort, title=None)` suppresses the panel's own heading, because the Workflow tab's expansion header already carries the title, status chip and step summary.
 

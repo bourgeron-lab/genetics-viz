@@ -561,3 +561,128 @@ def locus_distribution(genotypes: pl.DataFrame, locus: str) -> Dict[int, int]:
         if longest is not None:
             counts[longest] = counts.get(longest, 0) + 1
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Cohort panel
+# ---------------------------------------------------------------------------
+
+
+def restrict_to(
+    genotypes: pl.DataFrame, keys: List[Tuple[Optional[str], str]]
+) -> pl.DataFrame:
+    """The genotype rows of the given ``(family_id, sample)`` pairs.
+
+    Keyed by both: a sample listed under two families has a row in each.
+    """
+    if not keys:
+        return genotypes.clear()
+    wanted = pl.DataFrame(
+        {"family_id": [k[0] for k in keys], "sample": [k[1] for k in keys]},
+        schema={"family_id": pl.String, "sample": pl.String},
+    ).unique()
+    return genotypes.join(wanted, on=["family_id", "sample"], how="semi")
+
+
+def cohort_locus_rows(
+    context: CohortContext, keys: List[Tuple[Optional[str], str]]
+) -> List[Dict[str, Any]]:
+    """One row per locus: how many of the selected individuals reach each status.
+
+    The founders' statistics come from ``loci.tsv`` and describe the whole
+    cohort; the counts follow the selection. Most flagged first.
+    """
+    if context.genotypes is None:
+        return []
+    sub = restrict_to(context.genotypes, keys)
+    counts: Dict[str, Dict[str, int]] = {}
+    for r in sub.group_by(["locus", "status"]).len().to_dicts():
+        counts.setdefault(r["locus"], {})[r["status"]] = r["len"]
+    loci = (
+        context.loci.to_dicts()
+        if context.loci is not None
+        else [
+            r
+            for r in context.genotypes.unique(
+                "locus", keep="first", maintain_order=True
+            )
+            .select(["locus", "disease", "inheritance"])
+            .to_dicts()
+        ]
+    )
+    rows = []
+    for position, loc in enumerate(loci):
+        c = counts.get(loc["locus"], {})
+        flagged = sum(c.get(s, 0) for s in FLAGGED)
+        share = common_in_cohort(loc)
+        rows.append(
+            {
+                "id": loc["locus"],
+                "order": position,
+                "locus": loc["locus"],
+                "disease": loc.get("disease") or "",
+                "inheritance": loc.get("inheritance") or "",
+                "n_pathogenic": c.get("pathogenic", 0),
+                "n_carrier": c.get("carrier", 0),
+                "n_intermediate": c.get("intermediate", 0),
+                "n_flagged": flagged,
+                "founders_p999": loc.get("founders_p99.9"),
+                "founders_max": loc.get("founders_max"),
+                "thresholds": thresholds_text(loc),
+                "flags": "",
+                "flags_badges": (
+                    [
+                        {
+                            "label": "common",
+                            "color": "#455a64",
+                            "tooltip": f"{share:.0%} of the whole cohort is flagged"
+                            " here: suspect the locus, catalog or thresholds",
+                        }
+                    ]
+                    if share is not None
+                    else []
+                ),
+            }
+        )
+    rows.sort(key=lambda r: (-r["n_flagged"], r["order"]))
+    return rows
+
+
+def cohort_flagged_rows(
+    context: CohortContext, keys: List[Tuple[Optional[str], str]]
+) -> List[Dict[str, Any]]:
+    """The selected individuals' pathogenic, carrier and intermediate genotypes.
+
+    Taken from the genotype table rather than ``flags.tsv``: it is already in
+    memory and carries the same rows, so a third file is not read.
+    """
+    if context.genotypes is None:
+        return []
+    sub = restrict_to(context.genotypes, keys).filter(pl.col("status").is_in(FLAGGED))
+    rows = []
+    for r in sub.to_dicts():
+        info = status_info(r.get("status"))
+        rows.append(
+            {
+                "id": f"{r['family_id']}|{r['sample']}|{r['locus']}",
+                "sample": r["sample"],
+                "FID": r["family_id"],
+                "locus": r["locus"],
+                "status": info["label"],
+                "status_rank": info["rank"],
+                "status_badges": [
+                    {"label": info["label"], "color": info["color"], "tooltip": ""}
+                ],
+                "alleles": "",
+                "alleles_badges": allele_badges(r, r.get("cohort_percentile")),
+                "allele_values": [
+                    a
+                    for a in (_int(r.get("allele1")), _int(r.get("allele2")))
+                    if a is not None
+                ],
+                "longest": longest_allele(r),
+                "pct": r.get("cohort_percentile"),
+            }
+        )
+    rows.sort(key=lambda r: (-r["status_rank"], r["locus"], -(r["pct"] or 0)))
+    return rows

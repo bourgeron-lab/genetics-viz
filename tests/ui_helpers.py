@@ -27,7 +27,7 @@ def open_tab(user: User, marker: str, label: str) -> None:
 
 
 def capture_tables(monkeypatch) -> list:
-    """Record the columns and rows of every DataTable built from now on.
+    """Record the columns, rows and filter callback of every DataTable built from now on.
 
     The tables render in JavaScript, so the simulation cannot see their cells;
     what the Python side hands them is what the browser would show. Call it
@@ -40,7 +40,13 @@ def capture_tables(monkeypatch) -> list:
     captured: list = []
 
     def recording_init(self, columns, rows, *args, **kwargs):
-        captured.append({"columns": [c["id"] for c in columns], "rows": rows})
+        captured.append(
+            {
+                "columns": [c["id"] for c in columns],
+                "rows": rows,
+                "on_filter": kwargs.get("on_filter"),
+            }
+        )
         original(self, columns, rows, *args, **kwargs)
 
     monkeypatch.setattr(table_cls, "__init__", recording_init)

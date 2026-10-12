@@ -165,3 +165,25 @@ async def test_standalone_family_reads_a_headerless_family_pedigree(user):
     await user.open("/family/AU-X-1")
     await user.should_see("Family: AU-X-1", retries=10)
     await user.should_not_see("No pedigree file found for this family.")
+
+
+async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-panel-tabs", "STR")
+    await user.should_see("flagged genotypes", retries=30)
+
+    flagged = next(t for t in tables if "alleles" in t["columns"])
+    assert {(r["sample"], r["locus"]) for r in flagged["rows"]} == {
+        ("S3", "HTT"),
+        ("S2", "FXN"),
+    }
+
+    individuals = tables[0]
+    with user.client:
+        individuals["on_filter"]({"filters": {"FID": "AU"}})
+    await user.should_see("No flagged genotype among the individuals shown", retries=30)
+    loci = [t for t in tables if "n_pathogenic" in t["columns"]][-1]
+    assert sum(r["n_flagged"] for r in loci["rows"]) == 0
