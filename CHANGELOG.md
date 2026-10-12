@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The All validations and Statistics pages list STR beside SNV and SV, with a type filter and their own colour. An STR row opens its family page.
 - `ExpansionHunter (STR)` label for the step in the Workflow status. An STR flag in the sample dialog's availability badges.
 
+### Fixed
+- **The standalone family page (`/family/<FID>`) listed no members for a pipeline-written pedigree.** ghfc-ngs writes `<FID>.pedigree.tsv` without a header, and the loader took its first member for one, so the page reported "No pedigree file found for this family." and every tab had no members. Family pedigrees now use the cohort pedigree's header detection: headerless files are read by position (FID, IID, father, mother, sex, phenotype), headed ones by column name as before.
+- **A headerless cohort pedigree whose first family ID starts with `FID`** (`FID001`) lost its first member to header detection, which was a prefix test. A first line is now a header only when it names a known pedigree column.
+
 ## [0.14.0] - 2026-10-12
 
 ### Added

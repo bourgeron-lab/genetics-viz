@@ -23,6 +23,99 @@ PEDIGREE_COLUMNS = ["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"]
 #: float-stringified (``0.0``, ``-9.0``), as they do for sex and phenotype.
 MISSING_PARENT = frozenset({"", "0", "-9", "0.0", "-9.0"})
 
+#: Header names for each pedigree field, in order of preference. Matched
+#: case-insensitively; FatherBarcode/MotherBarcode are the per-family format.
+PEDIGREE_COLUMN_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "family_id": ("FID", "FAMILY_ID", "FAMILYID", "FAMILY", "#FAMILY_ID"),
+    "sample_id": (
+        "IID",
+        "INDIVIDUAL_ID",
+        "SAMPLE_ID",
+        "SAMPLEID",
+        "SAMPLE",
+        "INDIVIDUAL",
+        "ID",
+    ),
+    "father_id": (
+        "PAT",
+        "FATHER_ID",
+        "FATHERID",
+        "FATHER",
+        "PATERNAL_ID",
+        "FATHERBARCODE",
+    ),
+    "mother_id": (
+        "MAT",
+        "MOTHER_ID",
+        "MOTHERID",
+        "MOTHER",
+        "MATERNAL_ID",
+        "MOTHERBARCODE",
+    ),
+    "sex": ("SEX", "GENDER"),
+    "phenotype": ("PHENOTYPE", "AFFECTED", "STATUS", "AFFECTION"),
+}
+
+_HEADER_NAMES = frozenset(
+    name.lstrip("#") for names in PEDIGREE_COLUMN_CANDIDATES.values() for name in names
+)
+
+
+def identify_pedigree_columns(columns: list[str]) -> dict[str, str | None]:
+    """Map each pedigree field to the column holding it, by header name.
+
+    Any column starting with ``PHENO_`` stands in for a missing phenotype.
+    """
+    by_upper = {c.upper(): c for c in columns}
+    mapping: dict[str, str | None] = {}
+    for key, candidates in PEDIGREE_COLUMN_CANDIDATES.items():
+        for name in candidates:
+            if name in by_upper:
+                mapping[key] = by_upper[name]
+                break
+    if "phenotype" not in mapping:
+        for upper_name, original_name in by_upper.items():
+            if upper_name.startswith("PHENO_"):
+                mapping["phenotype"] = original_name
+                break
+    return mapping
+
+
+def pedigree_has_header(pedigree_file: Path) -> bool:
+    """Whether the pedigree's first line is a header rather than a member.
+
+    A header names at least one known pedigree column. A prefix test on
+    ``FID`` would also take a headerless file whose first family is
+    ``FID001`` for a header, and would miss ``sample_id``-first headers.
+    """
+    with open(pedigree_file) as f:
+        first_line = f.readline()
+    fields = (field.strip().lstrip("#").upper() for field in first_line.split("\t"))
+    return any(f in _HEADER_NAMES or f.startswith("PHENO_") for f in fields)
+
+
+def read_positional_pedigree(pedigree_file: Path, skip_header: bool) -> pl.DataFrame:
+    """Read a pedigree as strings, naming the columns by position.
+
+    The first six are ``PEDIGREE_COLUMNS`` (FID, IID, PAT, MAT, SEX,
+    PHENOTYPE), any further ones ``COL7``, ``COL8``...
+    """
+    df = pl.read_csv(
+        pedigree_file,
+        separator="\t",
+        has_header=False,
+        skip_rows=1 if skip_header else 0,
+        infer_schema_length=0,  # Read all as strings
+    )
+    num_cols = len(df.columns)
+    col_names = PEDIGREE_COLUMNS[:num_cols]
+    # Pad with generic names if more columns than expected
+    while len(col_names) < num_cols:
+        col_names.append(f"COL{len(col_names) + 1}")
+    # Rename by position, not by the generated names: polars 1.x calls
+    # headerless columns column_1..column_N, polars 2.x column_0..column_N-1.
+    return df.rename(dict(zip(df.columns, col_names)))
+
 
 @dataclass
 class Sample:
@@ -102,35 +195,12 @@ class Cohort:
         """
         Load the pedigree file into a DataFrame.
 
-        Handles both files with and without headers.
-        If header is present (starts with "FID"), it is skipped.
+        Handles both files with and without headers. A header is skipped:
+        the columns are named by position either way.
         """
-        # Read first line to check for header
-        with open(self.pedigree_file) as f:
-            first_line = f.readline().strip()
-
-        has_header = first_line.upper().startswith("FID")
-
-        # Always read without header, skip first line if it's a header
-        df = pl.read_csv(
-            self.pedigree_file,
-            separator="\t",
-            has_header=False,
-            skip_rows=1 if has_header else 0,
-            infer_schema_length=0,  # Read all as strings
+        return read_positional_pedigree(
+            self.pedigree_file, skip_header=pedigree_has_header(self.pedigree_file)
         )
-
-        # Assign standard column names based on position
-        num_cols = len(df.columns)
-        col_names = PEDIGREE_COLUMNS[:num_cols]
-        # Pad with generic names if more columns than expected
-        while len(col_names) < num_cols:
-            col_names.append(f"COL{len(col_names) + 1}")
-        # Rename by position, not by the generated names: polars 1.x calls
-        # headerless columns column_1..column_N, polars 2.x column_0..column_N-1.
-        df = df.rename(dict(zip(df.columns, col_names)))
-
-        return df
 
     @classmethod
     def from_directory(cls, path: Path, params_file: Path | None = None) -> "Cohort":
@@ -219,55 +289,7 @@ class Cohort:
 
     def _identify_columns(self, df: pl.DataFrame) -> dict[str, str | None]:
         """Identify column names from various naming conventions."""
-        columns = {c.upper(): c for c in df.columns}
-
-        mapping: dict[str, str | None] = {}
-
-        # Family ID column
-        for name in ["FID", "FAMILY_ID", "FAMILYID", "FAMILY", "#FAMILY_ID"]:
-            if name in columns:
-                mapping["family_id"] = columns[name]
-                break
-
-        # Sample/Individual ID column
-        for name in [
-            "IID",
-            "INDIVIDUAL_ID",
-            "SAMPLE_ID",
-            "SAMPLEID",
-            "SAMPLE",
-            "INDIVIDUAL",
-            "ID",
-        ]:
-            if name in columns:
-                mapping["sample_id"] = columns[name]
-                break
-
-        # Father ID column
-        for name in ["PAT", "FATHER_ID", "FATHERID", "FATHER", "PATERNAL_ID"]:
-            if name in columns:
-                mapping["father_id"] = columns[name]
-                break
-
-        # Mother ID column
-        for name in ["MAT", "MOTHER_ID", "MOTHERID", "MOTHER", "MATERNAL_ID"]:
-            if name in columns:
-                mapping["mother_id"] = columns[name]
-                break
-
-        # Sex column
-        for name in ["SEX", "GENDER"]:
-            if name in columns:
-                mapping["sex"] = columns[name]
-                break
-
-        # Phenotype column
-        for name in ["PHENOTYPE", "AFFECTED", "STATUS", "AFFECTION"]:
-            if name in columns:
-                mapping["phenotype"] = columns[name]
-                break
-
-        return mapping
+        return identify_pedigree_columns(df.columns)
 
     def get_families_summary(self) -> list[dict]:
         """Get a summary of all families as a list of dicts (for NiceGUI tables)."""

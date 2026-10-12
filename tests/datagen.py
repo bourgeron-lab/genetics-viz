@@ -7,6 +7,7 @@ exercise the traps found so far:
 - family IDs that are numeric for most rows and not for one (``AU-X-1``), the
   case that made polars type ``family_id`` as an integer;
 - a pedigree with a header and one without, and float-stringified codes;
+  per-family pedigrees are headerless, as the pipeline writes them;
 - a cohort directory without a pedigree and one whose pedigree is unreadable;
 - a sharded ``families/`` tree;
 - two filter-tag variants of one bundle, ``dp6gq15`` and ``dp10gq20``;

@@ -91,9 +91,6 @@ def test_missing_pedigree_raises(tmp_path):
         Cohort.from_directory(tmp_path / "E")
 
 
-@pytest.mark.xfail(
-    strict=True, reason="header detection is a 'starts with FID' prefix check"
-)
 def test_headerless_pedigree_whose_first_family_starts_with_fid(tmp_path):
     cohort = make_cohort(
         tmp_path, "P", "FID001\tA\t0\t0\t1\t1\nFID001\tB\t0\t0\t2\t1\n"
