@@ -29,6 +29,7 @@ def check_sample_availability(data_dir: Path, sample_id: str) -> dict[str, Any]:
         "vaf_bedgraph": (seq_dir / f"{sample_id}.vaf.bedgraph.gz").exists(),
         "deepvariant": (sample_path / "deepvariant").is_dir(),
         "svs": (sample_path / "svs").is_dir(),
+        "str_expansionhunter": (sample_path / "str" / "expansionhunter").is_dir(),
     }
 
 
@@ -48,6 +49,7 @@ def check_family_availability(
         "vcfs": (family_path / "vcfs").is_dir(),
         "wombat": (family_path / "wombat").is_dir(),
         "wisecondorx": (family_path / "svs" / "wisecondorx").is_dir(),
+        "str_expansionhunter": (family_path / "str" / "expansionhunter").is_dir(),
         "extractor": (family_path / "extractor").is_dir(),
     }
 

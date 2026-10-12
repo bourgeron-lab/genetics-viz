@@ -5,6 +5,17 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **STR tab on the family page**, with an **EH** (ExpansionHunter) sub-tab, for the ghfc-ngs `expansionhunter` step. Other STR callers will add sibling sub-tabs.
+  - **One row per locus, one column per member.** Each allele is a badge: its repeat count, coloured by its class against the STRipy thresholds, with `·F` for flanking-only support and `·IR` for in-repeat reads. Hovering a badge shows the CI, read counts, coverage and cohort percentile. Loci are sorted most severe first, and a switch hides loci where every member is normal.
+  - **Flags:** `↑` marks a child whose longest allele is above both parents' at a non-normal status. **"common in cohort"** marks a locus where at least 5% of the cohort is pathogenic, carrier or intermediate (ARX_2, XYLT1), which points at the catalog or the thresholds rather than the person.
+  - **Cohort context:** the cohort's `loci.tsv` and `genotypes.tsv` add the founders' median, 99.9th percentile and maximum, and each member's percentile. They are read off-thread and cached on the file's stat. Without them the tab shows the family alone.
+  - **Locus dialog:** a histogram of the founders' longest allele with the thresholds and the members marked, then each member's full call. Each member's REViewer image is shown when the pipeline has written `<sample>.<catalog>.<locus>.svg`. The name pattern is set in `config/str.yaml`.
+  - A family with several catalog labels gets a selector.
+- `ExpansionHunter (STR)` label for the step in the Workflow status. An STR flag in the sample dialog's availability badges.
+
 ## [0.14.0] - 2026-10-12
 
 ### Added

@@ -1,0 +1,461 @@
+"""STR tab for the family page: short tandem repeats, one sub-tab per caller.
+
+Only ExpansionHunter (``EH``) exists today; another caller (STRling) adds a
+sibling sub-tab next to it.
+
+The EH sub-tab pivots the family's genotype table to one row per locus, with a
+column per member, so a child's allele sits beside their parents'. The cohort's
+tables, when present, add the founders' distribution and flag the loci where
+much of the cohort crosses a threshold - ARX_2 and XYLT1 do, which says more
+about the catalog or thresholds than about the individuals. Clicking a locus
+opens that distribution and the members' REViewer images.
+"""
+
+import asyncio
+import logging
+from typing import Any, Callable, Dict, List, Optional
+
+import polars as pl
+from nicegui import ui
+
+from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.data import get_static_prefix
+from genetics_viz.utils.sharding import get_sample_url
+from genetics_viz.utils.str_eh import (
+    FLAGGED,
+    STATUSES,
+    SUPPORT,
+    CohortContext,
+    Member,
+    eh_path,
+    family_locus_rows,
+    family_members,
+    find_eh_labels,
+    get_family_eh_dir,
+    load_cohort_context,
+    locus_distribution,
+    member_details,
+    member_key,
+    probe_eh_data,
+    read_eh_table,
+    reviewer_path,
+    status_info,
+    thresholds_text,
+)
+from genetics_viz.utils.str_plots import distribution_option
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["probe_eh_data", "render_str_tab"]
+
+
+def render_str_tab(
+    store: Any,
+    family_id: str,
+    cohort_name: str,
+    selected_members: Dict[str, List[str]],
+    data_table_refreshers: List[Callable[[], None]],
+) -> None:
+    """Render the STR tab panel content.
+
+    Args:
+        store: DataStore instance
+        family_id: Family ID
+        cohort_name: Cohort name ("" on the standalone family page)
+        selected_members: Dict with 'value' key containing list of selected member IDs
+        data_table_refreshers: List to append refresh functions to
+    """
+    eh_dir = get_family_eh_dir(store.data_dir, family_id)
+    labels = find_eh_labels(eh_dir, family_id)
+
+    n_flagged: Optional[int] = None
+    if labels:
+        try:
+            fam = read_eh_table(eh_path(eh_dir, family_id, labels[0], "genotypes"))
+            n_flagged = (
+                0
+                if fam is None
+                else fam.filter(pl.col("status").is_in(FLAGGED))["locus"].n_unique()
+            )
+        except Exception:
+            logger.warning(
+                "Failed to read the EH table of %s", family_id, exc_info=True
+            )
+
+    with ui.tabs().classes("w-full").mark("str-tabs") as str_subtabs:
+        eh_label = "EH" if not n_flagged else f"EH ({n_flagged} flagged)"
+        eh_tab = ui.tab("EH", label=eh_label).tooltip("ExpansionHunter")
+        if not labels:
+            eh_tab.props("disable")
+
+    with ui.tab_panels(str_subtabs, value=eh_tab).classes("w-full"):
+        with ui.tab_panel(eh_tab):
+            if not labels:
+                ui.label(f"No ExpansionHunter results in: {eh_dir}").classes(
+                    "text-gray-500 italic"
+                )
+            else:
+                render_eh_subtab(
+                    store=store,
+                    family_id=family_id,
+                    cohort_name=cohort_name,
+                    labels=labels,
+                    selected_members=selected_members,
+                    data_table_refreshers=data_table_refreshers,
+                )
+
+
+def _legend() -> None:
+    with ui.row().classes("items-center gap-2 text-xs text-gray-600 mt-2 flex-wrap"):
+        for key in STATUSES:
+            info = status_info(key)
+            ui.label(info["label"]).classes("px-2 py-0.5 rounded text-white").style(
+                f"background-color: {info['color']}"
+            )
+        for support in SUPPORT.values():
+            if support.get("code"):
+                ui.label(f"·{support['code']}: {support['help']}")
+        ui.label(
+            "Badges are the members' alleles in repeat units, coloured by class;"
+            " hover one for its CI, reads and cohort percentile. ↑: longer than"
+            " both parents' alleles."
+        )
+
+
+def render_eh_subtab(
+    store: Any,
+    family_id: str,
+    cohort_name: str,
+    labels: List[str],
+    selected_members: Dict[str, List[str]],
+    data_table_refreshers: List[Callable[[], None]],
+) -> None:
+    """The ExpansionHunter table of one family."""
+    eh_dir = get_family_eh_dir(store.data_dir, family_id)
+    cohort = store.cohorts.get(cohort_name) if cohort_name else None
+    state: Dict[str, Any] = {
+        "label": labels[0],
+        "fam": None,
+        "members": [],
+        "context": None,
+        "context_loading": cohort is not None,
+        "hide_normal": False,
+    }
+
+    def load_family() -> bool:
+        path = eh_path(eh_dir, family_id, state["label"], "genotypes")
+        try:
+            fam = read_eh_table(path)
+        except Exception:
+            logger.warning("Failed to read %s", path, exc_info=True)
+            fam = None
+        state["fam"] = fam
+        state["members"] = family_members(fam) if fam is not None else []
+        return fam is not None and len(fam) > 0
+
+    async def load_context() -> None:
+        if cohort is None:
+            return
+        state["context_loading"] = True
+        label = state["label"]
+        try:
+            context = await asyncio.to_thread(load_cohort_context, cohort, label)
+        except Exception:
+            logger.warning("Failed to read the cohort EH tables", exc_info=True)
+            context = None
+        if label != state["label"]:
+            return  # the catalog changed while reading
+        state["context"] = context
+        state["context_loading"] = False
+        content.refresh()
+
+    if not load_family():
+        ui.label("The ExpansionHunter table holds no genotypes").classes(
+            "text-gray-500 italic"
+        )
+        return
+
+    with ui.row().classes("items-center gap-4 mb-2 w-full"):
+        ui.label("ExpansionHunter").classes("text-lg font-semibold text-blue-700")
+        if len(labels) > 1:
+
+            def on_label(e: Any) -> None:
+                state["label"] = e.value
+                state["context"] = None
+                load_family()
+                content.refresh()
+                ui.timer(0.05, load_context, once=True)
+
+            ui.select(
+                options=labels,
+                value=state["label"],
+                label="Catalog",
+                on_change=on_label,
+            ).props("outlined dense").classes("w-48")
+        else:
+            ui.label(f"catalog {state['label']}").classes("text-xs text-gray-500")
+        ui.space()
+        ui.switch(
+            "Hide loci where every member is normal",
+            value=False,
+            on_change=lambda e: (
+                state.update({"hide_normal": e.value}),
+                content.refresh(),
+            ),
+        ).props("dense")
+
+    @ui.refreshable
+    def content() -> None:
+        fam: pl.DataFrame = state["fam"]
+        members: List[Member] = state["members"]
+        context: Optional[CohortContext] = state["context"]
+        selected = [m.sample for m in members if m.sample in selected_members["value"]]
+
+        if cohort is None:
+            ui.label("No cohort context on this page.").classes("text-xs text-gray-500")
+        elif state["context_loading"]:
+            # The table waits for the cohort: built now, it would be replaced
+            # before the browser mounted it, and its script would time out.
+            with ui.row().classes("items-center gap-2"):
+                ui.spinner(size="sm")
+                ui.label(
+                    f"Reading cohort {cohort.name}'s ExpansionHunter tables…"
+                ).classes("text-xs text-gray-500")
+            return
+        elif context is None or not context.available:
+            ui.label(
+                f"No cohort-level ExpansionHunter results for {cohort.name}"
+                f" (catalog {state['label']}): showing the family alone."
+            ).classes("text-orange-600 text-sm")
+        else:
+            n = context.n_founders
+            ui.label(
+                f"Cohort {context.name}"
+                + (f": compared with {n} founders" if n else "")
+                + " (members with no genotyped parent)."
+            ).classes("text-xs text-gray-500")
+
+        if not selected:
+            ui.label("No members selected").classes("text-gray-500 italic")
+            return
+
+        rows = family_locus_rows(fam, members, selected, context)
+        if state["hide_normal"]:
+            rows = [r for r in rows if r["worst_rank"] >= 1]
+
+        index = {m.sample: i for i, m in enumerate(members)}
+        num = {"sortable": True, "sorting": "numerical"}
+        columns: List[Dict[str, Any]] = [
+            {
+                "id": "actions",
+                "header": "",
+                "cellType": "action",
+                "actionName": "view_locus",
+                "actionIcon": "insights",
+                "actionColor": "#1976d2",
+                "actionTooltip": "Cohort distribution and REViewer",
+                "sortable": False,
+            },
+            {"id": "locus", "header": "Locus", "group": "Locus", "sortable": True,
+             "filter": {"type": "text"}},
+            {"id": "disease", "header": "Disease", "group": "Locus", "sortable": True,
+             "filter": {"type": "text"}, "maxWidth": 220},
+            {"id": "inheritance", "header": "Inh.", "group": "Locus", "sortable": True},
+            {"id": "motif", "header": "Motif", "group": "Locus", "sortable": False,
+             "maxWidth": 110},
+            {"id": "thresholds", "header": "Thresholds", "group": "Locus",
+             "sortable": False},
+            {"id": "worst", "header": "Status", "cellType": "badge_list",
+             "sortField": "worst_rank", **num},
+        ]  # fmt: skip
+        for sample in selected:
+            key = member_key(index[sample])
+            columns.append(
+                {
+                    "id": key,
+                    "header": members[index[sample]].column,
+                    "group": "Members",
+                    "cellType": "badge_list",
+                    "sortField": f"{key}_max",
+                    **num,
+                }
+            )
+        columns.append(
+            {
+                "id": "flags",
+                "header": "Flags",
+                "cellType": "badge_list",
+                "sortable": False,
+            }
+        )
+        if context is not None and context.loci is not None:
+            columns += [
+                {"id": "founders_median", "header": "Median", "group": "Cohort founders", **num},
+                {"id": "founders_p999", "header": "p99.9", "group": "Cohort founders", **num},
+                {"id": "founders_max", "header": "Max", "group": "Cohort founders", **num},
+                {"id": "cohort_flagged", "header": "Flagged", "group": "Cohort founders", **num},
+            ]  # fmt: skip
+
+        def on_row_action(e: Dict[str, Any]) -> None:
+            locus = (e.get("row") or {}).get("locus")
+            if locus:
+                show_eh_locus_dialog(
+                    store,
+                    fam,
+                    members,
+                    selected,
+                    state["context"],
+                    state["label"],
+                    locus,
+                )
+
+        DataTable(
+            columns=columns,
+            rows=rows,
+            row_key="id",
+            pagination={"rowsPerPage": 60},
+            on_row_action=on_row_action,
+            initial_sorting=[{"id": "worst", "desc": True}],
+        )
+        _legend()
+
+    content()
+    data_table_refreshers.append(content.refresh)
+    if cohort is not None:
+        ui.timer(0.05, load_context, once=True)
+
+
+def show_eh_locus_dialog(
+    store: Any,
+    fam: pl.DataFrame,
+    members: List[Member],
+    selected: List[str],
+    context: Optional[CohortContext],
+    label: str,
+    locus: str,
+) -> None:
+    """One locus: the cohort distribution, each member's call, their REViewer images."""
+    details = [
+        r for r in member_details(fam, locus, context) if r["sample"] in selected
+    ]
+    if not details:
+        return
+    info = details[0]
+
+    with ui.dialog().props("full-width") as dialog, ui.card().classes("w-full"):
+        with ui.row().classes("w-full items-center"):
+            ui.label(f"{locus}").classes("text-lg font-semibold text-blue-700")
+            ui.label(
+                f"{info.get('chrom')}:{info.get('pos')}-{info.get('end')}"
+                f" · {info.get('motif') or ''} · {info.get('disease') or 'no disease'}"
+                f" · {info.get('inheritance') or '–'} · {thresholds_text(info)}"
+            ).classes("text-sm text-gray-600")
+            ui.space()
+            ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+
+        if context is not None and context.genotypes is not None:
+            counts = locus_distribution(context.genotypes, locus)
+            marked = [
+                (
+                    r["sample"],
+                    [
+                        int(a)
+                        for a in (r.get("allele1"), r.get("allele2"))
+                        if a is not None
+                    ],
+                    r.get("status") or "",
+                )
+                for r in details
+            ]
+            option = distribution_option(
+                counts, info, marked, title=f"{locus} in cohort {context.name}"
+            )
+            height = 420 + 22 * len(marked)
+            # shrink-0: the dialog card is a flex column and would squeeze the
+            # chart below its height to fit the table under it.
+            ui.echart(option).classes("w-full shrink-0").style(f"height: {height}px")
+        else:
+            ui.label(
+                "No cohort genotype table: the founders' distribution is unavailable."
+            ).classes("text-gray-500 italic text-sm")
+
+        columns = [
+            {"name": "sample", "label": "Member", "field": "sample", "align": "left"},
+            {"name": "status", "label": "Status", "field": "status", "align": "left"},
+            {"name": "genotype", "label": "Alleles", "field": "alleles", "align": "left"},
+            {"name": "ci", "label": "CI", "field": "ci", "align": "left"},
+            {"name": "support", "label": "Support", "field": "support", "align": "left"},
+            {"name": "reads", "label": "Spanning / flanking / in-repeat", "field": "reads",
+             "align": "left"},
+            {"name": "coverage", "label": "Coverage", "field": "coverage"},
+            {"name": "filter", "label": "Filter", "field": "filter"},
+            {"name": "parents", "label": "Parents' max", "field": "parents"},
+            {"name": "pct", "label": "Cohort pct", "field": "pct"},
+        ]  # fmt: skip
+
+        def pair(r: Dict[str, Any], suffix: str) -> str:
+            values = [r.get(f"allele1{suffix}"), r.get(f"allele2{suffix}")]
+            return " / ".join(str(v) for v in values if v is not None) or "–"
+
+        def reads(r: Dict[str, Any]) -> str:
+            parts = []
+            for i in (1, 2):
+                if r.get(f"allele{i}") is None:
+                    continue
+                parts.append(
+                    f"{r.get(f'allele{i}_spanning') or 0}/"
+                    f"{r.get(f'allele{i}_flanking') or 0}/"
+                    f"{r.get(f'allele{i}_inrepeat') or 0}"
+                )
+            return " · ".join(parts) or "–"
+
+        ui.table(
+            columns=columns,
+            rows=[
+                {
+                    "sample": r["sample"],
+                    "status": status_info(r.get("status"))["label"],
+                    "alleles": pair(r, ""),
+                    "ci": pair(r, "_ci"),
+                    "support": pair(r, "_support"),
+                    "reads": reads(r),
+                    "coverage": (
+                        f"{r['locus_coverage']:.1f}x"
+                        if r.get("locus_coverage") is not None
+                        else "–"
+                    ),
+                    "filter": r.get("filter") or "–",
+                    "parents": r.get("parents_max_allele") or "–",
+                    "pct": "–"
+                    if r.get("cohort_percentile") is None
+                    else r["cohort_percentile"],
+                }
+                for r in details
+            ],
+            row_key="sample",
+        ).props("dense flat").classes("w-full")
+
+        ui.label("REViewer").classes("text-base font-semibold text-blue-700 mt-2")
+        prefix = get_static_prefix()
+        for r in details:
+            sample = r["sample"]
+            path = reviewer_path(store.data_dir, sample, label, locus)
+            if not path.exists():
+                ui.label(f"{sample}: no REViewer image").classes(
+                    "text-sm text-gray-500 italic"
+                )
+                continue
+            url = (
+                f"{prefix}/{get_sample_url(store.data_dir, sample)}"
+                f"/str/expansionhunter/{path.name}"
+            )
+            with ui.expansion(f"{sample} — REViewer", icon="image").classes("w-full"):
+                # loading=lazy: the images are up to a megabyte each, and the
+                # browser would fetch them all even while collapsed.
+                ui.html(
+                    f'<img src="{url}" loading="lazy" alt="REViewer {sample} {locus}"'
+                    ' style="width: 100%">',
+                    sanitize=False,
+                )
+
+    dialog.open()

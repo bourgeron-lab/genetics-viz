@@ -45,6 +45,12 @@ steps:
     note: >-
       Not measured unless the step was requested: the pipeline skips the whole
       ROH planning pass otherwise, so there is nothing to report.
+  expansionhunter:
+    label: "ExpansionHunter (STR)"
+    unit: "families"
+    note: >-
+      Not measured unless the step was requested: the pipeline skips the whole
+      ExpansionHunter planning pass otherwise, so there is nothing to report.
   snvs_cohort:
     label: "Cohort merge"
     unit: "cohort"
