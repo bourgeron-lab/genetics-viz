@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.1] - 2026-10-12
 
 ### Fixed
 - **Every cohort showed "Unreadable pedigree file — "column_6" not found" once polars 2.0 was installed.** Production installs with `uvx`, which ignores `uv.lock` and took polars 2.0.0 on its release. Polars 2.0 numbers headerless columns from `column_0` instead of `column_1`, and the pedigree loader renamed them by those generated names. It now renames by position, so it works on both versions.
