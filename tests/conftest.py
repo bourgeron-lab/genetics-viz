@@ -110,3 +110,32 @@ def config_file(tmp_path: Path, data_dir: Path, reference_root: Path) -> Path:
 def app_config(config_file: Path) -> config_model.AppConfig:
     """Load the config into ``config_model``'s singleton, as the app does."""
     return config_model.load_config(config_file)
+
+
+# ---------------------------------------------------------------------------
+# Simulated browser (NiceGUI user simulation)
+# ---------------------------------------------------------------------------
+
+UI_MAIN = Path(__file__).parent / "ui" / "app_main.py"
+
+
+@pytest.fixture
+async def user(
+    config_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
+):
+    """A simulated user on a freshly booted app over the synthetic data.
+
+    Fails the test on any ERROR log: NiceGUI reports exceptions raised in event
+    handlers and timers that way, so a lazy tab that crashes while loading
+    fails here even though no exception reaches the test.
+    """
+    from nicegui.storage import Storage
+    from nicegui.testing import user_simulation
+
+    monkeypatch.setenv("GENETICS_VIZ_TEST_CONFIG", str(config_file))
+    # NiceGUI's reset deletes Storage.path, which defaults to the real ./.nicegui.
+    monkeypatch.setattr(Storage, "path", tmp_path / ".nicegui")
+    async with user_simulation(main_file=UI_MAIN) as simulated:
+        yield simulated
+    errors = [r for r in caplog.get_records("call") if r.levelname == "ERROR"]
+    assert not errors, "\n".join(r.getMessage() for r in errors)
