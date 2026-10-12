@@ -87,3 +87,13 @@ def test_change_monitor_reports_and_survives_a_failing_subscriber(data_dir):
     os.utime(pedigree, (st.st_atime, st.st_mtime + 20))
     asyncio.run(change_monitor.check_now())
     assert len(received) == 1
+
+
+def test_ancestry_rows_keep_the_pcs_order_whatever_the_predictions_order(data_dir):
+    """Polars 2 guarantees no join order unless asked; the tabs ask for it."""
+    files = find_ancestry_files(data_dir, "1001")
+    predictions = files.ancestry_path.read_text().splitlines()
+    files.ancestry_path.write_text(
+        "\n".join([predictions[0], *reversed(predictions[1:])]) + "\n"
+    )
+    assert [r["IID"] for r in ancestry_tab._load_frames(files)] == ["S1", "S2", "S3"]

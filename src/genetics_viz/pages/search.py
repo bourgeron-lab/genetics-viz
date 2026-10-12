@@ -1402,7 +1402,9 @@ def search_cohort_page(cohort_name: str) -> None:
                             if c in combined.columns
                         ]
                         if dedup_cols:
-                            combined = combined.unique(subset=dedup_cols, keep="first")
+                            combined = combined.unique(
+                                subset=dedup_cols, keep="first", maintain_order=True
+                            )
                         wcx_filtered = combined
 
                     # Update progress: filtering complete
