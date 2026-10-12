@@ -65,3 +65,9 @@ def test_callers_schema_overrides_win(tmp_path):
         tmp_path / "f.tsv", string_columns=["IID"], schema_overrides={"IID": pl.Int64}
     )
     assert df.schema["IID"] == pl.Int64
+
+
+def test_clean_tsv_field():
+    from genetics_viz.utils.tsv import clean_tsv_field
+
+    assert clean_tsv_field("a\tb\nc\r\nd\re") == "a b c d e"

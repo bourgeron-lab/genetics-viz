@@ -9,6 +9,8 @@ import fcntl
 from pathlib import Path
 from typing import Dict, List
 
+from genetics_viz.utils.tsv import clean_tsv_field
+
 NOTES_HEADER = "FID\tSample\tMessage\tUser\tTimestamp\n"
 
 
@@ -50,8 +52,7 @@ def save_note(
 ) -> None:
     """Append a note entry to the TSV file with file locking."""
     ensure_notes_file(notes_file)
-    # Sanitize message: replace tabs and newlines to keep TSV intact
-    clean_msg = message.replace("\t", " ").replace("\n", " ").replace("\r", "")
+    clean_msg = clean_tsv_field(message)
     with open(notes_file, "a") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:

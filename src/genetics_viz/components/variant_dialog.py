@@ -12,6 +12,7 @@ from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.tsv import clean_tsv_field
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 
 # Path to the validation guide markdown file
@@ -712,7 +713,7 @@ def show_variant_dialog(
                         user = user_input.value.strip()
                         validation_status = validation_select.value
                         inheritance = inheritance_select.value or ""
-                        comment = (
+                        comment = clean_tsv_field(
                             comment_input.value.strip() if comment_input.value else ""
                         )
 
