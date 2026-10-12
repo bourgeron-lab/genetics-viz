@@ -101,34 +101,35 @@ def load_config(config_path: Path) -> AppConfig:
 
     # Parse data directories
     dirs: list[DataDirectoryConfig] = []
-    for entry in raw.get("data_directories", []):
+    # ``or`` rather than a .get default: a key present but empty loads as None.
+    for entry in raw.get("data_directories") or []:
         dirs.append(
             DataDirectoryConfig(
-                path=str(entry.get("path", "")),
-                description=str(entry.get("description", "")),
-                default=bool(entry.get("default", False)),
+                path=str(entry.get("path") or ""),
+                description=str(entry.get("description") or ""),
+                default=bool(entry.get("default")),
             )
         )
 
     # Parse users
     users: list[UserConfig] = []
-    for entry in raw.get("user_list", []):
+    for entry in raw.get("user_list") or []:
         users.append(
             UserConfig(
-                username=str(entry.get("username", "")),
-                password=str(entry.get("password", "")),
-                role=str(entry.get("role", "reader")),
+                username=str(entry.get("username") or ""),
+                password=str(entry.get("password") or ""),
+                role=str(entry.get("role") or "reader"),
             )
         )
 
     # Storage secret — auto-generate if missing
-    storage_secret = raw.get("storage_secret", "")
+    storage_secret = raw.get("storage_secret") or ""
     secret_was_missing = not storage_secret
     if secret_was_missing:
         storage_secret = secrets.token_hex(32)
 
-    poll_interval = int(raw.get("poll_interval", 30))
-    ancestry_reference_dir = str(raw.get("ancestry_reference_dir", ""))
+    poll_interval = int(raw.get("poll_interval") or 30)
+    ancestry_reference_dir = str(raw.get("ancestry_reference_dir") or "")
 
     config = AppConfig(
         config_path=config_path,
