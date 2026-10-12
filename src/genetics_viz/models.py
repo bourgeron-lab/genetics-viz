@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 # Standard pedigree column names (positional, no header)
 PEDIGREE_COLUMNS = ["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"]
 
+#: Parent IDs meaning "no parent". Some cohorts write the codes
+#: float-stringified (``0.0``, ``-9.0``), as they do for sex and phenotype.
+MISSING_PARENT = frozenset({"", "0", "-9", "0.0", "-9.0"})
+
 
 @dataclass
 class Sample:
@@ -34,8 +38,9 @@ class Sample:
     @property
     def is_founder(self) -> bool:
         """Check if this sample is a founder (no parents in pedigree)."""
-        missing = {None, "", "0", "-9"}
-        return self.father_id in missing and self.mother_id in missing
+        return (self.father_id is None or self.father_id in MISSING_PARENT) and (
+            self.mother_id is None or self.mother_id in MISSING_PARENT
+        )
 
 
 @dataclass
@@ -194,7 +199,7 @@ class Cohort:
                 if val is None or val == "":
                     return None
                 # For father/mother fields, "0" and "-9" mean no parent
-                if treat_missing_as_null and val in ("0", "-9"):
+                if treat_missing_as_null and val in MISSING_PARENT:
                     return None
                 return str(val)
 
