@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from nicegui import ui
 
 from genetics_viz.utils.ancestry import (
+    ID_COLUMNS,
     NULL_VALUES,
     AncestryFiles,
     Variant,
@@ -82,7 +83,10 @@ def _load(
     ID to its z-score row plus a ``region`` key.
     """
     df = read_tsv_or_none(
-        files.pgs_zscore_path, infer_schema_length=10000, null_values=NULL_VALUES
+        files.pgs_zscore_path,
+        infer_schema_length=10000,
+        null_values=NULL_VALUES,
+        string_columns=ID_COLUMNS,
     )
     if df is None or len(df) == 0 or "IID" not in df.columns:
         return None, [], []
@@ -94,7 +98,9 @@ def _load(
     regions: List[str] = []
     if files.ancestry_path is not None:
         try:
-            anc = read_tsv_or_none(files.ancestry_path, null_values=NULL_VALUES)
+            anc = read_tsv_or_none(
+                files.ancestry_path, null_values=NULL_VALUES, string_columns=ID_COLUMNS
+            )
             if anc is not None and "region" in anc.columns:
                 for row in anc.to_dicts():
                     entry = by_sample.get(row.get("IID"))

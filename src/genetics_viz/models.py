@@ -121,7 +121,9 @@ class Cohort:
         # Pad with generic names if more columns than expected
         while len(col_names) < num_cols:
             col_names.append(f"COL{len(col_names) + 1}")
-        df = df.rename({f"column_{i + 1}": name for i, name in enumerate(col_names)})
+        # Rename by position, not by the generated names: polars 1.x calls
+        # headerless columns column_1..column_N, polars 2.x column_0..column_N-1.
+        df = df.rename(dict(zip(df.columns, col_names)))
 
         return df
 

@@ -12,6 +12,7 @@ from nicegui import ui
 
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
+    ID_COLUMNS,
     NULL_VALUES,
     Variant,
     find_ancestry_files,
@@ -92,6 +93,7 @@ def render_pgs_tab(
                 selected.pgs_zscore_path,
                 infer_schema_length=10000,
                 null_values=NULL_VALUES,
+                string_columns=ID_COLUMNS,
             )
         except Exception:
             logger.warning("Failed to read %s", selected.pgs_zscore_path, exc_info=True)

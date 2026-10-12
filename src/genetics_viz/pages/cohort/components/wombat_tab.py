@@ -231,7 +231,7 @@ def render_wombat_tab(
                                 & (pl.col(col).cast(pl.Utf8) != ".")
                             )
                             .unique()
-                            .str.concat(delimiter=",")
+                            .str.join(",")
                             .alias(col)
                         )
 

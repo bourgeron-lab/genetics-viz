@@ -5,6 +5,16 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Every cohort showed "Unreadable pedigree file — "column_6" not found" once polars 2.0 was installed.** Production installs with `uvx`, which ignores `uv.lock` and took polars 2.0.0 on its release. Polars 2.0 numbers headerless columns from `column_0` instead of `column_1`, and the pedigree loader renamed them by those generated names. It now renames by position, so it works on both versions.
+- **The Wombat tab failed on every family under polars 2.0** ("`concat` was removed in version 2.0"). `str.concat` is replaced by `str.join`, available since polars 1.0.
+- **The cohort Ancestry and Polygenic Scores tabs were silently empty for GHFC-NT and dataset_paper_20251010**, on any polars version. In those cohorts' tables, the first rows of `family_id` are numeric, so polars typed the column as an integer, then failed on `C0733-008-000-039` / `AU-ANG-FER-MPX3`. `read_tsv_or_none` takes a `string_columns` option, and the ancestry, PGS and ROH readers use it for their identifier columns.
+
+### Changed
+- `polars` is capped below 2 until the code is audited against 2.x. The fixes above make the known breakages version-independent, but a major release can also change behaviour silently.
+
 ## [0.13.0] - 2026-10-12
 
 ### Added

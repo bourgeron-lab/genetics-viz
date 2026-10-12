@@ -331,7 +331,7 @@ dev = [
 requires-dist = [
     { name = "nicegui", specifier = ">=2.0.0" },
     { name = "plotly", specifier = ">=5.0.0" },
-    { name = "polars", specifier = ">=1.0.0" },
+    { name = "polars", specifier = ">=1.0.0,<2" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
 

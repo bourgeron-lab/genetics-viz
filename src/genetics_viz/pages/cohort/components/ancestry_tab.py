@@ -15,6 +15,7 @@ from nicegui import ui
 
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
+    ID_COLUMNS,
     NULL_VALUES,
     AncestryFiles,
     Variant,
@@ -213,13 +214,17 @@ def _load_frames(files: AncestryFiles) -> Optional[List[Dict]]:
     Returns row dicts, or ``None`` when the PCs hold no data. The join is a
     left join so the plots still render when ``ancestry.tsv`` is absent.
     """
-    pcs = read_tsv_or_none(files.pcs_path, null_values=NULL_VALUES)
+    pcs = read_tsv_or_none(
+        files.pcs_path, null_values=NULL_VALUES, string_columns=ID_COLUMNS
+    )
     if pcs is None or len(pcs) == 0:
         return None
 
     if files.ancestry_path is not None:
         try:
-            predictions = read_tsv_or_none(files.ancestry_path, null_values=NULL_VALUES)
+            predictions = read_tsv_or_none(
+                files.ancestry_path, null_values=NULL_VALUES, string_columns=ID_COLUMNS
+            )
             if predictions is not None and len(predictions) > 0:
                 overlap = (set(predictions.columns) & set(pcs.columns)) - {"IID"}
                 if overlap:

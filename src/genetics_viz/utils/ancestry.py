@@ -32,6 +32,11 @@ _CONFIG_PATH = Path(__file__).parent.parent / "config" / "ancestry.yaml"
 #: a string and make the whole column unsortable.
 NULL_VALUES = [".", "", "nan", "NaN", "NA"]
 
+#: Identifier columns of the ancestry-pgs tables, always read as strings. The
+#: cohort tables append ``family_id``, which is numeric for most families of
+#: some cohorts and not for others.
+ID_COLUMNS = ("IID", "FID", "family_id", "father", "mother")
+
 #: Principal components kept from the reference panel. It carries PC1-PC20, but
 #: only the first four are plotted and the panel has ~6.7k rows.
 REFERENCE_PCS = ["PC1", "PC2", "PC3", "PC4"]
@@ -347,7 +352,9 @@ def load_reference_pcs(bundle_version: str) -> Optional[pl.DataFrame]:
         )
     else:
         try:
-            df = read_tsv_or_none(path, null_values=NULL_VALUES)
+            df = read_tsv_or_none(
+                path, null_values=NULL_VALUES, string_columns=ID_COLUMNS
+            )
             if df is None or len(df) == 0:
                 logger.warning("Reference panel is empty: %s", path)
             else:

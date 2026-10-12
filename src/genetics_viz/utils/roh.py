@@ -18,7 +18,6 @@ Thresholds, wording and colours come from ``config/roh.yaml``; nothing here or
 in the tabs hard-codes them.
 """
 
-import gzip
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -234,12 +233,6 @@ def probe_cohort_roh_data(cohort: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _header(path: Path) -> List[str]:
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt") as fh:
-        return fh.readline().rstrip("\n").split("\t")
-
-
 def read_roh_table(path: Optional[Path]) -> Optional[pl.DataFrame]:
     """Read one ROH TSV with its identifier columns kept as strings.
 
@@ -249,12 +242,11 @@ def read_roh_table(path: Optional[Path]) -> Optional[pl.DataFrame]:
     """
     if path is None:
         return None
-    overrides = {c: pl.Utf8 for c in _header(path) if c in _STRING_COLUMNS}
     df = read_tsv_or_none(
         path,
         null_values=NULL_VALUES,
         infer_schema_length=10000,
-        schema_overrides=overrides,
+        string_columns=_STRING_COLUMNS,
     )
     if df is None:
         return None
