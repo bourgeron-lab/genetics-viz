@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-10-12
 
 ### Added
 - **ROH tabs on the family and cohort pages** for the new ghfc-ngs `roh` step (runs of homozygosity, `ancestry-pgs roh` ≥ 0.2.0). Every value is shown against the unrelated 1kGP+HGDP reference genomes of the person's own ancestry region, read from the bundle's `roh/` tier (`v<bundle>/bundle/roh/reference_froh.tsv.gz`), before the fixed published thresholds. Region comes first because the fixed thresholds alone would mislabel whole populations: among unrelated reference genomes, F_ROH > 0.03 holds for 150 of 682 South Asian and 61 of 126 Middle Eastern ones, against 17 of 665 European ones.
