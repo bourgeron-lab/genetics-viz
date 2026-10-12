@@ -416,7 +416,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
             roh_state = {"loaded": False}
 
             # Analysis tabs section
-            with ui.tabs().classes("w-full") as tabs:
+            with ui.tabs().classes("w-full").mark("family-tabs") as tabs:
                 wombat_tab = ui.tab("Wombat")
                 svs_tab = ui.tab("SVs")
                 ancestry_tab = ui.tab("Ancestry")

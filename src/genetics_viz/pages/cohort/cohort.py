@@ -201,7 +201,7 @@ def cohort_page(cohort_name: str) -> None:
             # the current filter and needs more room than a 400px column.
             has_params = cohort.params_file is not None
 
-            with ui.tabs().classes("w-full") as page_tabs:
+            with ui.tabs().classes("w-full").mark("cohort-page-tabs") as page_tabs:
                 general_tab = ui.tab("General")
                 # Absent rather than disabled: with no parameters file there is
                 # no pipeline to describe.
@@ -416,7 +416,11 @@ def cohort_page(cohort_name: str) -> None:
                             .classes("flex-1 min-w-[400px]")
                             .style("min-width: 0")
                         ):
-                            with ui.tabs().classes("w-full") as panel_tabs:
+                            with (
+                                ui.tabs()
+                                .classes("w-full")
+                                .mark("cohort-panel-tabs") as panel_tabs
+                            ):
                                 stats_tab = ui.tab("Statistics")
                                 ancestry_tab = ui.tab("Ancestry")
                                 pgs_tab = ui.tab("Polygenic Scores")

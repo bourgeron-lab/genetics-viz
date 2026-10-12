@@ -400,7 +400,7 @@ async def standalone_family_page(family_id: str) -> None:
             pgs_state = {"loaded": False}
             roh_state = {"loaded": False}
 
-            with ui.tabs().classes("w-full") as tabs:
+            with ui.tabs().classes("w-full").mark("family-tabs") as tabs:
                 wombat_tab = ui.tab("Wombat")
                 svs_tab = ui.tab("SVs")
                 ancestry_tab = ui.tab("Ancestry")
