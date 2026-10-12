@@ -326,8 +326,9 @@ def render_dnm_tab(
                                         impact,
                                         value=impact
                                         in filter_selected_impacts["value"],
-                                        on_change=lambda e,
-                                        i=impact: handle_impact_change(i, e.value),
+                                        on_change=lambda e, i=impact: (
+                                            handle_impact_change(i, e.value)
+                                        ),
                                     ).classes("text-sm")
 
             # Capture the client context for use in callbacks

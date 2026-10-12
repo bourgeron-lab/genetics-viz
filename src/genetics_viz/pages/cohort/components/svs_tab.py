@@ -653,8 +653,9 @@ def render_wisecondorx_subtab(
                                     call_checkboxes[call_value] = ui.checkbox(
                                         call_value,
                                         value=call_value in selected_calls["value"],
-                                        on_change=lambda e,
-                                        c=call_value: handle_call_change(c, e.value),
+                                        on_change=lambda e, c=call_value: (
+                                            handle_call_change(c, e.value)
+                                        ),
                                     ).classes("text-sm")
 
                     # Stats button

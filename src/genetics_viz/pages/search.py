@@ -2370,7 +2370,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                             sample=sample_id,
                                             variant_type="sv",
                                             diagnostic_file=sv_diag_file,
-                                            on_save_callback=lambda s: _refresh_all_rows(),
+                                            on_save_callback=lambda s: (
+                                                _refresh_all_rows()
+                                            ),
                                         )
                                     else:
                                         # SNV diagnostic
@@ -2384,7 +2386,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                             sample=sample_id,
                                             variant_type="snv",
                                             diagnostic_file=snv_diag_file,
-                                            on_save_callback=lambda s: _refresh_all_rows(),
+                                            on_save_callback=lambda s: (
+                                                _refresh_all_rows()
+                                            ),
                                         )
                                     return
 
@@ -2439,7 +2443,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                                 alt=alt,
                                                 sample=sample_id,
                                                 variant_data=dict(row_data),
-                                                on_save_callback=lambda s: _refresh_all_rows(),
+                                                on_save_callback=lambda s: (
+                                                    _refresh_all_rows()
+                                                ),
                                             )
                                         else:
                                             ui.notify(
