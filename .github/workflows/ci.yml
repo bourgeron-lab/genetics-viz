@@ -47,6 +47,28 @@ jobs:
       - name: pytest (locked dependencies)
         run: uv run pytest -m "not slow"
 
+  # The lock carries polars 2.x, which is also what production installs. The
+  # supported range still reaches back to 1.17 (the first release with
+  # join(maintain_order=)), so the newest 1.x and the floor are tested too.
+  polars-1x:
+    name: polars 1.x (${{ matrix.polars }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        polars: ["polars>=1.17,<2", "polars==1.17.1"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked
+      - name: pytest on ${{ matrix.polars }}
+        run: |
+          uv run --with "${{ matrix.polars }}" python -c "import polars; print('polars', polars.__version__)"
+          uv run --with "${{ matrix.polars }}" pytest -m "not slow"
+
   # Builds the wheel, installs it into a fresh environment the way production
   # does (uvx: no lock file, newest versions the pyproject ranges allow), and
   # runs the whole suite - the boot test included - against the installed

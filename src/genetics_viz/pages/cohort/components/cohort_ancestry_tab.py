@@ -237,7 +237,8 @@ def _load_rows(files: AncestryFiles) -> Optional[List[Dict]]:
                 overlap = (set(predictions.columns) & set(pcs.columns)) - {"IID"}
                 if overlap:
                     predictions = predictions.drop(list(overlap))
-                pcs = pcs.join(predictions, on="IID", how="left")
+                # Polars guarantees no row order for a join unless asked.
+                pcs = pcs.join(predictions, on="IID", how="left", maintain_order="left")
         except Exception:
             logger.warning("Failed to read %s", files.ancestry_path, exc_info=True)
 
