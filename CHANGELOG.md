@@ -5,6 +5,36 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **A test suite** of 186 tests, running in about 5 seconds, plus 3 known issues marked `xfail`. It runs on a synthetic data directory and reference bundle built per test, so it needs no access to the data mount.
+  - **Unit tests:** pedigree loading, cohort discovery and change detection; ancestry and ROH file discovery and readings; the run record and parameters file; curation file read/write; config loading; the plot builders; and validation of every shipped YAML config.
+  - **UI tests:** NiceGUI's user simulation logs in as each role and opens the home, cohort and family pages and every lazy tab. A test fails on any error the page logs. The ROH tests check that relationship readings reach curators only.
+  - **Boot test:** a subprocess starts the real server and checks `/health`, the login page and the redirect.
+- **Continuous integration** (`.github/workflows/ci.yml`), on every pull request and push to main:
+  - ruff check and format;
+  - the tests on Python 3.12 and 3.13 with the locked dependencies;
+  - a `package` job that builds the wheel, checks it ships its config and static files, installs it **without the lock file** (as `uvx` does in production) and runs the whole suite against it.
+- **A weekly upstream check** (`upstream.yml`) does that unlocked install every Monday and opens an issue when an upstream release breaks the suite. The Polars 2.0 failure of 0.13.1 came from PyPI, not from a commit, and would have shown up here first.
+- **Gated publishing:** `publish.yml` runs the full CI before building, and refuses a tag that does not match the `pyproject.toml` version.
+- **Dependabot** for the workflow actions and `uv.lock`.
+- `--show` option to open a browser tab on start, for local use.
+
+### Fixed
+- **The server no longer tries to open a browser when it starts.** `ui.run` defaulted to `show=True`, including in production on a headless VM.
+- **Multi-line diagnostic comments corrupted `diagnostics/snvs.tsv`.** The comment was written raw, so a newline split the record. The SNV and SV validation dialogs had the same problem with tabs. All curation writers now share one `clean_tsv_field`.
+- **A float-stringified parent ID (`0.0`, `-9.0`) was kept as a real parent**, so the founder was not counted as a founder. Sex and phenotype were already normalised.
+- **`load_config` crashed on an empty key** such as `data_directories:`, and an empty `ancestry_reference_dir:` became the literal path `None`.
+- **A hot-added data directory could reuse a removed directory's static prefix**, while the removed directory's route stayed mounted.
+- **`norm_chrom("Chr1")` returned `CHR1`**: only a lowercase `chr` prefix was stripped.
+- **A bundle release candidate (`1.0.0rc1`) outranked its release** when choosing the default variant.
+- `pyyaml` is now a declared dependency. It was imported throughout but only arrived through NiceGUI.
+
+### Changed
+- **The Wombat aggregation** (one row per variant and sample) was duplicated between the family tab and search. It is now `utils/wombat.py::aggregate_by_variant`, and it joins distinct values in first-seen order. Before, the order of a merged cell such as `GENEA,GENEB` could differ between runs and Polars versions.
+- The 13 pre-existing ruff errors are fixed, so lint can gate CI.
+
 ## [0.13.1] - 2026-10-12
 
 ### Fixed

@@ -10,13 +10,31 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
 
 ## Commands
 
-- **Run app**: `uv run genetics-viz /path/to/config.yaml`
-- **Run tests**: `uv run pytest`
+- **Run app**: `uv run genetics-viz /path/to/config.yaml` (add `--show` to open a browser tab)
+- **Run tests**: `uv run pytest` (`-m "not slow"` skips the subprocess boot test)
 - **Lint**: `uv run ruff check .`
 - **Format**: `uv run ruff format .`
 - **Compile check**: `uv run python -m py_compile src/genetics_viz/path/to/file.py`
 - **Always use `uv run`** to execute Python commands, never bare `python`.
 - **Always use `uv add`** to add dependencies, never bare `pip install`.
+
+## Tests and CI
+
+- `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the `GeneScorer` singleton. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
+- **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
+  - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
+  - The `user` fixture points `Storage.path` at `tmp_path`. The reset otherwise deletes the real `.nicegui/` sessions.
+  - It fails a test on any ERROR log, which is how NiceGUI reports an exception in a lazy tab.
+- **UI test gotchas:**
+  - **Tabs:** switch them with `ui_helpers.open_tab`, which sends `update:modelValue`. NiceGUI stores listeners under the camelCase name, and clicking a `ui.tab` does nothing in simulation. Tab bars carry `.mark("family-tabs")`, `"cohort-panel-tabs"` and `"cohort-page-tabs"` for this.
+  - **Table and chart contents** render in JS and are invisible to `should_see`. Assert on what the Python side passes: `ui_helpers.capture_tables` records `DataTable` rows, and `ui.echart(...).options` holds the chart data.
+- **CI:**
+  - `ci.yml` runs on PRs and on main: ruff, pytest on 3.12/3.13 with the lock, and a `package` job that tests the built wheel installed without the lock.
+  - `upstream.yml` runs that unlocked install weekly and opens an issue when it fails. Production (`uvx`) ignores `uv.lock`, so an upstream release can break it with no commit here.
+  - `publish.yml` runs `ci.yml` first and checks the tag against the version.
+- **Known issues are `xfail(strict=True)`:** once one is fixed, its test starts passing and fails the run until the marker is removed.
 
 ## Project Structure
 
@@ -97,6 +115,8 @@ src/genetics_viz/
     vep.py                        # VEP consequence utilities (from YAML)
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
     sharding.py                   # Two-level sharded directory path resolution
+    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field
+    wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
     view_presets.py               # View preset loading with reload support
     column_names.py               # Column name/group/sorting/schema utilities
   static/
