@@ -1,69 +1,72 @@
 """Standalone pedigree file parser for per-family pedigree TSV files.
 
-Parses pedigree files independently of the Cohort model, supporting
-the per-family format (FatherBarcode/MotherBarcode/sample_id columns)
-as well as the standard cohort format (PAT/MAT/IID columns).
+Parses pedigree files independently of the Cohort model. A file with a
+header is read by column name, which covers the per-family format
+(FatherBarcode/MotherBarcode/sample_id columns) as well as the standard
+cohort names (PAT/MAT/IID). A file without one - as the ghfc-ngs pipeline
+writes ``<FID>.pedigree.tsv`` - is read by position: FID, IID, father,
+mother, sex, phenotype. Header detection is the cohort pedigree's own.
 """
 
 from pathlib import Path
 
 import polars as pl
 
-from genetics_viz.models import Family, Sample
+from genetics_viz.models import (
+    MISSING_PARENT,
+    Family,
+    Sample,
+    identify_pedigree_columns,
+    pedigree_has_header,
+    read_positional_pedigree,
+)
 
 
-def _identify_columns(df: pl.DataFrame) -> dict[str, str | None]:
-    """Identify pedigree column names from various naming conventions.
+def _read_family_samples(pedigree_path: Path, family_id: str) -> list[Sample]:
+    """Read a per-family pedigree into Samples, headed or headerless.
 
-    Extends the Cohort._identify_columns() mappings with per-family
-    pedigree column names (FatherBarcode, MotherBarcode, sample_id).
+    Parent codes in ``MISSING_PARENT`` become ``None``. Sex and phenotype are
+    kept as written, as in the cohort model; ``utils/pedigree_labels``
+    normalises them for display.
     """
-    columns = {c.upper(): c for c in df.columns}
-    mapping: dict[str, str | None] = {}
+    if pedigree_has_header(pedigree_path):
+        df = pl.read_csv(pedigree_path, separator="\t", infer_schema_length=0)
+    else:
+        df = read_positional_pedigree(pedigree_path, skip_header=False)
+    col_mapping = identify_pedigree_columns(df.columns)
 
-    for key, candidates in {
-        "family_id": ["FID", "FAMILY_ID", "FAMILYID", "FAMILY", "#FAMILY_ID"],
-        "sample_id": [
-            "IID",
-            "INDIVIDUAL_ID",
-            "SAMPLE_ID",
-            "SAMPLEID",
-            "SAMPLE",
-            "INDIVIDUAL",
-            "ID",
-        ],
-        "father_id": [
-            "PAT",
-            "FATHER_ID",
-            "FATHERID",
-            "FATHER",
-            "PATERNAL_ID",
-            "FATHERBARCODE",
-        ],
-        "mother_id": [
-            "MAT",
-            "MOTHER_ID",
-            "MOTHERID",
-            "MOTHER",
-            "MATERNAL_ID",
-            "MOTHERBARCODE",
-        ],
-        "sex": ["SEX", "GENDER"],
-        "phenotype": ["PHENOTYPE", "AFFECTED", "STATUS", "AFFECTION"],
-    }.items():
-        for name in candidates:
-            if name in columns:
-                mapping[key] = columns[name]
-                break
+    sample_col = col_mapping.get("sample_id")
+    if sample_col is None:
+        return []
+    father_col = col_mapping.get("father_id")
+    mother_col = col_mapping.get("mother_id")
+    sex_col = col_mapping.get("sex")
+    phenotype_col = col_mapping.get("phenotype")
 
-    # Fallback: any column starting with PHENO_ is a phenotype column
-    if "phenotype" not in mapping:
-        for upper_name, original_name in columns.items():
-            if upper_name.startswith("PHENO_"):
-                mapping["phenotype"] = original_name
-                break
+    samples = []
+    for row in df.iter_rows(named=True):
 
-    return mapping
+        def _val(col: str | None, treat_missing: bool = False) -> str | None:
+            if col is None:
+                return None
+            val = row.get(col)
+            if val is None or val == "":
+                return None
+            if treat_missing and val in MISSING_PARENT:
+                return None
+            return str(val)
+
+        samples.append(
+            Sample(
+                sample_id=str(row[sample_col]),
+                family_id=family_id,
+                father_id=_val(father_col, treat_missing=True),
+                mother_id=_val(mother_col, treat_missing=True),
+                sex=_val(sex_col),
+                phenotype=_val(phenotype_col),
+            )
+        )
+    return samples
 
 
 def load_family_pedigree(pedigree_path: Path) -> list[dict]:
@@ -72,44 +75,16 @@ def load_family_pedigree(pedigree_path: Path) -> list[dict]:
     Returns the same format as Cohort.get_family_members():
         [{"Sample ID": ..., "Father": ..., "Mother": ..., "Sex": ..., "Phenotype": ...}]
     """
-    df = pl.read_csv(pedigree_path, separator="\t", infer_schema_length=0)
-    col_mapping = _identify_columns(df)
-
-    sample_col = col_mapping.get("sample_id")
-    father_col = col_mapping.get("father_id")
-    mother_col = col_mapping.get("mother_id")
-    sex_col = col_mapping.get("sex")
-    phenotype_col = col_mapping.get("phenotype")
-
-    if sample_col is None:
-        return []
-
-    _MISSING = {None, "", "0", "-9"}
-    members = []
-    for row in df.iter_rows(named=True):
-        sample_id = str(row[sample_col])
-        father = str(row[father_col]) if father_col and row.get(father_col) else "-"
-        mother = str(row[mother_col]) if mother_col and row.get(mother_col) else "-"
-        sex = str(row[sex_col]) if sex_col and row.get(sex_col) else "-"
-        phenotype = (
-            str(row[phenotype_col]) if phenotype_col and row.get(phenotype_col) else "-"
-        )
-
-        if father in _MISSING:
-            father = "-"
-        if mother in _MISSING:
-            mother = "-"
-
-        members.append(
-            {
-                "Sample ID": sample_id,
-                "Father": father,
-                "Mother": mother,
-                "Sex": sex,
-                "Phenotype": phenotype,
-            }
-        )
-    return members
+    return [
+        {
+            "Sample ID": sample.sample_id,
+            "Father": sample.father_id or "-",
+            "Mother": sample.mother_id or "-",
+            "Sex": sample.sex or "-",
+            "Phenotype": sample.phenotype or "-",
+        }
+        for sample in _read_family_samples(pedigree_path, family_id="")
+    ]
 
 
 def load_family_object(pedigree_path: Path, family_id: str) -> Family:
@@ -118,43 +93,7 @@ def load_family_object(pedigree_path: Path, family_id: str) -> Family:
     Returns a Family with Sample children, supporting .num_samples
     and .num_founders properties.
     """
-    df = pl.read_csv(pedigree_path, separator="\t", infer_schema_length=0)
-    col_mapping = _identify_columns(df)
-
-    sample_col = col_mapping.get("sample_id")
-    father_col = col_mapping.get("father_id")
-    mother_col = col_mapping.get("mother_id")
-    sex_col = col_mapping.get("sex")
-    phenotype_col = col_mapping.get("phenotype")
-
-    family = Family(family_id=family_id)
-
-    if sample_col is None:
-        return family
-
-    _MISSING = {"", "0", "-9"}
-
-    for row in df.iter_rows(named=True):
-        sample_id = str(row[sample_col])
-
-        def _val(col: str | None, treat_missing: bool = False) -> str | None:
-            if col is None:
-                return None
-            val = row.get(col)
-            if val is None or val == "":
-                return None
-            if treat_missing and str(val) in _MISSING:
-                return None
-            return str(val)
-
-        sample = Sample(
-            sample_id=sample_id,
-            family_id=family_id,
-            father_id=_val(father_col, treat_missing=True),
-            mother_id=_val(mother_col, treat_missing=True),
-            sex=_val(sex_col),
-            phenotype=_val(phenotype_col),
-        )
-        family.samples.append(sample)
-
-    return family
+    return Family(
+        family_id=family_id,
+        samples=_read_family_samples(pedigree_path, family_id),
+    )

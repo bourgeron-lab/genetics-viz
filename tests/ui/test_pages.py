@@ -2,7 +2,6 @@
 
 import asyncio
 
-import pytest
 from nicegui import ui
 from ui_helpers import capture_tables, login, open_tab, roh_threshold_labels
 
@@ -157,16 +156,13 @@ async def test_standalone_family_str_tab_has_no_cohort_context(user):
     await user.should_see("No cohort context on this page.", retries=30)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="load_family_pedigree reads the first row of the pipeline's headerless"
-    " family pedigree as a header, so the standalone page finds no members",
-)
 async def test_standalone_family_reads_a_headerless_family_pedigree(user):
     await login(user, "reader")
     await user.open("/family/AU-X-1")
     await user.should_see("Family: AU-X-1", retries=10)
     await user.should_not_see("No pedigree file found for this family.")
+    await user.should_see("2 members")
+    await user.should_see("1 founders")
 
 
 async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
