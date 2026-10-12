@@ -5,6 +5,33 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **ROH tabs on the family and cohort pages** for the new ghfc-ngs `roh` step (runs of homozygosity, `ancestry-pgs roh` ≥ 0.2.0). Every value is shown against the unrelated 1kGP+HGDP reference genomes of the person's own ancestry region, read from the bundle's `roh/` tier (`v<bundle>/bundle/roh/reference_froh.tsv.gz`), before the fixed published thresholds. Region comes first because the fixed thresholds alone would mislabel whole populations: among unrelated reference genomes, F_ROH > 0.03 holds for 150 of 682 South Asian and 61 of 126 Middle Eastern ones, against 17 of 665 European ones.
+- **Family ROH tab**, with five blocks:
+  - **Summary:** one row per member, with F_ROH and its percentile within the region, F by segment class, the population-vs-recent pattern, a grade, and flags for a UPD candidate chromosome or a failed call-rate check.
+  - **Against the reference:** per reference group, a strip of the reference with the members on it (F_ROH, F long or F short + intermediate), and the population-vs-recent plane whose 95th-percentile lines delimit the pipeline's four patterns.
+  - **Genome:** chromosomes 1–22 with each member's segments by length class and the reference hotspots shaded; a UPD candidate chromosome is outlined.
+  - **Genes in ROH:** longest ROH first, with genes mostly inside reference hotspots hidden by default.
+  - **Kinship:** KING kinship checked against the pedigree, so a declared parent–offspring or sib pair at the wrong degree is flagged as a mismatch.
+- **Cohort ROH sub-tab** in the right-hand panel, following the individuals-table filters:
+  - horizontal split violins per reference group, the cohort beside its reference, or the cohort alone by phenotype or sex;
+  - the population-vs-recent plane for one group;
+  - grade and pattern counts;
+  - a list of flagged individuals linked to their family;
+  - a full-width dialog with the founders' genome-wide ROH islands (`roh_windows.tsv`) against the reference hotspots.
+
+  Only the cohort `froh` table is read: the cohort segment and gene tables run to 31 and 93 MB.
+- **Role-dependent wording.** Viewers see neutral grades (Elevated / High / Very high / Mild) and only the kinship pairs the pedigree declares related. Curators and administrators also see the relationship each grade is typical of, the parents' kinship and expected F, and every kinship pair. A first-degree reading can reveal incest, which ACMG asks to be handled under an institutional policy. This is presentation only: the raw TSVs remain reachable through the data directory's static route.
+- **`config/roh.yaml`** — grade thresholds and wording, pattern and segment-class colours, KING degree bounds. They mirror ancestry-pgs constants; no component hard-codes a threshold.
+- `roh` in `config/pipeline_steps.yaml`, labelled "Runs of homozygosity".
+
+### Changed
+- Ancestry file discovery takes the set of result kinds as a parameter, so the `roh/` directories, which share the `<id>.apgs_b<bundle>_<tag>.<kind>.tsv` naming, reuse it.
+- The chromosome backbone of the search statistics ideogram (bands, outline, Mb grid) moved into `utils/ideogram.py`, shared with the ROH genome view. Its output is unchanged.
+- The phenotype and sex plot palettes moved from the cohort PGS tab into `utils/pedigree_labels.py`.
+
 ## [0.12.0] - 2026-09-22
 
 ### Added

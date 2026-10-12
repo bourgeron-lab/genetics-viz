@@ -17,6 +17,10 @@ from genetics_viz.pages.cohort.components.cohort_pgs_tab import (
     probe_cohort_pgs_data,
     render_cohort_pgs_tab,
 )
+from genetics_viz.pages.cohort.components.cohort_roh_tab import (
+    probe_cohort_roh_data,
+    render_cohort_roh_tab,
+)
 from genetics_viz.pages.cohort.components.docs_panel import render_params_doc_panel
 from genetics_viz.pages.cohort.components.params_panel import render_params_panel
 from genetics_viz.pages.cohort.components.stats_panel import render_stats_panel
@@ -396,11 +400,13 @@ def cohort_page(cohort_name: str) -> None:
                         # to the current table filters, and needs the full width.
                         has_ancestry = probe_cohort_ancestry_data(cohort)
                         has_pgs = probe_cohort_pgs_data(cohort)
+                        has_roh = probe_cohort_roh_data(cohort)
 
                         # Each tab reads its files on first view, not on first paint.
                         tab_state: Dict[str, Dict[str, bool]] = {
                             "Ancestry": {"loaded": False},
                             "Polygenic Scores": {"loaded": False},
+                            "ROH": {"loaded": False},
                         }
 
                         # "min-width: 0" lets the flex item shrink below its content;
@@ -414,10 +420,13 @@ def cohort_page(cohort_name: str) -> None:
                                 stats_tab = ui.tab("Statistics")
                                 ancestry_tab = ui.tab("Ancestry")
                                 pgs_tab = ui.tab("Polygenic Scores")
+                                roh_tab = ui.tab("ROH")
                                 if not has_ancestry:
                                     ancestry_tab.props("disable")
                                 if not has_pgs:
                                     pgs_tab.props("disable")
+                                if not has_roh:
+                                    roh_tab.props("disable")
 
                             with ui.tab_panels(panel_tabs, value=stats_tab).classes(
                                 "w-full"
@@ -467,12 +476,33 @@ def cohort_page(cohort_name: str) -> None:
 
                                     pgs_content()
 
+                                with ui.tab_panel(roh_tab).classes("w-full p-0"):
+
+                                    @ui.refreshable
+                                    def roh_content() -> None:
+                                        if not has_roh:
+                                            ui.label(
+                                                "No cohort-level ROH results"
+                                            ).classes("text-gray-500 italic")
+                                        elif tab_state["ROH"]["loaded"]:
+                                            render_cohort_roh_tab(
+                                                store,
+                                                cohort,
+                                                filtered_state,
+                                                refreshers,
+                                            )
+                                        else:
+                                            _loading("Loading runs of homozygosity...")
+
+                                    roh_content()
+
                             # Keyed by the exact tab label, and parallel to tab_state:
                             # on_panel_tab_change looks the label up in both, so a tab
                             # in one and not the other is a KeyError or a dead tab.
                             lazy_tabs = {
                                 "Ancestry": (has_ancestry, ancestry_content),
                                 "Polygenic Scores": (has_pgs, pgs_content),
+                                "ROH": (has_roh, roh_content),
                             }
 
                             def on_panel_tab_change(e: Any) -> None:

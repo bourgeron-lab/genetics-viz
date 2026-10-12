@@ -10,11 +10,10 @@ from nicegui import ui
 from genetics_viz.utils.cytobands import (
     CHROM_ORDER,
     CHROM_SIZES_MB,
-    CYTOBANDS,
-    GIESTAIN_COLORS,
     VALIDATION_COLORS,
     norm_chrom,
 )
+from genetics_viz.utils.ideogram import chromosome_svg, mb_axis_svg
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
     format_consequence_display,
@@ -378,19 +377,8 @@ def show_stats_dialog(rows: List[Dict[str, Any]]) -> None:
                     ]
 
                     axis_y = len(chrom_order) * (row_h + row_gap)
-                    for mb_val in range(0, 260, 50):
-                        gx = lbl_w + (mb_val / max_mb) * plot_w
-                        svg_parts.append(
-                            f'<line x1="{gx:.1f}" y1="0" '
-                            f'x2="{gx:.1f}" y2="{axis_y}" '
-                            f'stroke="#e5e7eb" stroke-width="0.5" '
-                            f'stroke-dasharray="3,3"/>'
-                        )
-                        svg_parts.append(
-                            f'<text x="{gx:.1f}" y="{axis_y + 14}" '
-                            f'text-anchor="middle" font-size="12" '
-                            f'fill="#6b7280">{mb_val}</text>'
-                        )
+                    px_per_mb = plot_w / max_mb
+                    svg_parts.extend(mb_axis_svg(lbl_w, px_per_mb, 0, axis_y, max_mb))
                     svg_parts.append(
                         f'<text x="{svg_w / 2}" y="{axis_y + 32}" '
                         f'text-anchor="middle" font-size="13" '
@@ -399,32 +387,13 @@ def show_stats_dialog(rows: List[Dict[str, Any]]) -> None:
 
                     for ci, chrom in enumerate(chrom_order):
                         bar_y = ci * (row_h + row_gap) + tri_h
-                        bands = CYTOBANDS.get(chrom, [])
-                        cs = chrom_sizes_mb.get(chrom, 0)
-                        total_w = (cs / max_mb) * plot_w
-
                         svg_parts.append(
                             f'<text x="{lbl_w - 6}" y="{bar_y + row_h * 0.75}" '
                             f'text-anchor="end" font-size="12" '
                             f'fill="#374151">{chrom}</text>'
                         )
-                        for band in bands:
-                            bx = lbl_w + (band["start"] / max_mb) * plot_w
-                            bw = max(
-                                ((band["end"] - band["start"]) / max_mb) * plot_w,
-                                0.5,
-                            )
-                            color = GIESTAIN_COLORS.get(band["stain"], "#e5e7eb")
-                            svg_parts.append(
-                                f'<rect x="{bx:.1f}" y="{bar_y}" '
-                                f'width="{bw:.1f}" height="{row_h}" '
-                                f'fill="{color}"/>'
-                            )
-                        svg_parts.append(
-                            f'<rect x="{lbl_w}" y="{bar_y}" '
-                            f'width="{total_w:.1f}" height="{row_h}" '
-                            f'fill="none" stroke="#9ca3af" '
-                            f'stroke-width="0.5" rx="3"/>'
+                        svg_parts.extend(
+                            chromosome_svg(chrom, lbl_w, bar_y, px_per_mb, row_h)
                         )
 
                     # SNV/Indel scatter triangles

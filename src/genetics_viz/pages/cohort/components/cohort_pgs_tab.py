@@ -24,7 +24,9 @@ from genetics_viz.utils.ancestry import (
     get_region_color,
 )
 from genetics_viz.utils.pedigree_labels import (
+    PHENO_COLORS,
     PHENO_ORDER,
+    SEX_COLORS,
     SEX_ORDER,
     normalize_pheno,
     normalize_sex,
@@ -45,9 +47,6 @@ _GROUP_SEX = "Sex"
 _GROUP_REGION = "Region"
 _GROUP_OPTIONS = [_GROUP_PHENOTYPE, _GROUP_SEX, _GROUP_REGION]
 
-#: Matches the phenotype palette of the sibling Statistics panel.
-_PHENO_COLORS = {"2": "#d62728", "1": "#2ca02c", "-9": "#7f7f7f"}
-_SEX_COLORS = {"1": "#1f77b4", "2": "#e377c2", "-9": "#7f7f7f"}
 
 #: Sex colours for the split halves, used whatever the grouping axis is.
 _SPLIT_SIDES = (("1", "negative"), ("2", "positive"))
@@ -148,10 +147,10 @@ def _fill(hex_color: str) -> str:
 def _group_color(kind: str, group: str) -> str:
     """Colour for a group on the chosen axis."""
     if kind == _GROUP_SEX:
-        return _SEX_COLORS.get(group, "#7f7f7f")
+        return SEX_COLORS.get(group, "#7f7f7f")
     if kind == _GROUP_REGION:
         return get_region_color(group)
-    return _PHENO_COLORS.get(group, "#7f7f7f")
+    return PHENO_COLORS.get(group, "#7f7f7f")
 
 
 def render_cohort_pgs_tab(
@@ -343,8 +342,8 @@ def render_cohort_pgs_tab(
                             y=ys,
                             name=sex_label(sex),
                             side=side,
-                            line_color=_SEX_COLORS.get(sex, "#7f7f7f"),
-                            fillcolor=_fill(_SEX_COLORS.get(sex, "#7f7f7f")),
+                            line_color=SEX_COLORS.get(sex, "#7f7f7f"),
+                            fillcolor=_fill(SEX_COLORS.get(sex, "#7f7f7f")),
                             points="all",
                             jitter=0.3,
                             pointpos=0,

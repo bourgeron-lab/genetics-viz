@@ -39,6 +39,12 @@ steps:
     note: >-
       Not measured unless the step was requested: the pipeline skips the whole
       ancestry planning pass otherwise, so there is nothing to report.
+  roh:
+    label: "Runs of homozygosity"
+    unit: "families"
+    note: >-
+      Not measured unless the step was requested: the pipeline skips the whole
+      ROH planning pass otherwise, so there is nothing to report.
   snvs_cohort:
     label: "Cohort merge"
     unit: "cohort"

@@ -28,6 +28,10 @@ from genetics_viz.pages.cohort.components.pgs_tab import (
     probe_pgs_data,
     render_pgs_tab,
 )
+from genetics_viz.pages.cohort.components.roh_tab import (
+    probe_roh_data,
+    render_roh_tab,
+)
 from genetics_viz.pages.cohort.components.svs_tab import probe_svs_data, render_svs_tab
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
 from genetics_viz.pages.cohort.components.wombat_tab import (
@@ -402,12 +406,14 @@ def family_page(cohort_name: str, family_id: str) -> None:
             has_svs = probe_svs_data(store.data_dir, family_id)
             has_ancestry = probe_ancestry_data(store.data_dir, family_id)
             has_pgs = probe_pgs_data(store.data_dir, family_id)
+            has_roh = probe_roh_data(store.data_dir, family_id)
 
             # Track loading state for each tab
             wombat_state = {"loaded": False}
             svs_state = {"loaded": False}
             ancestry_state = {"loaded": False}
             pgs_state = {"loaded": False}
+            roh_state = {"loaded": False}
 
             # Analysis tabs section
             with ui.tabs().classes("w-full") as tabs:
@@ -415,6 +421,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 svs_tab = ui.tab("SVs")
                 ancestry_tab = ui.tab("Ancestry")
                 pgs_tab = ui.tab("Polygenic Scores")
+                roh_tab = ui.tab("ROH")
                 if not has_wombat:
                     wombat_tab.props("disable")
                 if not has_svs:
@@ -423,6 +430,8 @@ def family_page(cohort_name: str, family_id: str) -> None:
                     ancestry_tab.props("disable")
                 if not has_pgs:
                     pgs_tab.props("disable")
+                if not has_roh:
+                    roh_tab.props("disable")
 
             # Pick the first enabled tab as the default
             if has_wombat:
@@ -433,6 +442,8 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 default_tab_name = "ancestry"
             elif has_pgs:
                 default_tab_name = "pgs"
+            elif has_roh:
+                default_tab_name = "roh"
             else:
                 default_tab_name = "wombat"
 
@@ -441,6 +452,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "svs": svs_tab,
                 "ancestry": ancestry_tab,
                 "pgs": pgs_tab,
+                "roh": roh_tab,
             }[default_tab_name]
 
             with ui.tab_panels(tabs, value=default_tab).classes("w-full"):
@@ -564,6 +576,36 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                     pgs_content()
 
+                # Runs of homozygosity tab panel
+                with ui.tab_panel(roh_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+
+                    @ui.refreshable
+                    def roh_content():
+                        if not has_roh:
+                            ui.label("No ROH data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif roh_state["loaded"]:
+                            render_roh_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading runs of homozygosity...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    roh_content()
+
             # Each tab loads its data on first view: keyed by the tab name that
             # the "update:model-value" event reports.
             lazy_tabs = {
@@ -571,12 +613,14 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "SVs": (has_svs, svs_state, svs_content),
                 "Ancestry": (has_ancestry, ancestry_state, ancestry_content),
                 "Polygenic Scores": (has_pgs, pgs_state, pgs_content),
+                "ROH": (has_roh, roh_state, roh_content),
             }
             tab_names = {
                 "wombat": "Wombat",
                 "svs": "SVs",
                 "ancestry": "Ancestry",
                 "pgs": "Polygenic Scores",
+                "roh": "ROH",
             }
 
             def make_loader(state, content):

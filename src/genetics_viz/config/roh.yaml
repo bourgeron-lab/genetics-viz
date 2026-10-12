@@ -1,0 +1,114 @@
+# Runs of homozygosity (ROH) display configuration.
+#
+# Consumed by utils/roh.py. The numbers below MIRROR constants of
+# ancestry-pgs (src/ancestry_pgs/roh.py) and must be kept in sync with it: the
+# pipeline assigns froh_category and homozygosity_pattern itself, and this file
+# only says how to draw and word them. Components never hard-code a threshold.
+#
+#   CATEGORY_THRESHOLDS   0.17 / 0.10 / 0.03 on froh_1.5mb (Yengo et al. 2019;
+#                         ACMG technical standard, Gonzales et al. 2022)
+#   DISTANT_MIN_F         0.01, with f_long >= MIN_LONG_F_FOR_RECENT (0.005)
+#   EXCESS_PERCENTILE     95 - the reference percentile behind the pattern
+#   CLASS_BOUNDS_CM       1.5 / 10 cM between short, intermediate and long
+#
+# Wording is role-dependent. Everyone sees ``grade``; only curators and
+# administrators also see ``relationship``, the parental relationship a value
+# is typical of. A first-degree reading can reveal incest, and the ACMG points
+# to consider (Rehder et al. 2013) ask that it be handled under an explicit
+# institutional policy. That gating is presentation only - the raw TSVs are
+# still reachable through the data directory's static route.
+
+# Ordered strongest first. ``threshold`` is the lower bound drawn as a line on
+# the plots; ``distant`` and ``none`` have no line of their own.
+froh_grades:
+  - category: "first-degree-like"
+    grade: "Very high"
+    threshold: 0.17
+    color: "#b71c1c"
+    relationship: "first-degree-like: typical of parents who are parent–offspring or full sibs (F = 1/4)"
+  - category: "second-degree-like"
+    grade: "High"
+    threshold: 0.10
+    color: "#e65100"
+    relationship: "second-degree-like: typical of half sibs, uncle–niece or grandparent–grandchild (F = 1/8)"
+  - category: "first-cousin-like"
+    grade: "Elevated"
+    threshold: 0.03
+    color: "#f9a825"
+    relationship: "first-cousin-like: typical of first-cousin parents (F = 1/16)"
+  - category: "distant"
+    grade: "Mild"
+    color: "#7cb342"
+    relationship: "distant: second cousins (F = 1/64) or closer loops further back"
+  - category: "none"
+    grade: "None"
+    color: "#9e9e9e"
+    relationship: "no excess homozygosity"
+
+# Short explanation of each grade, shown to every role. Says what was measured,
+# not what it implies about the parents.
+grade_help: >-
+  Grades read F_ROH (ROH of at least 1.5 Mb over the autosomal length) against
+  fixed published thresholds: Elevated > 0.03, High > 0.10, Very high > 0.17.
+  Mild means F_ROH of at least 0.01 that includes long segments. Read the
+  grade together with the pattern: a person from a population with a small
+  or endogamous history can reach Elevated through short segments alone.
+
+# homozygosity_pattern: the person compared with unrelated reference genomes of
+# their own ancestry region.
+patterns:
+  typical:
+    label: "Typical"
+    color: "#9e9e9e"
+    help: "Within the reference range of the person's ancestry region."
+  population:
+    label: "Population"
+    color: "#1e88e5"
+    help: >-
+      Short and intermediate segments at or above the region's 95th percentile:
+      old shared ancestry in the population (bottlenecks, endogamy).
+  recent:
+    label: "Recent"
+    color: "#d81b60"
+    help: >-
+      Long segments (>= 10 cM) at or above the region's 95th percentile:
+      a recent common ancestor of the two parents.
+  recent+population:
+    label: "Recent + population"
+    color: "#8e24aa"
+    help: "Both: an excess of long segments and of short and intermediate ones."
+
+# Segment classes by genetic length (roh_class in roh.tsv). One sequential
+# blue scale, darker for longer: red would read as the ideogram's centromeres.
+classes:
+  short:
+    label: "Short (< 1.5 cM)"
+    color: "#90caf9"
+  intermediate:
+    label: "Intermediate (1.5–10 cM)"
+    color: "#1e88e5"
+  long:
+    label: "Long (>= 10 cM)"
+    color: "#0d2a6b"
+
+# Reference percentile behind the pattern (EXCESS_PERCENTILE).
+excess_percentile: 95
+
+# KING-robust kinship (Manichaikul et al. 2010): lower bound of each degree,
+# strongest first. Below the last bound a pair is unrelated.
+kinship_degrees:
+  - min: 0.354
+    degree: 0
+    label: "Duplicate / MZ twin"
+  - min: 0.177
+    degree: 1
+    label: "1st degree"
+  - min: 0.0884
+    degree: 2
+    label: "2nd degree"
+  - min: 0.0442
+    degree: 3
+    label: "3rd degree"
+  - min: -1.0
+    degree: null
+    label: "Unrelated"

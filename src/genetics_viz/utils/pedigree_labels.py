@@ -28,6 +28,10 @@ SEX_LABELS: Dict[str, str] = {
     "-9": "-9 (unk)",
 }
 
+#: Plot colours per code. Phenotype matches the Statistics panel's palette.
+PHENO_COLORS: Dict[str, str] = {"2": "#d62728", "1": "#2ca02c", "-9": "#7f7f7f"}
+SEX_COLORS: Dict[str, str] = {"1": "#1f77b4", "2": "#e377c2", "-9": "#7f7f7f"}
+
 _UNKNOWN = "-9"
 
 
