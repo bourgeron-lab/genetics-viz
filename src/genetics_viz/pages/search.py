@@ -60,6 +60,7 @@ from genetics_viz.utils.clinvar import (
     get_clinvar_color,
 )
 from genetics_viz.utils.tsv import read_tsv_or_none
+from genetics_viz.utils.wombat import aggregate_by_variant
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
     format_consequence_display,
@@ -1389,27 +1390,7 @@ def search_cohort_page(cohort_name: str) -> None:
                     wombat_filtered = None
                     if all_wombat_dfs:
                         combined = pl.concat(all_wombat_dfs, how="diagonal_relaxed")
-                        grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
-                        agg_cols = [
-                            col for col in combined.columns if col not in grouping_cols
-                        ]
-                        agg_exprs = [pl.len().alias("n_grouped")]
-                        for col in agg_cols:
-                            agg_exprs.append(
-                                pl.col(col)
-                                .cast(pl.Utf8)
-                                .filter(
-                                    (pl.col(col).is_not_null())
-                                    & (pl.col(col).cast(pl.Utf8) != "")
-                                    & (pl.col(col).cast(pl.Utf8) != ".")
-                                )
-                                .unique()
-                                .str.join(",")
-                                .alias(col)
-                            )
-                        wombat_filtered = combined.group_by(
-                            grouping_cols, maintain_order=True
-                        ).agg(agg_exprs)
+                        wombat_filtered = aggregate_by_variant(combined)
 
                     # Deduplicate wcx rows across components
                     wcx_filtered = None
