@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pyyaml` is now a declared dependency. It was imported throughout but only arrived through NiceGUI.
 
 ### Changed
+- **Polars 2 is supported again.** The requirement is now `polars>=1.17,<3`, and the lock moves to 2.0.0, which is what a production install now gets. 0.13.1 had capped it below 2 as a stopgap.
+  - **The audit:** every Polars call was checked against the 2.0 upgrade guide, and the behaviours the app relies on were probed on 1.37 and 2.0 with identical results.
+  - **Test runs:** the suite passes on 2.0.0, on the newest 1.x and on 1.17.
+  - **Real data:** a pass under 2.0 covered every family and cohort tab and a cohort search.
+- **Row order is now explicit wherever it matters.** Polars 2 guarantees no output order for a join or `unique` unless asked; the app had kept its order by accident until now. The two ancestry joins request `maintain_order="left"`, and the WisecondorX de-duplication in search requests `maintain_order=True`. `join(maintain_order=)` arrived in Polars 1.17, which is the new floor.
+- **CI tests Polars 1.x alongside the locked 2.x:** a `polars-1x` job runs the newest 1.x and the 1.17 floor.
+- **Plotly 7** (7.1.0) is now locked; the requirement is unchanged at `>=5`. **NiceGUI 3.18** and other minor updates come from Dependabot.
+- **Ruff's rules are pinned** in `pyproject.toml` (`E4`, `E7`, `E9`, `F`, the set enforced until now). Ruff 0.16 widened its defaults, which would have changed what CI enforces on an upgrade. Markdown files are excluded from formatting. Ruff is locked at 0.17.
 - **The Wombat aggregation** (one row per variant and sample) was duplicated between the family tab and search. It is now `utils/wombat.py::aggregate_by_variant`, and it joins distinct values in first-seen order. Before, the order of a merged cell such as `GENEA,GENEB` could differ between runs and Polars versions.
 - The 13 pre-existing ruff errors are fixed, so lint can gate CI.
 

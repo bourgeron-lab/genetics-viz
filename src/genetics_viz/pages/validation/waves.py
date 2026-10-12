@@ -483,7 +483,9 @@ def waves_validation_page() -> None:
                                             ui.button(
                                                 "Save Validation",
                                                 icon="save",
-                                                on_click=lambda: save_validation_and_refresh(),
+                                                on_click=lambda: (
+                                                    save_validation_and_refresh()
+                                                ),
                                             ).props("color=blue").classes("ml-4")
                                         else:
                                             ui.label("Read-only access").classes(

@@ -839,36 +839,32 @@ def render_wombat_tab(
                                                         ).classes("text-xs")
                                                         ui.button(
                                                             "HIGH",
-                                                            on_click=lambda _e=None,
-                                                            fn=select_by_impact_level: fn(
-                                                                "HIGH"
+                                                            on_click=lambda _e=None, fn=select_by_impact_level: (
+                                                                fn("HIGH")
                                                             ),
                                                         ).props(
                                                             "size=sm flat dense color=red"
                                                         ).classes("text-xs")
                                                         ui.button(
                                                             "MODERATE",
-                                                            on_click=lambda _e=None,
-                                                            fn=select_by_impact_level: fn(
-                                                                "MODERATE"
+                                                            on_click=lambda _e=None, fn=select_by_impact_level: (
+                                                                fn("MODERATE")
                                                             ),
                                                         ).props(
                                                             "size=sm flat dense color=orange"
                                                         ).classes("text-xs")
                                                         ui.button(
                                                             "LOW",
-                                                            on_click=lambda _e=None,
-                                                            fn=select_by_impact_level: fn(
-                                                                "LOW"
+                                                            on_click=lambda _e=None, fn=select_by_impact_level: (
+                                                                fn("LOW")
                                                             ),
                                                         ).props(
                                                             "size=sm flat dense color=yellow-8"
                                                         ).classes("text-xs")
                                                         ui.button(
                                                             "MODIFIER",
-                                                            on_click=lambda _e=None,
-                                                            fn=select_by_impact_level: fn(
-                                                                "MODIFIER"
+                                                            on_click=lambda _e=None, fn=select_by_impact_level: (
+                                                                fn("MODIFIER")
                                                             ),
                                                         ).props(
                                                             "size=sm flat dense color=grey"
@@ -998,9 +994,9 @@ def render_wombat_tab(
                                             filter_state=wombat_data[config_name][
                                                 "selected_validations"
                                             ],
-                                            on_change=lambda cfg=config_name: wombat_data[
-                                                cfg
-                                            ]["_refresh"]["fn"](),
+                                            on_change=lambda cfg=config_name: (
+                                                wombat_data[cfg]["_refresh"]["fn"]()
+                                            ),
                                             label="Validation",
                                             button_classes="",
                                         )
@@ -1275,7 +1271,9 @@ def render_wombat_tab(
                                                     )
                                                 ui.button(
                                                     icon="close",
-                                                    on_click=lambda: stats_dialog.close(),
+                                                    on_click=lambda: (
+                                                        stats_dialog.close()
+                                                    ),
                                                 ).props("flat round")
 
                                             @ui.refreshable
@@ -1771,7 +1769,9 @@ def render_wombat_tab(
                                         sample=sample_val,
                                         variant_type="snv",
                                         diagnostic_file=diag_file,
-                                        on_save_callback=lambda s: _refresh_table_data(),
+                                        on_save_callback=lambda s: (
+                                            _refresh_table_data()
+                                        ),
                                     )
                                 else:
                                     # Default: open variant dialog
@@ -1784,7 +1784,9 @@ def render_wombat_tab(
                                         alt=alt,
                                         sample=sample_val,
                                         variant_data=row_data,
-                                        on_save_callback=lambda s: _refresh_table_data(),
+                                        on_save_callback=lambda s: (
+                                            _refresh_table_data()
+                                        ),
                                     )
 
                             # Restore table state (sorting / page) across refreshes
