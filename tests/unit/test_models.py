@@ -161,3 +161,11 @@ def test_gaining_a_pedigree_makes_a_cohort_explorable(data_dir):
     store.reload()
     assert "EMPTY" in store.cohorts
     assert "EMPTY" not in {s.name for s in store.incomplete_cohorts}
+
+
+@pytest.mark.xfail(strict=True, reason="hidden directories under cohorts/ are listed as incomplete cohorts")
+def test_hidden_directories_are_not_cohorts(data_dir):
+    (data_dir / "cohorts" / ".snapshot").mkdir()
+    store = DataStore(data_dir=data_dir)
+    store.load()
+    assert ".snapshot" not in {s.name for s in store.incomplete_cohorts}
