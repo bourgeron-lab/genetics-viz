@@ -6,7 +6,7 @@ Project-level instructions for Claude Code.
 
 NiceGUI-based web application for genetics cohort data visualization. Uses TanStack tables for dataframes, Polars for data processing, and ECharts for plots. Managed with `uv`.
 
-Two deliberate exceptions to "ECharts for plots": `stats_panel.py` and the cohort PGS violins in `cohort_pgs_tab.py` use Plotly. ECharts has no violin or box series, and the two live as sibling tabs on the cohort page.
+Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS violins in `cohort_pgs_tab.py` and the cohort ROH violins in `cohort_roh_tab.py` use Plotly. ECharts has no violin or box series, and all three live as sibling tabs on the cohort page.
 
 ## Commands
 
@@ -37,6 +37,7 @@ src/genetics_viz/
     diagnostic_dialog.py          # Diagnostic review dialog
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
+    roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
     clinvar_colors.yaml           # ClinVar significance term -> color
     column_names.yaml             # Column display names, groups, sorting, drop flags
     cytobands_hg38.tsv            # Cytoband data for ideogram rendering
@@ -60,6 +61,8 @@ src/genetics_viz/
         pgs_tab.py                # Polygenic scores tab (per-family)
         cohort_ancestry_tab.py    # Ancestry PCA tab (cohort-wide)
         cohort_pgs_tab.py         # Polygenic score violins (cohort-wide)
+        roh_tab.py                # Runs of homozygosity tab (per-family)
+        cohort_roh_tab.py         # Runs of homozygosity sub-tab + islands dialog (cohort-wide)
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
         status_panel.py           # Pipeline run status (Workflow tab + home card)
@@ -79,6 +82,9 @@ src/genetics_viz/
   utils/
     ancestry.py                   # Ancestry/PGS file discovery, reference panel, colors
     ancestry_plots.py             # Shared ECharts builders for the PCA scatters
+    roh.py                        # ROH discovery, reference tier, grades, kinship checks
+    roh_plots.py                  # ECharts/SVG builders for the ROH tabs
+    ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
     cohort_state.py               # .ghfc-ngs.state.json parsing, drift, step rows
@@ -155,6 +161,16 @@ Config files (YAML) are loaded once at module level.
 - Plot builders shared by the family and cohort tabs live in `utils/ancestry_plots.py`. They are pure functions returning ECharts option/series dicts, so neither page component has to import the other's privates.
 - Normalise pedigree sex/phenotype through `utils/pedigree_labels.py` before grouping — some cohorts write the codes float-stringified (`-9.0`, `1.0`), which a bare comparison against `"-9"` misses.
 
+### Runs of Homozygosity (ROH)
+- The ghfc-ngs `roh` step writes `<family>/roh/<FID>.apgs_b<bundle>_<tag>.{froh,roh,roh_genes,kinship}.tsv` and, per cohort, `cohorts/<name>/roh/<name>.…{froh,roh,roh_genes,kinship,roh_windows}.tsv` (plus `family_id`). Same naming as the ancestry files, so discovery is `find_ancestry_files_in(..., kinds=ROH_KINDS)`; `roh_genes` is optional (needs `annotation_gencode`), `kinship` is absent for a singleton.
+- **Read through `read_roh_table`.** It forces the ID columns to strings. Left to inference, `family_id` comes out as an integer from numeric first rows and the read then fails on `AU-ANG-FER-MPX3`. It also strips the `chr` prefix, because the reference hotspots and the cytobands carry none.
+- **Reference first, fixed thresholds second.** Each person is compared with unrelated reference genomes of their `ref_group` (a region, or `ALL` = pooled), read from `v<bundle>/bundle/roh/reference_froh.tsv.gz` under `ancestry_reference_dir`, next to `hotspots.tsv.gz`. The fixed 0.03 line is crossed by 150 of 682 unrelated CSA reference genomes, so a threshold-only display would mislabel whole populations. A missing tier is a degraded state, as for the PCA panel.
+- **Thresholds and wording live only in `config/roh.yaml`.** They mirror ancestry-pgs constants (`roh.py`), which assign `froh_category` and `homozygosity_pattern` themselves; the app only words and draws them.
+- **Wording is role-dependent (`can_write()`).** Viewers get neutral grades and only pedigree-declared kinship pairs. Curators also get the relationship reading, the parents' kinship / expected F, and every pair. This is presentation only: the data directory is served statically without an auth check.
+- The cohort tab reads only `froh` (and `roh_windows` on demand, off-thread). The cohort `roh` and `roh_genes` tables are 31 and 93 MB.
+- Some pedigrees repeat a row, and a sample can sit in two families: key cohort rows by `(family_id, IID)`.
+- `DataTable` does not reorder its initial rows to match `initial_sorting` — sort the rows in Python as well.
+
 ### Cohort Discovery
 - **A cohort is a directory under `cohorts/`.** The directory name is the cohort name.
 - `DataStore.cohorts` holds only cohorts with a readable `<NAME>.pedigree.tsv`, so the header dropdown, validation pages and search keep their existing meaning. Directories with no pedigree — or one that will not parse — land in `DataStore.incomplete_cohorts` as `CohortStub`s, carded on the home page but not navigable. `CohortStub.reason` is `"missing"` or `"unreadable"`; the two need different fixes and do not share a message.
@@ -178,7 +194,7 @@ Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: 
 The page has two levels of tabs, and they are separate mechanisms.
 
 - **Page-level, full width**: `General` (the individuals table plus the right-hand panels that follow its filters) and `Workflow`. `Workflow` is *created only when the cohort has a params file* — absent, not disabled — and its own lazy loader is the only `async` one, because it warms the run-record and document caches off-thread before rendering.
-- **Right-hand panel, inside `General`**: `Statistics` / `Ancestry` / `Polygenic Scores`, nested inside the General tab panel. Anything describing the pipeline run belongs on `Workflow` instead: it is a property of the cohort, not of the current filter, and does not fit a 400px column.
+- **Right-hand panel, inside `General`**: `Statistics` / `Ancestry` / `Polygenic Scores` / `ROH`, nested inside the General tab panel. Anything describing the pipeline run belongs on `Workflow` instead: it is a property of the cohort, not of the current filter, and does not fit a 400px column.
 - Both levels use the same lazy pattern — a `{"loaded": False}` dict, a `@ui.refreshable` body with `_loading(...)`, and `ui.timer(0.1, load, once=True)` on tab change. The inner level keys `tab_state` and `lazy_tabs` by the exact tab label and `tab_state[e.args]` is an unguarded lookup, so a label must be added to both dicts or removed from both.
 - `render_status_panel(cohort, title=None)` suppresses the panel's own heading, because the Workflow tab's expansion header already carries the title, status chip and step summary.
 

@@ -79,9 +79,28 @@ def reload_ancestry_config() -> None:
 #: ``<entity_id>.apgs_b<bundle>_<filters>.<kind>.tsv``. The bundle version
 #: contains dots, so it needs a lazy multi-segment capture rather than the
 #: single dot-free segment used by the wombat/SV patterns.
-_FILENAME_TMPL = r"{eid}\.apgs_b(?P<bundle>.+?)_(?P<filters>[^.]+)\.(?P<kind>pcs|ancestry|pgs_zscore)\.tsv$"
+_FILENAME_TMPL = (
+    r"{eid}\.apgs_b(?P<bundle>.+?)_(?P<filters>[^.]+)\.(?P<kind>{kinds})\.tsv$"
+)
 
+#: Result kinds of the ancestry step, in its ``ancestry/`` directory.
 _KINDS = ("pcs", "ancestry", "pgs_zscore")
+
+#: Result kinds of the ROH step, in its own ``roh/`` directory. Same naming:
+#: the step labels its outputs with the ancestry panel they were called on.
+#: ``roh`` and ``roh_genes`` cannot be confused, the pattern is anchored on
+#: ``.tsv``.
+ROH_KINDS = ("froh", "roh", "roh_genes", "kinship", "roh_windows")
+
+
+def _filename_pattern(prefix: str, kinds: Tuple[str, ...]) -> "re.Pattern[str]":
+    """Compile the result-file pattern for one entity and a set of kinds."""
+    return re.compile(
+        _FILENAME_TMPL.format(
+            eid=re.escape(prefix), kinds="|".join(re.escape(k) for k in kinds)
+        )
+    )
+
 
 #: A ``(bundle_version, filter_tag)`` pair identifying one set of result files.
 Variant = Tuple[str, str]
@@ -121,6 +140,10 @@ class AncestryFiles:
     @property
     def pgs_zscore_path(self) -> Optional[Path]:
         return self.paths.get("pgs_zscore")
+
+    def path(self, kind: str) -> Optional[Path]:
+        """The file of ``kind`` for the selected variant, if present."""
+        return self.paths.get(kind)
 
     @property
     def label(self) -> str:
@@ -168,9 +191,11 @@ def get_ancestry_dir(data_dir: Path, family_id: str) -> Path:
     return get_family_path(data_dir, family_id) / "ancestry"
 
 
-def _scan_variants(directory: Path, prefix: str) -> Dict[Variant, Dict[str, Path]]:
+def _scan_variants(
+    directory: Path, prefix: str, kinds: Tuple[str, ...] = _KINDS
+) -> Dict[Variant, Dict[str, Path]]:
     """Map every ``(bundle, tag)`` variant in ``directory`` to its files."""
-    pattern = re.compile(_FILENAME_TMPL.format(eid=re.escape(prefix)))
+    pattern = _filename_pattern(prefix, kinds)
     variants: Dict[Variant, Dict[str, Path]] = {}
     for tsv_file in directory.glob("*.tsv"):
         match = pattern.match(tsv_file.name)
@@ -182,12 +207,17 @@ def _scan_variants(directory: Path, prefix: str) -> Dict[Variant, Dict[str, Path
 
 
 def find_ancestry_files_in(
-    directory: Path, prefix: str, variant: Optional[Variant] = None
+    directory: Path,
+    prefix: str,
+    variant: Optional[Variant] = None,
+    kinds: Tuple[str, ...] = _KINDS,
 ) -> Optional[AncestryFiles]:
     """Locate ancestry result files named ``<prefix>.apgs_b<bundle>_<tag>.*``.
 
     Used for both layouts: a family's ``ancestry/`` directory, where the prefix
-    is the family ID, and a cohort's, where it is the cohort name.
+    is the family ID, and a cohort's, where it is the cohort name. ``kinds``
+    selects which step's files are wanted - :data:`ROH_KINDS` for the ``roh/``
+    directories, which share the naming.
 
     Without an explicit ``variant``, the newest bundle and then the strictest
     filter tag wins - see :func:`_tag_strictness`. Every variant found is
@@ -198,7 +228,7 @@ def find_ancestry_files_in(
     if not directory.is_dir():
         return None
 
-    variants = _scan_variants(directory, prefix)
+    variants = _scan_variants(directory, prefix, kinds)
     if not variants:
         return None
 
@@ -249,17 +279,17 @@ def find_cohort_ancestry_files(
     return find_ancestry_files_in(get_cohort_ancestry_dir(cohort), cohort.name, variant)
 
 
+def probe_kind_in(directory: Path, prefix: str, kind: str) -> bool:
+    """Return True when ``directory`` holds a ``<prefix>`` result file of ``kind``."""
+    if not directory.is_dir():
+        return False
+    pattern = _filename_pattern(prefix, (kind,))
+    return any(pattern.match(f.name) for f in directory.glob("*.tsv"))
+
+
 def _probe(data_dir: Path, family_id: str, kind: str) -> bool:
     """Return True when a file of ``kind`` exists for this family."""
-    ancestry_dir = get_ancestry_dir(data_dir, family_id)
-    if not ancestry_dir.is_dir():
-        return False
-    pattern = re.compile(_FILENAME_TMPL.format(eid=re.escape(family_id)))
-    for tsv_file in ancestry_dir.glob("*.tsv"):
-        match = pattern.match(tsv_file.name)
-        if match and match.group("kind") == kind:
-            return True
-    return False
+    return probe_kind_in(get_ancestry_dir(data_dir, family_id), family_id, kind)
 
 
 def probe_ancestry_data(data_dir: Path, family_id: str) -> bool:
