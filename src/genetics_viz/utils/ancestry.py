@@ -156,12 +156,21 @@ class AncestryFiles:
         return f"bundle {self.bundle_version} / {self.filter_tag}"
 
 
-def _version_key(version: str) -> Tuple[int, ...]:
-    """Sort key for a dotted version string; unparseable parts sort as 0."""
+_VERSION_PART_RE = re.compile(r"^(\d*)(.*)$")
+
+
+def _version_key(version: str) -> Tuple[Tuple[int, int, str], ...]:
+    """Sort key for a dotted version string.
+
+    Each part sorts on its leading number, then a release before anything with
+    a suffix, so ``1.0.0`` ranks above ``1.0.0rc1`` - joining all the digits of
+    a part would read ``0rc1`` as 1 and put the candidate above the release.
+    Unparseable parts sort as 0.
+    """
     parts = []
     for part in version.split("."):
-        digits = "".join(c for c in part if c.isdigit())
-        parts.append(int(digits) if digits else 0)
+        number, suffix = _VERSION_PART_RE.match(part).groups()
+        parts.append((int(number) if number else 0, 0 if suffix else 1, suffix))
     return tuple(parts)
 
 
@@ -185,7 +194,9 @@ def _tag_strictness(tag: str) -> Tuple[int, int, int, str]:
     return (1, int(match.group("dp")), int(match.group("gq")), tag)
 
 
-def _variant_key(variant: Variant) -> Tuple[Tuple[int, ...], Tuple[int, int, int, str]]:
+def _variant_key(
+    variant: Variant,
+) -> Tuple[Tuple[Tuple[int, int, str], ...], Tuple[int, int, int, str]]:
     """Sort key for a variant: newest bundle first, then strictest filtering."""
     bundle, tag = variant
     return (_version_key(bundle), _tag_strictness(tag))

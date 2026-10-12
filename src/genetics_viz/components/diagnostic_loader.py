@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
+from genetics_viz.utils.tsv import clean_tsv_field
 
 # Verdict used when curators disagree on the same variant for the same sample.
 CONFLICTING_DIAGNOSTIC = "conflicting"
@@ -129,7 +130,7 @@ def save_diagnostic_entry(
         try:
             f.write(
                 f"{family_id}\t{variant_key}\t{gene}\t{impact}\t{sample}\t"
-                f"{user}\t{timestamp}\t{comment}\t0\t{diagnostic}\n"
+                f"{user}\t{timestamp}\t{clean_tsv_field(comment)}\t0\t{diagnostic}\n"
             )
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)

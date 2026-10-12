@@ -14,6 +14,7 @@ from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.tsv import clean_tsv_field
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 from genetics_viz.utils.wisecondorx import infer_sv_type
 
@@ -668,7 +669,7 @@ def show_sv_dialog(
                                                 ui.label(str(value)).classes(
                                                     "text-base text-gray-900 font-medium"
                                                 )
-                                        except:
+                                        except (TypeError, ValueError):
                                             ui.label(
                                                 str(value) if value is not None else "-"
                                             ).classes(
@@ -716,7 +717,7 @@ def show_sv_dialog(
                                                 ui.label(str(value)).classes(
                                                     "text-base text-gray-900 font-medium"
                                                 )
-                                        except:
+                                        except (TypeError, ValueError):
                                             ui.label(
                                                 str(value) if value is not None else "-"
                                             ).classes(
@@ -1696,7 +1697,7 @@ def show_sv_dialog(
                             if curated_end_input.value
                             else ""
                         )
-                        comment = (
+                        comment = clean_tsv_field(
                             comment_input.value.strip() if comment_input.value else ""
                         )
 

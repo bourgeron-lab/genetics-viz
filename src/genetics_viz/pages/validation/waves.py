@@ -57,7 +57,7 @@ def waves_validation_page() -> None:
 
             with ui.row().classes("items-center gap-4 mb-6"):
                 ui.label("Select Cohort:").classes("text-lg font-semibold")
-                cohort_select = (
+                (
                     ui.select(
                         options=cohort_names,
                         value=selected_cohort["value"],
@@ -440,7 +440,7 @@ def waves_validation_page() -> None:
                                                         formatted_time = dt.strftime(
                                                             "%Y-%m-%d %H:%M:%S"
                                                         )
-                                                    except:
+                                                    except (TypeError, ValueError):
                                                         formatted_time = timestamp
 
                                                     tooltip_text = f"User: {user}\nDate: {formatted_time}"

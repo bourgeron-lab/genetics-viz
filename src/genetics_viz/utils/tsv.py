@@ -7,6 +7,20 @@ from typing import Any, Iterable, Optional
 import polars as pl
 
 
+def clean_tsv_field(text: str) -> str:
+    """Make free text safe as one TSV field: no tabs, no line breaks.
+
+    The curation files (notes, diagnostics, validations) are appended to line by
+    line, so a tab or newline typed into a comment would split the record.
+    """
+    return (
+        text.replace("\t", " ")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+
+
 def _header(path: Path) -> list[str]:
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt") as fh:

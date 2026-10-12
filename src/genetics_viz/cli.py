@@ -53,6 +53,13 @@ def main(
             help="Enable auto-reload for development",
         ),
     ] = False,
+    show: Annotated[
+        bool,
+        typer.Option(
+            "--show",
+            help="Open a browser tab on start (for local use)",
+        ),
+    ] = False,
 ) -> None:
     """
     Start the genetics-viz web application.
@@ -62,7 +69,7 @@ def main(
     """
     typer.echo(f"Starting genetics-viz with config: {config_file}")
     typer.echo(f"Server running at http://{host}:{port}")
-    run_app(config_file=config_file, host=host, port=port, reload=reload)
+    run_app(config_file=config_file, host=host, port=port, reload=reload, show=show)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

@@ -291,7 +291,7 @@ async def validation_all_page() -> None:
                         "text-xs font-semibold text-gray-600"
                     )
                     with ui.button(icon="person", color="blue").props("flat dense"):
-                        with ui.menu() as user_menu:
+                        with ui.menu():
                             with ui.column().classes("p-2 gap-1"):
                                 user_checkboxes = {}
                                 for user in all_unique_users:
@@ -465,7 +465,7 @@ async def validation_all_page() -> None:
                             # Parse timestamp and extract date only
                             dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                             return dt.date()
-                        except:
+                        except (AttributeError, TypeError, ValueError):
                             return None
 
                     if (

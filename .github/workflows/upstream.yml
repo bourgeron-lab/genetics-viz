@@ -1,0 +1,64 @@
+name: Upstream dependencies
+
+# Production installs genetics-viz with uvx, which ignores uv.lock and takes the
+# newest versions pyproject.toml allows. A new upstream release can therefore
+# break production with no commit here - polars 2.0.0 did, on 2026-10-12. This
+# job installs the released way every week and runs the suite against it, so
+# that breakage is found here first.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  latest:
+    name: latest dependencies (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build
+        run: uv build
+      - name: Install the wheel as production does (no lock, highest versions)
+        run: |
+          uv venv /tmp/latest-env
+          uv pip install --python /tmp/latest-env/bin/python --refresh --resolution highest \
+            dist/*.whl pytest pytest-asyncio httpx
+          uv pip list --python /tmp/latest-env/bin/python | tee "$RUNNER_TEMP/versions.txt"
+      - name: pytest against the latest dependencies
+        working-directory: tests
+        run: /tmp/latest-env/bin/python -m pytest -c ../pyproject.toml --rootdir .. .
+      - name: Open an issue when the latest dependencies break the app
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Upstream dependencies break the test suite"
+          if gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number' | grep -q .; then
+            echo "An issue is already open."
+            exit 0
+          fi
+          {
+            echo "The weekly check installed genetics-viz the way production does (no lock file, newest allowed versions) and the tests failed."
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "Versions on Python ${{ matrix.python }}:"
+            echo '```'
+            grep -iE "^(nicegui|polars|plotly|typer|pyyaml|starlette|fastapi) " "$RUNNER_TEMP/versions.txt"
+            echo '```'
+            echo
+            echo "A production install made now would get these versions. Cap the offending dependency in pyproject.toml, or fix the code, before the next release or VM rebuild."
+          } > body.md
+          gh issue create --title "$title" --body-file body.md

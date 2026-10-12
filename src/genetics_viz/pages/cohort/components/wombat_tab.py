@@ -43,9 +43,9 @@ from genetics_viz.utils.clinvar import (
     format_clinvar_display,
     get_clinvar_color,
 )
+from genetics_viz.utils.wombat import aggregate_by_variant
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
-    VEP_CONSEQUENCE_PRIORITY,
     format_consequence_display,
     get_consequence_color,
     get_highest_consequence_term,
@@ -212,31 +212,8 @@ def render_wombat_tab(
 
                 # Display TSV content in a table
                 try:
-                    # Group by variant and sample, aggregating other columns
-                    grouping_cols = ["#CHROM", "POS", "REF", "ALT", "sample"]
-
-                    # Identify columns to aggregate
-                    agg_cols = [col for col in df.columns if col not in grouping_cols]
-
-                    # Create aggregation expressions
-                    agg_exprs = [pl.len().alias("n_grouped")]  # Count rows grouped
-                    for col in agg_cols:
-                        # Aggregate as comma-separated unique values, excluding empty/null/'.'
-                        agg_exprs.append(
-                            pl.col(col)
-                            .cast(pl.Utf8)
-                            .filter(
-                                (pl.col(col).is_not_null())
-                                & (pl.col(col).cast(pl.Utf8) != "")
-                                & (pl.col(col).cast(pl.Utf8) != ".")
-                            )
-                            .unique()
-                            .str.join(",")
-                            .alias(col)
-                        )
-
-                    # Group and aggregate
-                    df = df.group_by(grouping_cols, maintain_order=True).agg(agg_exprs)
+                    # One row per variant and sample, other columns joined.
+                    df = aggregate_by_variant(df)
 
                     # Convert to list of dicts for NiceGUI table
                     all_rows = df.to_dicts()

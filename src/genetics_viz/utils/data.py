@@ -15,11 +15,15 @@ _data_stores: dict[str, DataStore] = {}  # path_str -> DataStore
 _static_prefix_map: dict[str, str] = {}  # path_str -> "/data-0", …
 _default_data_dir: str = ""
 _dir_descriptions: dict[str, str] = {}  # path_str -> description
+#: Next ``/data-N`` index. Never reused: a static route cannot be unmounted, so
+#: a prefix freed by removing a directory still serves that directory.
+_next_prefix_index: int = 0
 
 
 def init_all_data_stores(configs: list[DataDirectoryConfig]) -> None:
     """Initialise one DataStore per configured directory and assign static prefixes."""
     global _data_stores, _static_prefix_map, _default_data_dir, _dir_descriptions
+    global _next_prefix_index
 
     _data_stores = {}
     _static_prefix_map = {}
@@ -39,6 +43,8 @@ def init_all_data_stores(configs: list[DataDirectoryConfig]) -> None:
         _dir_descriptions[path_str] = dc.description
         if dc.default and not _default_data_dir:
             _default_data_dir = path_str
+
+    _next_prefix_index = len(configs)
 
     # Fallback default: first directory
     if not _default_data_dir and _data_stores:
@@ -133,12 +139,13 @@ def get_all_data_stores() -> dict[str, DataStore]:
 
 def add_data_store(path: str, description: str = "") -> str:
     """Add and load a new data directory at runtime. Returns its static prefix."""
+    global _next_prefix_index
     path_str = str(path)
     if path_str in _data_stores:
         return _static_prefix_map[path_str]
 
-    idx = len(_static_prefix_map)
-    prefix = f"/data-{idx}"
+    prefix = f"/data-{_next_prefix_index}"
+    _next_prefix_index += 1
 
     store = DataStore(data_dir=Path(path))
     try:
