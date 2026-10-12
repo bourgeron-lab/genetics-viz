@@ -165,3 +165,31 @@ def test_distribution_clips_a_far_threshold():
     assert "pathogenic ≥ 1000" in option["title"]["subtext"]
     assert option["series"][1]["markLine"]["data"] == []
     assert len(option["series"][0]["data"]) == 2
+
+
+def test_restrict_to_keys_by_family_and_sample(data_dir):
+    context = str_eh.load_cohort_context(Cohort(data_dir), "jmsa50")
+    sub = str_eh.restrict_to(context.genotypes, [("1001", "S3"), ("9999", "S1")])
+    assert set(sub["sample"].unique()) == {"S3"}
+    assert len(str_eh.restrict_to(context.genotypes, [])) == 0
+
+
+def test_cohort_rows_follow_the_selection(data_dir):
+    context = str_eh.load_cohort_context(Cohort(data_dir), "jmsa50")
+    everyone = [("1001", "S1"), ("1001", "S2"), ("1001", "S3"), ("AU-X-1", "S5"),
+                ("AU-X-1", "S6")]  # fmt: skip
+    loci = str_eh.cohort_locus_rows(context, everyone)
+    assert [r["locus"] for r in loci[:2]] == ["HTT", "FXN"]
+    htt = loci[0]
+    assert (htt["n_pathogenic"], htt["founders_max"]) == (1, 12)
+
+    flagged = str_eh.cohort_flagged_rows(context, everyone)
+    assert [(r["sample"], r["locus"], r["status"]) for r in flagged] == [
+        ("S3", "HTT", "Pathogenic"),
+        ("S2", "FXN", "Carrier"),
+    ]
+    assert flagged[0]["allele_values"] == [18, 40]
+
+    parents = [k for k in everyone if k[1] != "S3"]
+    assert str_eh.cohort_locus_rows(context, parents)[0]["locus"] == "FXN"
+    assert [r["sample"] for r in str_eh.cohort_flagged_rows(context, parents)] == ["S2"]

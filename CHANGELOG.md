@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Cohort context:** the cohort's `loci.tsv` and `genotypes.tsv` add the founders' median, 99.9th percentile and maximum, and each member's percentile. They are read off-thread and cached on the file's stat. Without them the tab shows the family alone.
   - **Locus dialog:** a histogram of the founders' longest allele with the thresholds and the members marked, then each member's full call. Each member's REViewer image is shown when the pipeline has written `<sample>.<catalog>.<locus>.svg`. The name pattern is set in `config/str.yaml`.
   - A family with several catalog labels gets a selector.
+- **STR panel on the cohort page**, beside Statistics, Ancestry, Polygenic Scores and ROH, following the individuals table's filters.
+  - **Loci:** how many of the individuals shown are pathogenic, carrier or intermediate at each locus. Beside them, the founders' 99.9th percentile and maximum and the "common" flag, both computed over the whole cohort.
+  - **Flagged genotypes:** each shown individual's flagged calls, with allele badges and cohort percentile, linked to the family.
+  - A locus opens the founders' distribution with the shown flagged individuals marked, the 25 longest at most.
 - `ExpansionHunter (STR)` label for the step in the Workflow status. An STR flag in the sample dialog's availability badges.
 
 ## [0.14.0] - 2026-10-12
