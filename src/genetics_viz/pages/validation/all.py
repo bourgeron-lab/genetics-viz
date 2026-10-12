@@ -1,4 +1,4 @@
-"""Validation all page - displays all validations from validations/snvs.tsv and svs.tsv."""
+"""Validation all page - every validation of every kind (validations/*.tsv)."""
 
 import asyncio
 import csv
@@ -15,11 +15,28 @@ from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.validation_badges import build_validation_badge
+from genetics_viz.utils.validation_files import VALIDATION_TYPES, validation_paths
+
+
+def _apply_curated_sv(row_dict: Dict[str, Any]) -> None:
+    """Show an SV at its curated coordinates, keeping the original for lookup."""
+    curated_start = row_dict.get("CuratedStart", "")
+    curated_end = row_dict.get("CuratedEnd", "")
+    variant_str = row_dict.get("Variant", "")
+    if not (curated_start and curated_end and ":" in variant_str):
+        return
+    parts = variant_str.split(":")
+    if len(parts) < 3:
+        return
+    chrom = parts[0]
+    sv_type = parts[2] if len(parts) == 3 else parts[3]
+    row_dict["Variant"] = f"{chrom}:{curated_start}-{curated_end}:{sv_type}"
+    row_dict["IsCurated"] = True
 
 
 @ui.page("/validation/all")
 async def validation_all_page() -> None:
-    """Render all validations from validations/snvs.tsv."""
+    """Render all validations, SNV, SV and STR."""
     if redirect := check_auth():
         return redirect
     create_header()
@@ -31,8 +48,7 @@ async def validation_all_page() -> None:
 
     try:
         store = get_data_store()
-        snv_validation_file = store.data_dir / "validations" / "snvs.tsv"
-        sv_validation_file = store.data_dir / "validations" / "svs.tsv"
+        validation_files = validation_paths(store.data_dir)
 
         with ui.column().classes("w-full px-6 py-6"):
             # Title
@@ -41,56 +57,26 @@ async def validation_all_page() -> None:
                     "text-3xl font-bold text-blue-900"
                 )
 
-            if not snv_validation_file.exists() and not sv_validation_file.exists():
+            if not any(path.exists() for _, path in validation_files):
                 ui.label("No validations found").classes("text-gray-500 text-lg italic")
                 return
 
             # Function to load and aggregate validation data
             def load_and_aggregate_validations() -> List[Dict[str, Any]]:
-                """Load raw validations from both SNV and SV files and aggregate by (Type, FID, Variant, Sample)."""
+                """Load raw validations of every kind and aggregate by (Type, FID, Variant, Sample)."""
                 raw_validations: List[Dict[str, Any]] = []
 
-                # Load SNV validations
-                if snv_validation_file.exists():
-                    with open(snv_validation_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
-                        for row in reader:
+                for vtype, path in validation_files:
+                    if not path.exists():
+                        continue
+                    with open(path, "r") as f:
+                        for row in csv.DictReader(f, delimiter="\t"):
                             row_dict = dict(row)
-                            row_dict["Type"] = "SNV"
-                            raw_validations.append(row_dict)
-
-                # Load SV validations
-                if sv_validation_file.exists():
-                    with open(sv_validation_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
-                        for row in reader:
-                            row_dict = dict(row)
-                            row_dict["Type"] = "SV"
-                            # For SVs, format variant with curated coordinates if available
-                            curated_start = row.get("CuratedStart", "")
-                            curated_end = row.get("CuratedEnd", "")
-
-                            # Parse original variant (chr:start-end:type)
-                            variant_str = row.get("Variant", "")
-                            if curated_start and curated_end and ":" in variant_str:
-                                parts = variant_str.split(":")
-                                if len(parts) >= 3:
-                                    chrom = parts[0]
-                                    sv_type = parts[2] if len(parts) == 3 else parts[3]
-                                    # Store original for lookup
-                                    row_dict["OriginalVariant"] = variant_str
-                                    # Display curated in table
-                                    row_dict["Variant"] = (
-                                        f"{chrom}:{curated_start}-{curated_end}:{sv_type}"
-                                    )
-                                    row_dict["IsCurated"] = True
-                                else:
-                                    row_dict["OriginalVariant"] = variant_str
-                                    row_dict["IsCurated"] = False
-                            else:
-                                row_dict["OriginalVariant"] = variant_str
-                                row_dict["IsCurated"] = False
-
+                            row_dict["Type"] = vtype
+                            row_dict["OriginalVariant"] = row.get("Variant", "")
+                            row_dict["IsCurated"] = False
+                            if vtype == "SV":
+                                _apply_curated_sv(row_dict)
                             raw_validations.append(row_dict)
 
                 if not raw_validations:
@@ -244,7 +230,7 @@ async def validation_all_page() -> None:
             }
 
             # Filter by type - default both
-            filter_types: Dict[str, List[str]] = {"value": ["SNV", "SV"]}
+            filter_types: Dict[str, List[str]] = {"value": list(VALIDATION_TYPES)}
 
             # Filter by user - default all
             filter_users: Dict[str, List[str]] = {"value": list(all_unique_users)}
@@ -264,19 +250,19 @@ async def validation_all_page() -> None:
                         "text-xs font-semibold text-gray-600"
                     )
                     with ui.row().classes("gap-2"):
-                        type_snv = ui.checkbox("SNV", value=True).classes("text-sm")
-                        type_sv = ui.checkbox("SV", value=True).classes("text-sm")
+                        type_boxes = {
+                            vtype: ui.checkbox(vtype, value=True).classes("text-sm")
+                            for vtype in VALIDATION_TYPES
+                        }
 
                         def on_type_change():
-                            filter_types["value"] = []
-                            if type_snv.value:
-                                filter_types["value"].append("SNV")
-                            if type_sv.value:
-                                filter_types["value"].append("SV")
+                            filter_types["value"] = [
+                                vtype for vtype, box in type_boxes.items() if box.value
+                            ]
                             refresh_table()
 
-                        type_snv.on_value_change(lambda: on_type_change())
-                        type_sv.on_value_change(lambda: on_type_change())
+                        for box in type_boxes.values():
+                            box.on_value_change(lambda: on_type_change())
 
                 # Validation status filter
                 create_validation_filter_menu(
@@ -517,7 +503,7 @@ async def validation_all_page() -> None:
                 with table_container:
                     # Show count
                     active_filters = []
-                    if filter_types["value"] != ["SNV", "SV"]:
+                    if filter_types["value"] != VALIDATION_TYPES:
                         active_filters.append(
                             f"Type: {', '.join(filter_types['value'])}"
                         )
@@ -608,7 +594,13 @@ async def validation_all_page() -> None:
                                 with page_client:
                                     refresh_table()
 
-                            if variant_type == "SNV":
+                            if variant_type == "STR":
+                                # The STR dialog needs the family's genotype table:
+                                # it lives on the family page's STR tab.
+                                ui.navigate.to(
+                                    f"/cohort/{cohort_name}/family/{family_id}"
+                                )
+                            elif variant_type == "SNV":
                                 parts = variant_str.split(":")
                                 if len(parts) == 4:
                                     chrom, pos, ref, alt = parts

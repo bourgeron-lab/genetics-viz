@@ -11,6 +11,11 @@ from nicegui import ui
 from genetics_viz.components.header import create_header
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.validation_files import (
+    TYPE_COLORS,
+    VALIDATION_TYPES,
+    validation_paths,
+)
 
 
 @ui.page("/validation/statistics")
@@ -22,8 +27,7 @@ async def validation_statistics_page() -> None:
 
     try:
         store = get_data_store()
-        snv_validation_file = store.data_dir / "validations" / "snvs.tsv"
-        sv_validation_file = store.data_dir / "validations" / "svs.tsv"
+        validation_files = validation_paths(store.data_dir)
 
         with ui.column().classes("w-full px-6 py-6"):
             ui.label("📊 Validation Statistics").classes(
@@ -32,29 +36,17 @@ async def validation_statistics_page() -> None:
 
             # Load validation data from both SNV and SV files
             def load_all_validations():
-                """Load validations from both SNV and SV files."""
+                """Load the validations of every kind (SNV, SV, STR)."""
                 all_validations = []
                 ignored_count = 0
 
-                # Load SNV validations
-                if snv_validation_file.exists():
-                    with open(snv_validation_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
-                        for row in reader:
+                for vtype, path in validation_files:
+                    if not path.exists():
+                        continue
+                    with open(path, "r") as f:
+                        for row in csv.DictReader(f, delimiter="\t"):
                             row_dict = dict(row)
-                            row_dict["Type"] = "SNV"
-                            if row.get("Ignore", "0") == "1":
-                                ignored_count += 1
-                            else:
-                                all_validations.append(row_dict)
-
-                # Load SV validations
-                if sv_validation_file.exists():
-                    with open(sv_validation_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
-                        for row in reader:
-                            row_dict = dict(row)
-                            row_dict["Type"] = "SV"
+                            row_dict["Type"] = vtype
                             if row.get("Ignore", "0") == "1":
                                 ignored_count += 1
                             else:
@@ -81,7 +73,7 @@ async def validation_statistics_page() -> None:
                 )
 
                 # Filter states
-                filter_types: Dict[str, List[str]] = {"value": ["SNV", "SV"]}
+                filter_types: Dict[str, List[str]] = {"value": list(VALIDATION_TYPES)}
                 filter_users: Dict[str, List[str]] = {"value": list(all_unique_users)}
 
                 # Create filter UI
@@ -92,8 +84,10 @@ async def validation_statistics_page() -> None:
                             "text-xs font-semibold text-gray-600"
                         )
                         with ui.row().classes("gap-2"):
-                            type_snv = ui.checkbox("SNV", value=True).classes("text-sm")
-                            type_sv = ui.checkbox("SV", value=True).classes("text-sm")
+                            type_boxes = {
+                                vtype: ui.checkbox(vtype, value=True).classes("text-sm")
+                                for vtype in VALIDATION_TYPES
+                            }
 
                     # User filter
                     with ui.column().classes("gap-1"):
@@ -300,10 +294,9 @@ async def validation_statistics_page() -> None:
                                                         "name": vtype,
                                                         "value": count,
                                                         "itemStyle": {
-                                                            "color": {
-                                                                "SNV": "#3b82f6",
-                                                                "SV": "#8b5cf6",
-                                                            }.get(vtype, "#6b7280")
+                                                            "color": TYPE_COLORS.get(
+                                                                vtype, "#6b7280"
+                                                            )
                                                         },
                                                     }
                                                     for vtype, count in type_counts.items()
@@ -433,15 +426,13 @@ async def validation_statistics_page() -> None:
 
                 # Setup filter handlers
                 def on_type_change():
-                    filter_types["value"] = []
-                    if type_snv.value:
-                        filter_types["value"].append("SNV")
-                    if type_sv.value:
-                        filter_types["value"].append("SV")
+                    filter_types["value"] = [
+                        vtype for vtype, box in type_boxes.items() if box.value
+                    ]
                     refresh_statistics()
 
-                type_snv.on_value_change(lambda: on_type_change())
-                type_sv.on_value_change(lambda: on_type_change())
+                for box in type_boxes.values():
+                    box.on_value_change(lambda: on_type_change())
 
                 for user, cb in user_checkboxes.items():
 

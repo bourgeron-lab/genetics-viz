@@ -107,6 +107,8 @@ src/genetics_viz/
     roh_plots.py                  # ECharts/SVG builders for the ROH tabs
     str_eh.py                     # ExpansionHunter discovery, reading, cohort cache, locus pivot
     str_plots.py                  # ECharts builders for the STR views
+    str_validation.py             # validations/strs.tsv writer (role-guarded) and reader
+    validation_files.py           # The validation kinds (SNV/SV/STR) and their files
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
@@ -210,6 +212,7 @@ Config files (YAML) are loaded once at module level.
 - **Member column ids are `m<index>`, not sample IDs.** TanStack reads a dot in an accessor key as a path, and the index into the family's member list keeps the ids stable when the member selection changes.
 - **Cohort context is optional and loads off-thread** (`load_cohort_context`, cached on `(path, mtime, size)`). The EH table is built only once the context is in. Built earlier, it would be replaced before the browser mounted it, and its container observer would time out.
 - **The cohort panel (`cohort_str_tab.py`) counts only the filtered individuals.** Rows are restricted by `restrict_to`, a semi-join on `(family_id, sample)`, since a sample can sit in two families. The founders' statistics and the "common" flag stay whole-cohort, from `loci.tsv`. Flagged genotypes come from the genotype table already in memory, not `flags.tsv`.
+- **STR validations live in `validations/strs.tsv`**, keyed `<chrom>:<pos>-<end>:<LOCUS>`. The catalog label is not in the key, so a validation survives a new catalog. The file has the SNV/SV header plus `CuratedRepeats`, so `load_validation_map` and the badges work unchanged. Writes go through `save_str_validation`, which checks `can_write()` itself.
 - REViewer images: `reviewer_filename` in `str.yaml`, looked up in the sample's `str/expansionhunter/`, and shown with `loading="lazy"` because they run to a megabyte each.
 
 ### Cohort Discovery
@@ -273,6 +276,7 @@ The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields
 
 ## Conventions
 
+- **Validation kinds are listed once**, in `utils/validation_files.py`. The All validations and Statistics pages loop over it, so a new kind is one entry there plus its writer.
 - Utility code shared across pages lives in `utils/`, not duplicated in page components.
 - YAML configs live in `config/`, loaded by corresponding `utils/*.py` modules.
 - All new ClinVar terms must be added to `config/clinvar_colors.yaml`.

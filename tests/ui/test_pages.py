@@ -1,5 +1,7 @@
 """Pages rendered in NiceGUI's user simulation, logged in as each role."""
 
+import asyncio
+
 import pytest
 from nicegui import ui
 from ui_helpers import capture_tables, login, open_tab, roh_threshold_labels
@@ -187,3 +189,66 @@ async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
     await user.should_see("No flagged genotype among the individuals shown", retries=30)
     loci = [t for t in tables if "n_pathogenic" in t["columns"]][-1]
     assert sum(r["n_flagged"] for r in loci["rows"]) == 0
+
+
+async def open_str_locus(user, monkeypatch, username, locus="HTT"):
+    await login(user, username)
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO/family/1001")
+    open_tab(user, "family-tabs", "STR")
+    await user.should_see("compared with 3 founders", retries=30)
+    with user.client:
+        tables[-1]["on_row_action"]({"action": "view_locus", "row": {"locus": locus}})
+    await user.should_see("REViewer", retries=30)
+    return tables
+
+
+async def test_curator_saves_an_str_validation(user, monkeypatch, data_dir):
+    tables = await open_str_locus(user, monkeypatch, "curator")
+    await user.should_see("No validation recorded at this locus.")
+    built = len(tables)
+    user.find(marker="str-validation-save").click()
+    await user.should_see("STR validation saved", retries=30)
+
+    lines = (data_dir / "validations" / "strs.tsv").read_text().splitlines()
+    assert lines[1].split("\t")[:6] == [
+        "1001", "chr4:3074876-3074933:HTT", "S3", "curator", "unknown", "present"
+    ]  # fmt: skip
+    # The table refresh is fire-and-forget: wait for the rebuilt table.
+    for _ in range(100):
+        if len(tables) > built:
+            break
+        await asyncio.sleep(0.05)
+    htt = next(r for r in tables[-1]["rows"] if r["locus"] == "HTT")
+    assert htt["m2_badges"][-1]["label"] == "✓"
+
+
+async def test_reader_sees_no_str_validation_form(user, monkeypatch):
+    await open_str_locus(user, monkeypatch, "reader")
+    await user.should_see("Curators and administrators can record validations.")
+    await user.should_not_see(marker="str-validation-save")
+
+
+def _write_str_validation(data_dir):
+    path = data_dir / "validations" / "strs.tsv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "FID\tVariant\tSample\tUser\tInheritance\tValidation\tCuratedRepeats"
+        "\tComment\tIgnore\tTimestamp\n"
+        "1001\tchr4:3074876-3074933:HTT\tS3\tcurator\tde novo\tpresent\t41"
+        "\tlong-read\t0\t2026-10-12T10:00:00\n"
+    )
+
+
+async def test_validation_pages_list_str(user, monkeypatch, data_dir):
+    _write_str_validation(data_dir)
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await user.open("/validation/all")
+    await user.should_see("1 validations", retries=30)
+    row = tables[-1]["rows"][0]
+    assert (row["Type"], row["Sample"], row["Validation"]) == ("STR", "S3", "present")
+
+    await user.open("/validation/statistics")
+    await user.should_see("Validation Statistics", retries=30)
+    assert any(c.text == "STR" for c in user.find(ui.checkbox).elements)
