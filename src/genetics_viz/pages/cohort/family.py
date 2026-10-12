@@ -32,6 +32,7 @@ from genetics_viz.pages.cohort.components.roh_tab import (
     probe_roh_data,
     render_roh_tab,
 )
+from genetics_viz.pages.cohort.components.str_tab import probe_eh_data, render_str_tab
 from genetics_viz.pages.cohort.components.svs_tab import probe_svs_data, render_svs_tab
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
 from genetics_viz.pages.cohort.components.wombat_tab import (
@@ -407,6 +408,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
             has_ancestry = probe_ancestry_data(store.data_dir, family_id)
             has_pgs = probe_pgs_data(store.data_dir, family_id)
             has_roh = probe_roh_data(store.data_dir, family_id)
+            has_str = probe_eh_data(store.data_dir, family_id)
 
             # Track loading state for each tab
             wombat_state = {"loaded": False}
@@ -414,6 +416,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
             ancestry_state = {"loaded": False}
             pgs_state = {"loaded": False}
             roh_state = {"loaded": False}
+            str_state = {"loaded": False}
 
             # Analysis tabs section
             with ui.tabs().classes("w-full").mark("family-tabs") as tabs:
@@ -422,6 +425,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 ancestry_tab = ui.tab("Ancestry")
                 pgs_tab = ui.tab("Polygenic Scores")
                 roh_tab = ui.tab("ROH")
+                str_tab = ui.tab("STR").tooltip("Short tandem repeats")
                 if not has_wombat:
                     wombat_tab.props("disable")
                 if not has_svs:
@@ -432,6 +436,8 @@ def family_page(cohort_name: str, family_id: str) -> None:
                     pgs_tab.props("disable")
                 if not has_roh:
                     roh_tab.props("disable")
+                if not has_str:
+                    str_tab.props("disable")
 
             # Pick the first enabled tab as the default
             if has_wombat:
@@ -444,6 +450,8 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 default_tab_name = "pgs"
             elif has_roh:
                 default_tab_name = "roh"
+            elif has_str:
+                default_tab_name = "str"
             else:
                 default_tab_name = "wombat"
 
@@ -453,6 +461,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "ancestry": ancestry_tab,
                 "pgs": pgs_tab,
                 "roh": roh_tab,
+                "str": str_tab,
             }[default_tab_name]
 
             with ui.tab_panels(tabs, value=default_tab).classes("w-full"):
@@ -606,6 +615,36 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                     roh_content()
 
+                # Short tandem repeats tab panel
+                with ui.tab_panel(str_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+
+                    @ui.refreshable
+                    def str_content():
+                        if not has_str:
+                            ui.label("No STR data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif str_state["loaded"]:
+                            render_str_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading short tandem repeats...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    str_content()
+
             # Each tab loads its data on first view: keyed by the tab name that
             # the "update:model-value" event reports.
             lazy_tabs = {
@@ -614,6 +653,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "Ancestry": (has_ancestry, ancestry_state, ancestry_content),
                 "Polygenic Scores": (has_pgs, pgs_state, pgs_content),
                 "ROH": (has_roh, roh_state, roh_content),
+                "STR": (has_str, str_state, str_content),
             }
             tab_names = {
                 "wombat": "Wombat",
@@ -621,6 +661,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "ancestry": "Ancestry",
                 "pgs": "Polygenic Scores",
                 "roh": "ROH",
+                "str": "STR",
             }
 
             def make_loader(state, content):

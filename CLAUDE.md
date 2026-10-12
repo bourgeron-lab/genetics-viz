@@ -56,6 +56,7 @@ src/genetics_viz/
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
+    str.yaml                      # STR class/status colours, support codes, REViewer filename
     clinvar_colors.yaml           # ClinVar significance term -> color
     column_names.yaml             # Column display names, groups, sorting, drop flags
     cytobands_hg38.tsv            # Cytoband data for ideogram rendering
@@ -80,6 +81,7 @@ src/genetics_viz/
         cohort_ancestry_tab.py    # Ancestry PCA tab (cohort-wide)
         cohort_pgs_tab.py         # Polygenic score violins (cohort-wide)
         roh_tab.py                # Runs of homozygosity tab (per-family)
+        str_tab.py                # STR tab (per-family): EH sub-tab + locus dialog
         cohort_roh_tab.py         # Runs of homozygosity sub-tab + islands dialog (cohort-wide)
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
@@ -102,6 +104,8 @@ src/genetics_viz/
     ancestry_plots.py             # Shared ECharts builders for the PCA scatters
     roh.py                        # ROH discovery, reference tier, grades, kinship checks
     roh_plots.py                  # ECharts/SVG builders for the ROH tabs
+    str_eh.py                     # ExpansionHunter discovery, reading, cohort cache, locus pivot
+    str_plots.py                  # ECharts builders for the STR views
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
@@ -190,6 +194,21 @@ Config files (YAML) are loaded once at module level.
 - The cohort tab reads only `froh` (and `roh_windows` on demand, off-thread). The cohort `roh` and `roh_genes` tables are 31 and 93 MB.
 - Some pedigrees repeat a row, and a sample can sit in two families: key cohort rows by `(family_id, IID)`.
 - `DataTable` does not reorder its initial rows to match `initial_sorting` — sort the rows in Python as well.
+
+### Short Tandem Repeats (STR)
+- The ghfc-ngs `expansionhunter` step writes under `str/expansionhunter/` at each level, every file named by the catalog label (`expansionhunter_catalog_name`, e.g. `jmsa50`):
+  - sample: `<id>.<L>.{vcf,json}` and `_realigned.bam`;
+  - family: `<FID>.<L>.genotypes.tsv`, one row per locus × member;
+  - cohort: `<NAME>.<L>.{genotypes,loci,flags}.tsv`.
+
+  Discovery is `find_eh_labels(dir, prefix)`. It is not the ancestry naming: there is no `apgs_b`, and the whole middle of the name is the label.
+- **Read through `read_eh_table`.** `.` is the null everywhere. The ID columns and `genotype` are forced to strings: `family_id` is numeric-looking (`88181200007`), and a male's chrX `genotype` is `0`/`1`.
+- `allele1` is the shorter allele. A male's chrX locus has one allele, and `allele2` is null.
+- **Founders are members with no *genotyped* parent** (`father` and `mother` both null). The pipeline fills the parent columns only for parents genotyped in the family. Cohort statistics and `locus_distribution` count founders only.
+- **Classes and statuses are the pipeline's.** The app only colours and words them, from `config/str.yaml`. `str_plots.allele_class` mirrors the pipeline's order (pathogenic, intermediate, normal, above_normal) only to colour histogram bars.
+- **Member column ids are `m<index>`, not sample IDs.** TanStack reads a dot in an accessor key as a path, and the index into the family's member list keeps the ids stable when the member selection changes.
+- **Cohort context is optional and loads off-thread** (`load_cohort_context`, cached on `(path, mtime, size)`). The EH table is built only once the context is in. Built earlier, it would be replaced before the browser mounted it, and its container observer would time out.
+- REViewer images: `reviewer_filename` in `str.yaml`, looked up in the sample's `str/expansionhunter/`, and shown with `loading="lazy"` because they run to a megabyte each.
 
 ### Cohort Discovery
 - **A cohort is a directory under `cohorts/`.** The directory name is the cohort name.

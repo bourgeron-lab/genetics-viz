@@ -36,6 +36,7 @@ def show_sample_dialog(sample_id: str) -> None:
                         ("vaf", "VAF", avail["vaf_bedgraph"]),
                         ("dv", "DeepVariant", avail["deepvariant"]),
                         ("svs", "SVs", avail["svs"]),
+                        ("str", "STR", avail["str_expansionhunter"]),
                     ]
                     for _, label, present in _BADGES:
                         color = "green" if present else "grey"

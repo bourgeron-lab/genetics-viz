@@ -52,6 +52,23 @@ def test_roh_grades_and_kinship_degrees_are_ordered():
     assert set(cfg["classes"]) == {"short", "intermediate", "long"}
 
 
+def test_str_statuses_cover_the_pipeline_vocabulary():
+    cfg = load("str.yaml")
+    statuses = cfg["statuses"]
+    # eh_family_table's classes and statuses, plus "." (no thresholds row)
+    assert set(statuses) == {
+        "pathogenic", "carrier", "intermediate", "above_normal", "normal", "unclassified"
+    }  # fmt: skip
+    assert all(HEX.match(v["color"]) for v in statuses.values())
+    ranks = [v["rank"] for v in statuses.values()]
+    assert len(set(ranks)) == len(ranks)
+    assert set(cfg["support"]) == {"SPANNING", "FLANKING", "INREPEAT"}
+    assert 0 < cfg["common_in_cohort_fraction"] < 1
+    assert {"{sample}", "{label}", "{locus}"} <= set(
+        re.findall(r"{\w+}", cfg["reviewer_filename"])
+    )
+
+
 def test_wisecondorx_thresholds_bracket_zero():
     cfg = load("wisecondorx_thresholds.yaml")
     assert (

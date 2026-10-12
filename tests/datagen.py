@@ -11,7 +11,10 @@ exercise the traps found so far:
 - a sharded ``families/`` tree;
 - two filter-tag variants of one bundle, ``dp6gq15`` and ``dp10gq20``;
 - a trio whose child has elevated ROH and whose parents are related, so the
-  role-dependent ROH wording has something to hide.
+  role-dependent ROH wording has something to hide;
+- ExpansionHunter tables with a child's expansion above both parents, an AR
+  carrier, a male's single chrX allele, a ``LowDepth`` call and a locus with no
+  thresholds; family 1002 has no STR results at all.
 """
 
 import gzip
@@ -72,6 +75,11 @@ def write_tsv(
 def family_dir(data: Path, fid: str) -> Path:
     s1, s2 = compute_shard_prefix(fid)
     return data / "families" / s1 / s2 / fid
+
+
+def sample_dir(data: Path, sid: str) -> Path:
+    s1, s2 = compute_shard_prefix(sid)
+    return data / "samples" / s1 / s2 / sid
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +152,12 @@ def _froh_row(iid: str, father: str, mother: str, elevated: bool) -> List:
 def build_family_results(
     data: Path, fid: str, members: Sequence[Sequence[str]]
 ) -> None:
-    """Ancestry (two tags) and ROH (one tag) results for one family."""
+    """The family pedigree, ancestry (two tags) and ROH (one tag) results."""
     fdir = family_dir(data, fid)
+    fdir.mkdir(parents=True, exist_ok=True)
+    (fdir / f"{fid}.pedigree.tsv").write_text(
+        "".join("\t".join(m) + "\n" for m in members)
+    )
     for tag in TAGS:
         prefix = fdir / "ancestry" / f"{fid}.apgs_b{BUNDLE}_{tag}"
         write_tsv(
@@ -275,6 +287,178 @@ def build_state(
     )  # fmt: skip
 
 
+# ---------------------------------------------------------------------------
+# Short tandem repeats (ExpansionHunter)
+# ---------------------------------------------------------------------------
+
+EH_LABEL = "jmsa50"
+
+#: eh_family_table's COLUMNS, in order.
+EH_COLUMNS = [
+    "family_id", "sample", "father", "mother", "sex", "phenotype",
+    "locus", "chrom", "pos", "end", "motif", "ref_units", "filter", "genotype",
+    "allele1", "allele2", "allele1_ci", "allele2_ci",
+    "allele1_support", "allele2_support",
+    "allele1_spanning", "allele2_spanning", "allele1_flanking", "allele2_flanking",
+    "allele1_inrepeat", "allele2_inrepeat", "locus_coverage",
+    "disease", "inheritance", "normal_max", "intermediate_min", "pathogenic_min",
+    "allele1_class", "allele2_class", "status", "parents_max_allele",
+]  # fmt: skip
+
+#: locus -> (chrom, pos, end, motif, ref_units, disease, inheritance,
+#: normal_max, intermediate_min, pathogenic_min); "." where the catalog has none.
+EH_LOCI = {
+    "AFF3": ("chr2", 100104799, 100104822, "GCC", 8, ".", ".", ".", ".", "."),
+    "HTT": ("chr4", 3074876, 3074933, "CAG", 19, "Huntington disease", "AD", 26, 27, 36),
+    "FXN": ("chr9", 69037286, 69037304, "GAA", 6, "Friedreich ataxia", "AR", 30, ".", 70),
+    "ARX_2": ("chrX", 25013529, 25013565, "NGC", 12, "DEE1", "XLR", 12, ".", 20),
+    "FMR1": ("chrX", 147912050, 147912110, "CGG", 20, "Fragile X", "XLD", 40, 41, 55),
+}  # fmt: skip
+
+#: (sample, locus) -> (allele1, allele2, support1, support2) where it differs
+#: from the default: 10 and 12 units, spanning (one allele on a male's chrX).
+EH_CALLS = {
+    ("S3", "HTT"): (18, 40, "SPANNING", "INREPEAT"),
+    ("S2", "FXN"): (8, 120, "SPANNING", "INREPEAT"),
+    ("S6", "AFF3"): (9, 31, "SPANNING", "FLANKING"),
+}
+
+_SEX = {"1": "male", "2": "female"}
+_PHENO = {"1": "unaffected", "2": "affected"}
+
+
+def _eh_class(count, normal, inter, patho) -> str:
+    if normal == "." and inter == "." and patho == ".":
+        return "."
+    if patho != "." and count >= patho:
+        return "pathogenic"
+    if inter != "." and count >= inter:
+        return "intermediate"
+    if normal == "." or count <= normal:
+        return "normal"
+    return "above_normal"
+
+
+def _eh_rows(fid: str, members: Sequence[Sequence[str]]) -> List[List]:
+    """One row per locus and member, as eh_family_table writes them."""
+    ids = {m[1] for m in members}
+    rows: List[List] = []
+    longest: Dict = {}
+    for locus, (chrom, pos, end, motif, ref, disease, inh, n, i, p) in EH_LOCI.items():
+        for m in members:
+            sid, sex = m[1], _SEX.get(m[4].split(".")[0], ".")
+            a1, a2, s1, s2 = EH_CALLS.get(
+                (sid, locus), (10, 12, "SPANNING", "SPANNING")
+            )
+            single = chrom == "chrX" and sex == "male"
+            if single:
+                a1, a2, s2 = a2, ".", "."
+            classes = [_eh_class(a, n, i, p) if a != "." else "." for a in (a1, a2)]
+            ranked = [c for c in classes if c != "."]
+            if not ranked:
+                status = "."
+            elif inh == "AR" and len(ranked) == 2 and ranked.count("pathogenic") == 1:
+                status = "carrier"
+            else:
+                order = ["normal", "above_normal", "intermediate", "pathogenic"]
+                status = max(ranked, key=order.index)
+            father = m[2] if m[2] in ids else "."
+            mother = m[3] if m[3] in ids else "."
+            parents = [
+                longest[(x, locus)] for x in (father, mother) if (x, locus) in longest
+            ]
+            low = sid == "S6" and locus == "ARX_2"
+            rows.append([
+                fid, sid, father, mother, sex, _PHENO.get(m[5].split(".")[0], "."),
+                locus, chrom, pos, end, motif, ref, "LowDepth" if low else "PASS",
+                "1" if single else "0/1",
+                a1, a2, f"{a1}-{a1}", "." if a2 == "." else f"{a2}-{a2 + 3}", s1, s2,
+                12, 0 if a2 == "." else 9, 30, 0 if a2 == "." else 28,
+                0, 0 if a2 == "." or s2 != "INREPEAT" else 4, 8.5 if low else 31.2,
+                disease, inh, n, i, p, classes[0], classes[1], status,
+                max(parents) if parents else ".",
+            ])  # fmt: skip
+            longest[(sid, locus)] = max(a for a in (a1, a2) if a != ".")
+    return rows
+
+
+def build_str_results(
+    data: Path, fid: str, members: Sequence[Sequence[str]]
+) -> List[List]:
+    """A family's ExpansionHunter table and one REViewer image. Returns the rows."""
+    rows = _eh_rows(fid, members)
+    write_tsv(
+        family_dir(data, fid)
+        / "str"
+        / "expansionhunter"
+        / f"{fid}.{EH_LABEL}.genotypes.tsv",
+        EH_COLUMNS,
+        rows,
+    )
+    for m in members:
+        sdir = sample_dir(data, m[1]) / "str" / "expansionhunter"
+        write_tsv(sdir / f"{m[1]}.{EH_LABEL}.vcf", ["#CHROM"], [])
+        if m[1] == "S3":
+            (sdir / f"S3.{EH_LABEL}.HTT.svg").write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'
+            )
+    return rows
+
+
+def build_cohort_str_results(cohort_dir: Path, name: str, rows: List[List]) -> None:
+    """eh_cohort_merge's three tables, from the families' rows."""
+    col = {c: k for k, c in enumerate(EH_COLUMNS)}
+
+    def longest(r):
+        return max(a for a in (r[col["allele1"]], r[col["allele2"]]) if a != ".")
+
+    founders = [r for r in rows if r[col["father"]] == "." and r[col["mother"]] == "."]
+    by_locus: Dict[str, List[int]] = {}
+    for r in founders:
+        by_locus.setdefault(r[col["locus"]], []).append(longest(r))
+
+    def pct(r):
+        values = by_locus[r[col["locus"]]]
+        return round(100 * sum(v <= longest(r) for v in values) / len(values), 1)
+
+    edir = cohort_dir / "str" / "expansionhunter"
+    write_tsv(
+        edir / f"{name}.{EH_LABEL}.genotypes.tsv",
+        [*EH_COLUMNS, "cohort_percentile"],
+        [[*r, pct(r)] for r in rows],
+    )
+    loci_rows = []
+    for locus, (chrom, pos, end, motif, _ref, disease, inh, n, i, p) in EH_LOCI.items():
+        values = sorted(by_locus[locus])
+        mine = [r for r in rows if r[col["locus"]] == locus]
+        count = {
+            s: sum(r[col["status"]] == s for r in mine)
+            for s in ("pathogenic", "carrier", "intermediate", "above_normal")
+        }
+        loci_rows.append([
+            locus, chrom, pos, end, motif, disease, inh, n, i, p, len(mine), len(values),
+            values[len(values) // 2], values[-1], values[-1], values[-1], values[-1],
+            count["pathogenic"], count["carrier"], count["intermediate"],
+            count["above_normal"], sum(r[col["filter"]] != "PASS" for r in mine),
+        ])  # fmt: skip
+    write_tsv(
+        edir / f"{name}.{EH_LABEL}.loci.tsv",
+        ["locus", "chrom", "pos", "end", "motif", "disease", "inheritance", "normal_max",
+         "intermediate_min", "pathogenic_min", "n_samples", "n_founders",
+         "founders_median", "founders_p95", "founders_p99", "founders_p99.9",
+         "founders_max", "n_pathogenic", "n_carrier", "n_intermediate",
+         "n_above_normal", "n_not_pass"],
+        loci_rows,
+    )  # fmt: skip
+    write_tsv(
+        edir / f"{name}.{EH_LABEL}.flags.tsv",
+        [*EH_COLUMNS, "cohort_percentile", "founders_median", "founders_p99.9",
+         "founders_max"],
+        [[*r, pct(r), 10, 12, 12] for r in rows
+         if r[col["status"]] in ("pathogenic", "carrier", "intermediate")],
+    )  # fmt: skip
+
+
 def build_data_dir(root: Path) -> Path:
     """The whole synthetic data directory. Returns its path."""
     data = root / "data"
@@ -308,6 +492,10 @@ def build_data_dir(root: Path) -> Path:
     by_family: Dict[str, List[Sequence[str]]] = {}
     for row in DEMO_PEDIGREE:
         by_family.setdefault(row[0], []).append(row)
+    str_rows: List[List] = []
     for fid, members in by_family.items():
         build_family_results(data, fid, members)
+        if fid != "1002":
+            str_rows += build_str_results(data, fid, members)
+    build_cohort_str_results(demo, "DEMO", str_rows)
     return data

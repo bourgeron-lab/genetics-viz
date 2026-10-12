@@ -1,0 +1,55 @@
+# Short tandem repeats (STR): display configuration.
+#
+# The classes and statuses are assigned by the ghfc-ngs expansionhunter step
+# (modules/expansionhunter/scripts/eh_family_table) against the STRipy
+# thresholds; the app only words and colours them.
+
+# Allele class and member status -> label, colour, severity rank (higher is
+# worse). "unclassified" stands for '.', a locus with no thresholds row.
+statuses:
+  pathogenic:
+    label: "Pathogenic"
+    color: "#c62828"
+    rank: 4
+  carrier:
+    label: "Carrier"
+    color: "#8e24aa"
+    rank: 3
+  intermediate:
+    label: "Intermediate"
+    color: "#ef6c00"
+    rank: 2
+  above_normal:
+    label: "Above normal"
+    color: "#f9a825"
+    rank: 1
+  normal:
+    label: "Normal"
+    color: "#607d8b"
+    rank: 0
+  unclassified:
+    label: "No thresholds"
+    color: "#9e9e9e"
+    rank: -1
+
+# allele*_support -> short code appended to the repeat count, and its meaning.
+# SPANNING gets no code: it is the ordinary case.
+support:
+  SPANNING:
+    code: ""
+    help: "Spanning reads: the length is exact and the allele short."
+  FLANKING:
+    code: "F"
+    help: "Flanking reads only: the length is a lower bound."
+  INREPEAT:
+    code: "IR"
+    help: "In-repeat reads: an expansion beyond the read length."
+
+# A locus where this share of the cohort is pathogenic, carrier or
+# intermediate is flagged "common in cohort": the threshold or the catalog is
+# more likely at fault than the individuals (ARX_2, XYLT1).
+common_in_cohort_fraction: 0.05
+
+# REViewer image of one sample at one locus, in the sample's
+# str/expansionhunter/ directory. Fields: sample, label (catalog), locus.
+reviewer_filename: "{sample}.{label}.{locus}.svg"
