@@ -92,7 +92,7 @@ def show_diagnostic_dialog(
                             "Save",
                             icon="save",
                             on_click=lambda: _save_diagnostic(),
-                        ).props("color=primary dense")
+                        ).props("color=primary dense").mark("diagnostic-save")
                     else:
                         ui.label("Read-only access").classes(
                             "text-sm text-gray-400 italic"
