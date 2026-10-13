@@ -1,4 +1,4 @@
-"""Diagnostic all page - displays all diagnostics from diagnostics/snvs.tsv and svs.tsv."""
+"""Diagnostic all page - displays the diagnostics of every kind under diagnostics/."""
 
 import asyncio
 import csv
@@ -14,22 +14,23 @@ from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
+from genetics_viz.utils.diagnostic_files import DIAGNOSTIC_TYPES, diagnostic_paths
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.str_eh import status_info
 from genetics_viz.utils.vep import format_consequence_display, get_consequence_color
 from genetics_viz.utils.wisecondorx import WISECONDORX_CONFIG
 
 
 @ui.page("/diagnostic/all")
 async def diagnostic_all_page() -> None:
-    """Render all diagnostics from diagnostics/snvs.tsv and svs.tsv."""
+    """Render the diagnostics of every kind (SNV, SV, STR)."""
     if redirect := check_auth():
         return redirect
     create_header()
 
     try:
         store = get_data_store()
-        snv_diagnostic_file = store.data_dir / "diagnostics" / "snvs.tsv"
-        sv_diagnostic_file = store.data_dir / "diagnostics" / "svs.tsv"
+        diagnostic_files = diagnostic_paths(store.data_dir)
 
         with ui.column().classes("w-full px-6 py-6"):
             # Title
@@ -38,31 +39,23 @@ async def diagnostic_all_page() -> None:
                     "text-3xl font-bold text-blue-900"
                 )
 
-            if not snv_diagnostic_file.exists() and not sv_diagnostic_file.exists():
+            if not any(path.exists() for _, path in diagnostic_files):
                 ui.label("No diagnostics found").classes("text-gray-500 text-lg italic")
                 return
 
             # Function to load and aggregate diagnostic data
             def load_and_aggregate_diagnostics() -> List[Dict[str, Any]]:
-                """Load raw diagnostics from both files and aggregate by (Type, FID, Variant, Sample)."""
+                """Load raw diagnostics from every file and aggregate by (Type, FID, Variant, Sample)."""
                 raw_diagnostics: List[Dict[str, Any]] = []
 
-                # Load SNV diagnostics
-                if snv_diagnostic_file.exists():
-                    with open(snv_diagnostic_file, "r") as f:
+                for dtype, path in diagnostic_files:
+                    if not path.exists():
+                        continue
+                    with open(path, "r") as f:
                         reader = csv.DictReader(f, delimiter="\t")
                         for row in reader:
                             row_dict = dict(row)
-                            row_dict["Type"] = "SNV"
-                            raw_diagnostics.append(row_dict)
-
-                # Load SV diagnostics
-                if sv_diagnostic_file.exists():
-                    with open(sv_diagnostic_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
-                        for row in reader:
-                            row_dict = dict(row)
-                            row_dict["Type"] = "SV"
+                            row_dict["Type"] = dtype
                             raw_diagnostics.append(row_dict)
 
                 if not raw_diagnostics:
@@ -211,6 +204,12 @@ async def diagnostic_all_page() -> None:
                                 row["ImpactBadges"] = [
                                     {"label": impact_str, "color": "#6b7280"}
                                 ]
+                        elif row_type == "STR":
+                            # STR: the member's pipeline status at the locus
+                            info = status_info(impact_str)
+                            row["ImpactBadges"] = [
+                                {"label": info["label"], "color": info["color"]}
+                            ]
                         else:
                             # SNV: VEP consequence badges
                             # Split by both ',' and '&' to handle aggregated values
@@ -263,7 +262,7 @@ async def diagnostic_all_page() -> None:
             filter_diagnostics: Dict[str, List[str]] = {
                 "value": list(all_diagnostic_statuses)
             }
-            filter_types: Dict[str, List[str]] = {"value": ["SNV", "SV"]}
+            filter_types: Dict[str, List[str]] = {"value": list(DIAGNOSTIC_TYPES)}
             filter_users: Dict[str, List[str]] = {"value": list(all_unique_users)}
 
             # Date filter state
@@ -281,19 +280,19 @@ async def diagnostic_all_page() -> None:
                         "text-xs font-semibold text-gray-600"
                     )
                     with ui.row().classes("gap-2"):
-                        type_snv = ui.checkbox("SNV", value=True).classes("text-sm")
-                        type_sv = ui.checkbox("SV", value=True).classes("text-sm")
+                        type_boxes = {
+                            dtype: ui.checkbox(dtype, value=True).classes("text-sm")
+                            for dtype in DIAGNOSTIC_TYPES
+                        }
 
                         def on_type_change():
-                            filter_types["value"] = []
-                            if type_snv.value:
-                                filter_types["value"].append("SNV")
-                            if type_sv.value:
-                                filter_types["value"].append("SV")
+                            filter_types["value"] = [
+                                dtype for dtype, box in type_boxes.items() if box.value
+                            ]
                             refresh_table()
 
-                        type_snv.on_value_change(lambda: on_type_change())
-                        type_sv.on_value_change(lambda: on_type_change())
+                        for box in type_boxes.values():
+                            box.on_value_change(lambda: on_type_change())
 
                 # Diagnostic status filter
                 create_validation_filter_menu(

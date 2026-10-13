@@ -18,6 +18,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import polars as pl
 from nicegui import ui
 
+from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.components.diagnostic_loader import (
+    add_diagnostic_status_to_row,
+    load_diagnostic_map,
+)
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
@@ -25,13 +30,15 @@ from genetics_viz.components.validation_loader import (
 )
 from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.data import get_static_prefix
-from genetics_viz.utils.sharding import get_sample_url
+from genetics_viz.utils.diagnostic_files import diagnostic_path
+from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 from genetics_viz.utils.str_eh import (
     FLAGGED,
     STATUSES,
     SUPPORT,
     CohortContext,
     Member,
+    diagnostic_badge,
     eh_path,
     family_locus_rows,
     family_members,
@@ -39,11 +46,13 @@ from genetics_viz.utils.str_eh import (
     get_family_eh_dir,
     load_cohort_context,
     locus_distribution,
+    locus_gene,
     member_details,
     member_key,
     probe_eh_data,
     read_eh_table,
     reviewer_path,
+    reviewer_reviewed,
     status_info,
     thresholds_text,
 )
@@ -253,7 +262,10 @@ def render_eh_subtab(
             return
 
         validations = _validation_statuses(store.data_dir, family_id, fam)
-        rows = family_locus_rows(fam, members, selected, context, validations)
+        diagnostics = _diagnostic_statuses(store.data_dir, family_id, fam)
+        rows = family_locus_rows(
+            fam, members, selected, context, validations, diagnostics
+        )
         if state["hide_normal"]:
             rows = [r for r in rows if r["worst_rank"] >= 1]
 
@@ -341,23 +353,43 @@ def render_eh_subtab(
         ui.timer(0.05, load_context, once=True)
 
 
-def _validation_statuses(
-    data_dir: Any, family_id: str, fam: pl.DataFrame
+def _curated_statuses(
+    cmap: Dict[Tuple[str, str], Any],
+    fam: pl.DataFrame,
+    add_status: Callable[[Dict[str, Any], Any, str, str], None],
+    field: str,
 ) -> Dict[Tuple[str, str], str]:
-    """``(locus, sample)`` -> the curators' aggregated status, ignored rows left out."""
-    vmap = load_validation_map(str_validation_file(data_dir), family_id)
-    if not vmap:
+    """``(locus, sample)`` -> the curators' aggregated status, ignored rows left out.
+
+    ``cmap`` is a validation or diagnostic map keyed by the STR variant key;
+    ``add_status`` the loader's matching row helper, which writes ``field``.
+    """
+    if not cmap:
         return {}
     out: Dict[Tuple[str, str], str] = {}
     cols = ["locus", "chrom", "pos", "end", "sample"]
     for r in fam.select(cols).unique().to_dicts():
         key = str_variant_key(r["chrom"], r["pos"], r["end"], r["locus"])
-        if (key, r["sample"]) in vmap:
+        if (key, r["sample"]) in cmap:
             row: Dict[str, Any] = {}
-            add_validation_status_to_row(row, vmap, key, r["sample"])
-            if row["Validation"]:
-                out[(r["locus"], r["sample"])] = row["Validation"]
+            add_status(row, cmap, key, r["sample"])
+            if row[field]:
+                out[(r["locus"], r["sample"])] = row[field]
     return out
+
+
+def _validation_statuses(
+    data_dir: Any, family_id: str, fam: pl.DataFrame
+) -> Dict[Tuple[str, str], str]:
+    vmap = load_validation_map(str_validation_file(data_dir), family_id)
+    return _curated_statuses(vmap, fam, add_validation_status_to_row, "Validation")
+
+
+def _diagnostic_statuses(
+    data_dir: Any, family_id: str, fam: pl.DataFrame
+) -> Dict[Tuple[str, str], str]:
+    dmap = load_diagnostic_map(diagnostic_path(data_dir, "STR"), family_id)
+    return _curated_statuses(dmap, fam, add_diagnostic_status_to_row, "Diagnostic")
 
 
 def _render_validation(
@@ -468,6 +500,90 @@ def _render_validation(
         ).mark("str-validation-save")
 
 
+def _render_diagnostics(
+    data_dir: Any,
+    family_id: str,
+    locus: str,
+    info: Dict[str, Any],
+    details: List[Dict[str, Any]],
+    changed: Dict[str, bool],
+) -> None:
+    """Each member's diagnostic at the locus, and the button to its review dialog.
+
+    The review dialog is the SNV/SV one: history, ignore toggles, and a save
+    form shown to curators only. Saving refreshes this section in place and
+    marks ``changed``, so the family table is redrawn once the locus dialog
+    closes rather than from under it.
+    """
+    key = str_variant_key(info.get("chrom"), info.get("pos"), info.get("end"), locus)
+    path = diagnostic_path(data_dir, "STR")
+    ui.label("Diagnostic").classes("text-base font-semibold text-blue-700 mt-2")
+    # The review dialogs live here, outside the refreshable section: a refresh
+    # from an ignore toggle would otherwise delete the dialog that sent it.
+    anchor = ui.element("div")
+
+    @ui.refreshable
+    def section() -> None:
+        dmap = load_diagnostic_map(path, family_id)
+        with ui.row().classes("gap-2 flex-wrap w-full"):
+            for r in details:
+                sample = r["sample"]
+                row: Dict[str, Any] = {}
+                add_diagnostic_status_to_row(row, dmap, key, sample)
+                with ui.row().classes(
+                    "items-center gap-2 border rounded px-2 py-1 no-wrap"
+                ):
+                    ui.label(sample).classes("text-sm font-medium")
+                    if row["Diagnostic"]:
+                        badge = diagnostic_badge(row["Diagnostic"])
+                        ui.label(row["Diagnostic"]).classes(
+                            "text-xs text-white rounded px-1"
+                        ).style(f"background-color: {badge['color']}")
+                    else:
+                        ui.label("none").classes("text-xs text-gray-400 italic")
+
+                    def make_open(r: Dict[str, Any]) -> Callable[[], None]:
+                        def handler() -> None:
+                            with anchor:
+                                show_diagnostic_dialog(
+                                    family_id=family_id,
+                                    variant_key=key,
+                                    gene=locus_gene(locus),
+                                    impact=status_info(r.get("status"))["key"],
+                                    sample=r["sample"],
+                                    variant_type="str",
+                                    diagnostic_file=path,
+                                    on_save_callback=on_change,
+                                )
+
+                        return handler
+
+                    ui.button(icon="biotech", on_click=make_open(r)).props(
+                        "flat dense round size=sm"
+                    ).tooltip("Diagnostic review").mark(
+                        f"str-diagnostic-open str-diagnostic-{sample}"
+                    )
+
+    def on_change(_action: str) -> None:
+        changed["value"] = True
+        section.refresh()
+
+    section()
+
+
+def _no_reviewer_reason(store: Any, row: Dict[str, Any], label: str) -> str:
+    """Why a member has no REViewer image at a locus.
+
+    The pipeline draws flagged genotypes only, so an unflagged member's
+    missing image is the expected case, not an anomaly.
+    """
+    if not reviewer_reviewed(store.data_dir, row["sample"], label):
+        return "REViewer not run yet"
+    if row.get("status") not in FLAGGED:
+        return "not flagged, not drawn"
+    return "no REViewer image"
+
+
 def show_eh_locus_dialog(
     store: Any,
     family_id: str,
@@ -479,15 +595,24 @@ def show_eh_locus_dialog(
     locus: str,
     on_saved: Optional[Callable[[], None]] = None,
 ) -> None:
-    """One locus: the cohort distribution, each member's call and validations, REViewer."""
+    """One locus: the cohort distribution, each member's call, validations and
+    diagnostics, REViewer."""
     details = [
         r for r in member_details(fam, locus, context) if r["sample"] in selected
     ]
     if not details:
         return
     info = details[0]
+    # A diagnostic saved in the review dialog redraws the family table on close.
+    changed = {"value": False}
+
+    def on_close(e: Any) -> None:
+        if not e.value and changed["value"] and on_saved is not None:
+            changed["value"] = False
+            on_saved()
 
     with ui.dialog().props("full-width") as dialog, ui.card().classes("w-full"):
+        dialog.on_value_change(on_close)
         with ui.row().classes("w-full items-center"):
             ui.label(f"{locus}").classes("text-lg font-semibold text-blue-700")
             ui.label(
@@ -583,28 +708,32 @@ def show_eh_locus_dialog(
         _render_validation(
             store.data_dir, family_id, locus, info, details, dialog, on_saved
         )
+        _render_diagnostics(store.data_dir, family_id, locus, info, details, changed)
 
         ui.label("REViewer").classes("text-base font-semibold text-blue-700 mt-2")
         prefix = get_static_prefix()
         for r in details:
             sample = r["sample"]
             path = reviewer_path(store.data_dir, sample, label, locus)
-            if not path.exists():
-                ui.label(f"{sample}: no REViewer image").classes(
+            if path is None:
+                ui.label(f"{sample}: {_no_reviewer_reason(store, r, label)}").classes(
                     "text-sm text-gray-500 italic"
                 )
                 continue
+            relative = path.relative_to(get_sample_path(store.data_dir, sample))
             url = (
                 f"{prefix}/{get_sample_url(store.data_dir, sample)}"
-                f"/str/expansionhunter/{path.name}"
+                f"/{relative.as_posix()}"
             )
             with ui.expansion(f"{sample} — REViewer", icon="image").classes("w-full"):
                 # loading=lazy: the images are up to a megabyte each, and the
-                # browser would fetch them all even while collapsed.
+                # browser would fetch them all even while collapsed. w-full: the
+                # expansion's column aligns flex-start, so the wrapper would
+                # shrink to the SVG's default 300px and the image with it.
                 ui.html(
                     f'<img src="{url}" loading="lazy" alt="REViewer {sample} {locus}"'
                     ' style="width: 100%">',
                     sanitize=False,
-                )
+                ).classes("w-full")
 
     dialog.open()

@@ -248,3 +248,79 @@ async def test_validation_pages_list_str(user, monkeypatch, data_dir):
     await user.open("/validation/statistics")
     await user.should_see("Validation Statistics", retries=30)
     assert any(c.text == "STR" for c in user.find(ui.checkbox).elements)
+
+
+async def test_reviewer_images_and_why_one_is_missing(user, monkeypatch):
+    await open_str_locus(user, monkeypatch, "reader")
+    await user.should_see("S3 — REViewer")
+    await user.should_see("S1: not flagged, not drawn")
+
+
+async def test_flagged_genotype_without_reviewer_image(user, monkeypatch):
+    await open_str_locus(user, monkeypatch, "reader", locus="FXN")
+    await user.should_see("S2: no REViewer image")
+
+
+async def test_curator_saves_an_str_diagnostic(user, monkeypatch, data_dir):
+    tables = await open_str_locus(user, monkeypatch, "curator")
+    built = len(tables)
+    user.find(marker="str-diagnostic-S3").click()
+    await user.should_see("Diagnostic Review", retries=30)
+    user.find(marker="diagnostic-save").click()
+    await user.should_see("Diagnostic saved", retries=30)
+
+    lines = (data_dir / "diagnostics" / "strs.tsv").read_text().splitlines()
+    fields = lines[1].split("\t")
+    assert fields[:5] == [
+        "1001", "chr4:3074876-3074933:HTT", "HTT", "pathogenic", "S3"
+    ]  # fmt: skip
+    assert fields[-1] == "uncertain"
+    # The section refreshes in place; the family table waits for the close.
+    await user.should_see("uncertain", retries=30)
+    assert len(tables) == built
+    with user.client:
+        for dialog in user.find(ui.dialog).elements:
+            dialog.close()
+    for _ in range(100):
+        if len(tables) > built:
+            break
+        await asyncio.sleep(0.05)
+    htt = next(r for r in tables[-1]["rows"] if r["locus"] == "HTT")
+    assert htt["m2_badges"][-1]["label"] == "Dx ?"
+
+
+async def test_reader_cannot_save_an_str_diagnostic(user, monkeypatch):
+    await open_str_locus(user, monkeypatch, "reader")
+    user.find(marker="str-diagnostic-S3").click()
+    await user.should_see("Read-only access", retries=30)
+    await user.should_not_see(marker="diagnostic-save")
+
+
+def _write_str_diagnostic(data_dir):
+    path = data_dir / "diagnostics" / "strs.tsv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "FID\tVariant\tGene\tImpact\tSample\tUser\tTimestamp\tComment\tIgnore"
+        "\tDiagnostic\n"
+        "1001\tchr4:3074876-3074933:HTT\tHTT\tpathogenic\tS3\tcurator"
+        "\t2026-10-12T10:00:00\t\t0\tpathogenic\n"
+    )
+
+
+async def test_diagnostic_pages_list_str(user, monkeypatch, data_dir):
+    _write_str_diagnostic(data_dir)
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await user.open("/diagnostic/all")
+    await user.should_see("1 diagnostics", retries=30)
+    row = tables[-1]["rows"][0]
+    assert (row["Type"], row["Sample"], row["Diagnostic"]) == (
+        "STR",
+        "S3",
+        "pathogenic",
+    )
+    assert row["ImpactBadges"][0]["label"] == "Pathogenic"
+
+    await user.open("/diagnostic/statistics")
+    await user.should_see("Diagnostic Statistics", retries=30)
+    assert any(c.text == "STR" for c in user.find(ui.checkbox).elements)

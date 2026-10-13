@@ -8,6 +8,12 @@ from genetics_viz.components import validation_loader as vl
 from genetics_viz.components import waves_loader as wl
 
 
+@pytest.fixture(autouse=True)
+def curator(monkeypatch):
+    """Diagnostic writes check the role; these tests write as a curator."""
+    monkeypatch.setattr(dl, "can_write", lambda: True)
+
+
 def save_diag(
     path,
     sample="S1",
@@ -62,12 +68,25 @@ def test_conflicting_and_ignored_diagnostics(tmp_path):
     assert not dl.update_diagnostic_ignore_status(path, "F1", "nope", "S1", "x", "1")
 
 
+def test_viewers_cannot_write_diagnostics(tmp_path, monkeypatch):
+    path = tmp_path / "snvs.tsv"
+    save_diag(path)
+    monkeypatch.setattr(dl, "can_write", lambda: False)
+    with pytest.raises(PermissionError):
+        save_diag(path, user="u2")
+    with pytest.raises(PermissionError):
+        dl.update_diagnostic_ignore_status(
+            path, "F1", "chr1:1:A:T", "S1", "2026-01-01T10:00:00", "1"
+        )
+    assert len(path.read_text().splitlines()) == 2
+
+
 def test_family_diagnostics_fold_same_verdict_samples(tmp_path):
-    snv, sv = tmp_path / "snvs.tsv", tmp_path / "svs.tsv"
+    snv = tmp_path / "diagnostics" / "snvs.tsv"
     save_diag(snv, sample="S2", user="u1")
     save_diag(snv, sample="S1", user="u2", ts="2026-02-01T00:00:00")
     save_diag(snv, sample="S3", verdict="benign")
-    entries = dl.load_family_diagnostics(snv, sv, "F1", ["S1", "S2", "S3"])
+    entries = dl.load_family_diagnostics(tmp_path, "F1", ["S1", "S2", "S3"])
     by_verdict = {e["Diagnostic"]: e for e in entries}
     assert by_verdict["pathogenic"]["Sample"] == "S1, S2"  # pedigree order
     assert by_verdict["pathogenic"]["User"] == "u2, u1"  # newest first

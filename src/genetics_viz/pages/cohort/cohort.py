@@ -35,6 +35,7 @@ from genetics_viz.pages.cohort.components.status_panel import (
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.cohort_state import read_cohort_state
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.ghfc_ngs_docs import fetch_params_doc
 
 # Diagnostic priority: higher value wins
@@ -128,8 +129,7 @@ def cohort_page(cohort_name: str) -> None:
 
         # Load diagnostics per sample (highest priority wins)
         sample_diag: Dict[str, str] = defaultdict(str)
-        for fname in ["snvs.tsv", "svs.tsv"]:
-            diag_file = store.data_dir / "diagnostics" / fname
+        for _dtype, diag_file in diagnostic_paths(store.data_dir):
             if not diag_file.exists():
                 continue
             with open(diag_file, "r") as f:

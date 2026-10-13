@@ -28,11 +28,12 @@ def show_diagnostic_dialog(
 
     Args:
         family_id: Family ID
-        variant_key: Variant identifier (chr:pos:ref:alt or chr:start-end)
+        variant_key: Variant identifier (chr:pos:ref:alt, chr:start-end:type,
+            or chr:pos-end:LOCUS for an STR)
         gene: Gene symbol(s)
-        impact: VEP consequence or SV call type (GAIN/LOSS)
+        impact: VEP consequence, SV call type (GAIN/LOSS) or STR status
         sample: Sample ID
-        variant_type: "snv" or "sv"
+        variant_type: "snv", "sv" or "str"
         diagnostic_file: Path to the diagnostics TSV file
         on_save_callback: Optional callback invoked after save or ignore toggle
     """
@@ -92,7 +93,7 @@ def show_diagnostic_dialog(
                             "Save",
                             icon="save",
                             on_click=lambda: _save_diagnostic(),
-                        ).props("color=primary dense")
+                        ).props("color=primary dense").mark("diagnostic-save")
                     else:
                         ui.label("Read-only access").classes(
                             "text-sm text-gray-400 italic"
@@ -161,14 +162,18 @@ def show_diagnostic_dialog(
                                     ) -> Callable:
                                         def handler(e: Any) -> None:
                                             new_val = "1" if e.value else "0"
-                                            ok = update_diagnostic_ignore_status(
-                                                diagnostic_file,
-                                                family_id,
-                                                variant_key,
-                                                sample,
-                                                entry_ts,
-                                                new_val,
-                                            )
+                                            try:
+                                                ok = update_diagnostic_ignore_status(
+                                                    diagnostic_file,
+                                                    family_id,
+                                                    variant_key,
+                                                    sample,
+                                                    entry_ts,
+                                                    new_val,
+                                                )
+                                            except PermissionError as ex:
+                                                ui.notify(str(ex), type="negative")
+                                                return
                                             if ok:
                                                 action = (
                                                     "ignored" if e.value else "restored"
@@ -195,6 +200,8 @@ def show_diagnostic_dialog(
                                     ).classes("text-xs")
                                     if is_ignored:
                                         sw.props("color=grey")
+                                    if not can_write():
+                                        sw.props("disable")
 
             def _save_diagnostic() -> None:
                 """Save the diagnostic entry."""

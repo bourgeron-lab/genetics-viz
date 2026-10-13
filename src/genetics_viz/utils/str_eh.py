@@ -31,6 +31,7 @@ import yaml
 
 from .sharding import get_family_path, get_sample_path
 from .tsv import read_tsv_or_none
+from .diagnostic_badges import STATUS_CFG as DIAGNOSTIC_CFG
 from .validation_badges import STATUS_CFG
 
 logger = logging.getLogger(__name__)
@@ -71,16 +72,19 @@ COMMON_FRACTION: float = float(_CONFIG.get("common_in_cohort_fraction", 0.05))
 REVIEWER_FILENAME: str = _CONFIG.get(
     "reviewer_filename", "{sample}.{label}.{locus}.svg"
 )
+REVIEWER_SUBDIR: str = _CONFIG.get("reviewer_subdir", "reviewer")
 
 
 def reload_str_config() -> None:
     """Reload the STR display configuration from YAML."""
-    global _CONFIG, STATUSES, SUPPORT, COMMON_FRACTION, REVIEWER_FILENAME
+    global _CONFIG, STATUSES, SUPPORT, COMMON_FRACTION
+    global REVIEWER_FILENAME, REVIEWER_SUBDIR
     _CONFIG = _load_config()
     STATUSES = _CONFIG.get("statuses", {})
     SUPPORT = _CONFIG.get("support", {})
     COMMON_FRACTION = float(_CONFIG.get("common_in_cohort_fraction", 0.05))
     REVIEWER_FILENAME = _CONFIG.get("reviewer_filename", REVIEWER_FILENAME)
+    REVIEWER_SUBDIR = _CONFIG.get("reviewer_subdir", REVIEWER_SUBDIR)
 
 
 def status_info(status: Optional[str]) -> Dict[str, Any]:
@@ -162,10 +166,57 @@ def probe_cohort_eh_data(cohort: Any) -> bool:
     return bool(find_eh_labels(get_cohort_eh_dir(cohort), cohort.name))
 
 
-def reviewer_path(data_dir: Path, sample_id: str, label: str, locus: str) -> Path:
-    """Where the REViewer image of one sample at one locus would be."""
-    name = REVIEWER_FILENAME.format(sample=sample_id, label=label, locus=locus)
-    return get_sample_eh_dir(data_dir, sample_id) / name
+def get_reviewer_dir(data_dir: Path, sample_id: str) -> Path:
+    """``<sample>/str/expansionhunter/reviewer/``, where REViewer's output goes."""
+    return get_sample_eh_dir(data_dir, sample_id) / REVIEWER_SUBDIR
+
+
+def reviewer_path(
+    data_dir: Path, sample_id: str, label: str, locus: str
+) -> Optional[Path]:
+    """The REViewer image of one sample at one locus, or ``None`` if not drawn.
+
+    The family table names variants (VariantId) and REViewer names its images
+    after loci (LocusId). They differ only at a locus with several variants:
+    ``FXN_A`` is drawn as ``FXN``, ``NOP56_CGCCTG`` as ``NOP56``. The catalog
+    that maps them is not in the data directory, so a variant with no image
+    of its own falls back to the longest drawn locus it extends with ``_``.
+    """
+    directory = get_reviewer_dir(data_dir, sample_id)
+    exact = directory / REVIEWER_FILENAME.format(
+        sample=sample_id, label=label, locus=locus
+    )
+    if exact.exists():
+        return exact
+    head, sep, tail = REVIEWER_FILENAME.format(
+        sample=sample_id, label=label, locus="\0"
+    ).partition("\0")
+    if not sep or not directory.is_dir():
+        return None
+    best: Optional[Path] = None
+    best_len = 0
+    try:
+        for entry in directory.iterdir():
+            name = entry.name
+            if not (name.startswith(head) and name.endswith(tail)):
+                continue
+            drawn = name[len(head) : len(name) - len(tail)]
+            if drawn and locus.startswith(drawn + "_") and len(drawn) > best_len:
+                best, best_len = entry, len(drawn)
+    except OSError:
+        logger.warning("Cannot list %s", directory, exc_info=True)
+        return None
+    return best
+
+
+def reviewer_reviewed(data_dir: Path, sample_id: str, label: str) -> bool:
+    """Whether REViewer has run on the sample's call.
+
+    The pipeline writes ``<sample>.<label>.metrics.tsv`` even when nothing is
+    flagged, as the mark that the sample has been reviewed.
+    """
+    metrics = f"{sample_id}.{label}.metrics.tsv"
+    return (get_reviewer_dir(data_dir, sample_id) / metrics).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +407,25 @@ def validation_badge(status: str) -> Dict[str, str]:
     }
 
 
+def diagnostic_badge(status: str) -> Dict[str, str]:
+    """The curators' aggregated diagnostic as a cell badge: symbol, status colour."""
+    cfg = DIAGNOSTIC_CFG.get(status, {})
+    return {
+        "label": f"Dx {cfg.get('symbol') or status}",
+        "color": cfg.get("color", "#9e9e9e"),
+        "tooltip": f"Curator diagnostic: {status}",
+    }
+
+
+def locus_gene(locus: str) -> str:
+    """The gene a catalog locus is named after: ``FXN_A`` -> ``FXN``.
+
+    The genotype table has no gene column; the jmsa50 locus IDs are gene
+    symbols, with a ``_<suffix>`` on a locus with several variants.
+    """
+    return locus.split("_", 1)[0]
+
+
 def is_transmission(row: Dict[str, Any]) -> bool:
     """A child's longest allele above both parents', at a non-normal status.
 
@@ -420,6 +490,7 @@ def family_locus_rows(
     selected: List[str],
     context: Optional[CohortContext] = None,
     validations: Optional[Dict[Tuple[str, str], str]] = None,
+    diagnostics: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """Pivot a family genotype table to one row per locus, most severe first.
 
@@ -427,8 +498,9 @@ def family_locus_rows(
     ``m<i>_max`` (the longest allele, for sorting), ``i`` being their index in
     ``members`` so the column ids stay stable when the selection changes. The
     worst status, flags and cohort columns are computed over the selected
-    members only. ``validations`` maps ``(locus, sample)`` to the curators'
-    aggregated status, drawn as one more badge in the member's cell.
+    members only. ``validations`` and ``diagnostics`` map ``(locus, sample)``
+    to the curators' aggregated status, each drawn as one more badge in the
+    member's cell.
     """
     loci_by_name: Dict[str, Dict[str, Any]] = {}
     if context is not None and context.loci is not None:
@@ -491,6 +563,9 @@ def family_locus_rows(
             validated = (validations or {}).get((locus, sample))
             if validated:
                 row[f"{key}_badges"].append(validation_badge(validated))
+            diagnosed = (diagnostics or {}).get((locus, sample))
+            if diagnosed:
+                row[f"{key}_badges"].append(diagnostic_badge(diagnosed))
             row[f"{key}_max"] = longest_allele(g)
             row[key] = ""
             s = status_info(g.get("status"))
