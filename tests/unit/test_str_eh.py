@@ -140,7 +140,22 @@ def test_common_in_cohort():
 
 def test_reviewer_path(data_dir):
     path = str_eh.reviewer_path(data_dir, "S3", "jmsa50", "HTT")
-    assert path.exists() and path.name == "S3.jmsa50.HTT.svg"
+    assert path is not None and path.name == "S3.jmsa50.HTT.svg"
+    assert path.parent.name == "reviewer"
+    assert str_eh.reviewer_path(data_dir, "S3", "jmsa50", "FXN") is None
+    assert str_eh.reviewer_reviewed(data_dir, "S3", "jmsa50")
+    assert not str_eh.reviewer_reviewed(data_dir, "S3", "other")
+
+
+def test_reviewer_path_maps_a_variant_to_its_locus(data_dir):
+    """REViewer names images by LocusId: FXN_A and FXN_B are drawn as FXN."""
+    rdir = str_eh.get_reviewer_dir(data_dir, "S3")
+    for locus in ("FXN", "F"):
+        (rdir / f"S3.jmsa50.{locus}.svg").write_text("<svg/>")
+    path = str_eh.reviewer_path(data_dir, "S3", "jmsa50", "FXN_A")
+    assert path is not None and path.name == "S3.jmsa50.FXN.svg"
+    assert str_eh.reviewer_path(data_dir, "S3", "jmsa50", "FXNX") is None
+    assert str_eh.reviewer_path(data_dir, "S3", "other", "FXN_A") is None
 
 
 def test_allele_class_matches_the_pipeline_order():

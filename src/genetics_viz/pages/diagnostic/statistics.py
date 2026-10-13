@@ -11,6 +11,11 @@ from nicegui import ui
 from genetics_viz.components.header import create_header
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.diagnostic_files import (
+    DIAGNOSTIC_TYPES,
+    TYPE_COLORS,
+    diagnostic_paths,
+)
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 
 
@@ -23,39 +28,27 @@ async def diagnostic_statistics_page() -> None:
 
     try:
         store = get_data_store()
-        snv_diagnostic_file = store.data_dir / "diagnostics" / "snvs.tsv"
-        sv_diagnostic_file = store.data_dir / "diagnostics" / "svs.tsv"
+        diagnostic_files = diagnostic_paths(store.data_dir)
 
         with ui.column().classes("w-full px-6 py-6"):
             ui.label("📊 Diagnostic Statistics").classes(
                 "text-3xl font-bold text-blue-900 mb-6"
             )
 
-            # Load diagnostic data from both SNV and SV files
+            # Load diagnostic data from every kind's file
             def load_all_diagnostics():
-                """Load diagnostics from both SNV and SV files."""
+                """Load diagnostics from every kind's file (SNV, SV, STR)."""
                 all_diagnostics = []
                 ignored_count = 0
 
-                # Load SNV diagnostics
-                if snv_diagnostic_file.exists():
-                    with open(snv_diagnostic_file, "r") as f:
+                for dtype, path in diagnostic_files:
+                    if not path.exists():
+                        continue
+                    with open(path, "r") as f:
                         reader = csv.DictReader(f, delimiter="\t")
                         for row in reader:
                             row_dict = dict(row)
-                            row_dict["Type"] = "SNV"
-                            if row.get("Ignore", "0") == "1":
-                                ignored_count += 1
-                            else:
-                                all_diagnostics.append(row_dict)
-
-                # Load SV diagnostics
-                if sv_diagnostic_file.exists():
-                    with open(sv_diagnostic_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
-                        for row in reader:
-                            row_dict = dict(row)
-                            row_dict["Type"] = "SV"
+                            row_dict["Type"] = dtype
                             if row.get("Ignore", "0") == "1":
                                 ignored_count += 1
                             else:
@@ -82,7 +75,7 @@ async def diagnostic_statistics_page() -> None:
                 )
 
                 # Filter states
-                filter_types: Dict[str, List[str]] = {"value": ["SNV", "SV"]}
+                filter_types: Dict[str, List[str]] = {"value": list(DIAGNOSTIC_TYPES)}
                 filter_users: Dict[str, List[str]] = {"value": list(all_unique_users)}
 
                 # Create filter UI
@@ -93,8 +86,10 @@ async def diagnostic_statistics_page() -> None:
                             "text-xs font-semibold text-gray-600"
                         )
                         with ui.row().classes("gap-2"):
-                            type_snv = ui.checkbox("SNV", value=True).classes("text-sm")
-                            type_sv = ui.checkbox("SV", value=True).classes("text-sm")
+                            type_boxes = {
+                                dtype: ui.checkbox(dtype, value=True).classes("text-sm")
+                                for dtype in DIAGNOSTIC_TYPES
+                            }
 
                     # User filter
                     with ui.column().classes("gap-1"):
@@ -296,10 +291,9 @@ async def diagnostic_statistics_page() -> None:
                                                         "name": vtype,
                                                         "value": count,
                                                         "itemStyle": {
-                                                            "color": {
-                                                                "SNV": "#3b82f6",
-                                                                "SV": "#8b5cf6",
-                                                            }.get(vtype, "#6b7280")
+                                                            "color": TYPE_COLORS.get(
+                                                                vtype, "#6b7280"
+                                                            )
                                                         },
                                                     }
                                                     for vtype, count in type_counts.items()
@@ -477,15 +471,13 @@ async def diagnostic_statistics_page() -> None:
 
                 # Setup filter handlers
                 def on_type_change():
-                    filter_types["value"] = []
-                    if type_snv.value:
-                        filter_types["value"].append("SNV")
-                    if type_sv.value:
-                        filter_types["value"].append("SV")
+                    filter_types["value"] = [
+                        dtype for dtype, box in type_boxes.items() if box.value
+                    ]
                     refresh_statistics()
 
-                type_snv.on_value_change(lambda: on_type_change())
-                type_sv.on_value_change(lambda: on_type_change())
+                for box in type_boxes.values():
+                    box.on_value_change(lambda: on_type_change())
 
                 for user, cb in user_checkboxes.items():
 

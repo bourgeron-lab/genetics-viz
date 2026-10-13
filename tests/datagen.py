@@ -399,8 +399,16 @@ def build_str_results(
     for m in members:
         sdir = sample_dir(data, m[1]) / "str" / "expansionhunter"
         write_tsv(sdir / f"{m[1]}.{EH_LABEL}.vcf", ["#CHROM"], [])
+        # EXPANSIONHUNTER_REVIEWER: a metrics table for every member, an image
+        # for flagged genotypes only. S2's flagged FXN is left undrawn.
+        rdir = sdir / "reviewer"
+        write_tsv(
+            rdir / f"{m[1]}.{EH_LABEL}.metrics.tsv",
+            ["VariantId", "Genotype", "AlleleDepth"],
+            [],
+        )
         if m[1] == "S3":
-            (sdir / f"S3.{EH_LABEL}.HTT.svg").write_text(
+            (rdir / f"S3.{EH_LABEL}.HTT.svg").write_text(
                 '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'
             )
     return rows

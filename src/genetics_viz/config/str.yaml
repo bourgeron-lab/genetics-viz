@@ -50,6 +50,10 @@ support:
 # more likely at fault than the individuals (ARX_2, XYLT1).
 common_in_cohort_fraction: 0.05
 
-# REViewer image of one sample at one locus, in the sample's
-# str/expansionhunter/ directory. Fields: sample, label (catalog), locus.
+# REViewer images, written by the ghfc-ngs EXPANSIONHUNTER_REVIEWER step into
+# the sample's str/expansionhunter/<reviewer_subdir>/, for flagged genotypes
+# only (pathogenic, carrier, intermediate). Fields: sample, label (catalog),
+# locus. The locus is the catalog's LocusId, which differs from the table's
+# VariantId at multi-variant loci (FXN_A is drawn as FXN).
+reviewer_subdir: "reviewer"
 reviewer_filename: "{sample}.{label}.{locus}.svg"

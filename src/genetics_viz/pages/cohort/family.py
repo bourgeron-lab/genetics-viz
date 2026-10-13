@@ -6,7 +6,6 @@ from typing import Dict, List
 from nicegui import ui
 
 from genetics_viz.components.diagnostic_loader import (
-    ensure_diagnostic_file,
     format_diagnostic_contributors,
     load_family_diagnostics,
 )
@@ -317,14 +316,8 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                             @ui.refreshable
                             def render_diagnostics_panel():
-                                snv_file = store.data_dir / "diagnostics" / "snvs.tsv"
-                                sv_file = store.data_dir / "diagnostics" / "svs.tsv"
-                                ensure_diagnostic_file(snv_file)
-                                ensure_diagnostic_file(sv_file)
-
                                 entries = load_family_diagnostics(
-                                    snv_file,
-                                    sv_file,
+                                    store.data_dir,
                                     family_id,
                                     selected_members["value"],
                                 )
