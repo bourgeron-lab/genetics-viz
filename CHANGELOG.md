@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **REViewer images were never found.** The ghfc-ngs `EXPANSIONHUNTER_REVIEWER` step writes them to the sample's `str/expansionhunter/reviewer/`, not `str/expansionhunter/`. It also names each image after the catalog's LocusId, so a variant of a multi-variant locus (`FXN_A`, `NOP56_CGCCTG`) is drawn under its locus (`FXN`, `NOP56`). The dialog now falls back to that name.
 - **A missing REViewer image now says why.** The pipeline draws flagged genotypes only, so the dialog reports "not flagged, not drawn", "REViewer not run yet", or "no REViewer image" (an anomaly).
 - **Diagnostic writes refuse viewers server-side**, not only by hiding the save button. The ignore toggle is disabled for them.
+- **An SV diagnostic saved from the search page was never shown again.** The search page saved it under `chr:start-end`, while every table, the search page's own included, reads SV diagnostics under `chr:start-end:dup|del`. It is now saved with the type suffix, as the SVs tab does. Diagnostics already saved without the suffix are not migrated and stay hidden until rewritten.
 
 ## [0.15.0] - 2026-10-12
 

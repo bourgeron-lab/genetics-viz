@@ -468,6 +468,19 @@ def build_cohort_str_results(cohort_dir: Path, name: str, rows: List[List]) -> N
     )  # fmt: skip
 
 
+# WisecondorX's cohort aberrations: one robust loss, one robust gain.
+WCX_COLUMNS = [
+    "chr", "start", "end", "ratio", "zscore", "type", "source", "barcode",
+    "genic_symbol", "genic_ensg", "exonic_symbol", "exonic_ensg", "family_id",
+]  # fmt: skip
+WCX_ROWS = [
+    ["chr2", 165114001, 165316000, -1.0329, -9.6, "primary", "loss", "S3", "SCN2A",
+     "ENSG00000136531", "SCN2A", "ENSG00000136531", "1001"],
+    ["chr2", 200000001, 200500000, 0.4939, 6.0, "primary", "gain", "S6", "", "", "",
+     "", "AU-X-1"],
+]  # fmt: skip
+
+
 def build_data_dir(root: Path) -> Path:
     """The whole synthetic data directory. Returns its path."""
     data = root / "data"
@@ -485,6 +498,9 @@ def build_data_dir(root: Path) -> Path:
     )
     build_state(demo, "DEMO", pedigree_file, params_file)
     build_cohort_results(demo, "DEMO", DEMO_PEDIGREE)
+    write_tsv(
+        demo / "svs" / "wisecondorx" / "DEMO_aberrations.bed", WCX_COLUMNS, WCX_ROWS
+    )
 
     # Same data without a header line.
     nohead = cohorts / "NOHEAD"

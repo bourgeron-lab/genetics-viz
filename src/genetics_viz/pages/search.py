@@ -28,6 +28,7 @@ from genetics_viz.utils.locus import (
 from genetics_viz.utils.wisecondorx import (
     WISECONDORX_CONFIG,
     build_call_colors,
+    infer_sv_type,
     parse_wisecondorx_bed,
 )
 from genetics_viz.components.header import create_header
@@ -185,34 +186,14 @@ def _apply_curated_coordinates(
         pass
 
 
-def _infer_sv_type(row: Dict[str, Any]) -> str:
-    """Infer SV type (dup/del) from WCX row data.
+def _sv_variant_key(row: Dict[str, Any]) -> str:
+    """The ``chr:start-end:dup|del`` key SV validations and diagnostics use.
 
-    Checks wisecondorX call label, then call column, then raw type, then ratio.
-    Same logic as svs_tab.py's type inference.
+    Built from the uncurated locus, as the SVs tab and the SV dialog build it,
+    so a diagnostic saved here is read back by every table.
     """
-    # Check wisecondorX call classification (search page)
-    wcx_call = str(row.get("wisecondorX", "")).upper()
-    if "GAIN" in wcx_call:
-        return "dup"
-    if "LOSS" in wcx_call:
-        return "del"
-    # Check call column (svs_tab compatibility)
-    call = str(row.get("call", "")).upper()
-    if "GAIN" in call:
-        return "dup"
-    if "LOSS" in call:
-        return "del"
-    # Check raw type column
-    raw_type = str(row.get("type", "")).lower()
-    if raw_type in ("dup", "del"):
-        return raw_type
-    # Fall back to ratio sign
-    try:
-        ratio_val = float(row.get("ratio", 0) or 0)
-        return "dup" if ratio_val > 0 else "del"
-    except (ValueError, TypeError):
-        return "del"
+    locus = row.get("_original_locus") or row.get("chr:start-end", "")
+    return f"{locus}:{infer_sv_type(row)}"
 
 
 # Values that represent "unknown/missing" in pedigree files
@@ -1163,8 +1144,10 @@ def search_cohort_page(cohort_name: str) -> None:
 
                 # Search + Clear buttons centered below both panels
                 with ui.row().classes("justify-center gap-4 mt-2"):
-                    search_button = ui.button("Search", icon="search").props(
-                        "color=blue dense"
+                    search_button = (
+                        ui.button("Search", icon="search")
+                        .props("color=blue dense")
+                        .mark("search-button")
                     )
 
                     def _clear_all():
@@ -1729,8 +1712,7 @@ def search_cohort_page(cohort_name: str) -> None:
                             row["VEP_Gene_badges"] = []
 
                             # SVS validation: variant_key is chr:start-end:type
-                            sv_type = _infer_sv_type(row)
-                            sv_variant_key = f"{row['_original_locus']}:{sv_type}"
+                            sv_variant_key = _sv_variant_key(row)
                             add_validation_status_to_row(
                                 row, sv_validation_map, sv_variant_key, sample_id
                             )
@@ -2293,8 +2275,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                             "_original_locus",
                                             row.get("chr:start-end", ""),
                                         )
-                                        sv_t = _infer_sv_type(row)
-                                        sv_vk = f"{orig}:{sv_t}"
+                                        sv_vk = _sv_variant_key(row)
                                         row["chr:start-end"] = orig
                                         row["Variant"] = orig
                                         add_validation_status_to_row(
@@ -2359,12 +2340,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                                 "LOSS" if "LOSS" in sv_call else sv_call
                                             )
                                         )
-                                        orig_locus = row_data.get(
-                                            "_original_locus", variant_str
-                                        )
                                         show_diagnostic_dialog(
                                             family_id=family_id,
-                                            variant_key=orig_locus,
+                                            variant_key=_sv_variant_key(row_data),
                                             gene=gene,
                                             impact=impact,
                                             sample=sample_id,

@@ -324,3 +324,38 @@ async def test_diagnostic_pages_list_str(user, monkeypatch, data_dir):
     await user.open("/diagnostic/statistics")
     await user.should_see("Diagnostic Statistics", retries=30)
     assert any(c.text == "STR" for c in user.find(ui.checkbox).elements)
+
+
+async def test_sv_diagnostic_saved_from_search_is_read_back(
+    user, monkeypatch, data_dir
+):
+    """The search page saves an SV diagnostic under the key its table reads."""
+    await login(user, "curator")
+    tables = capture_tables(monkeypatch)
+    await user.open("/search/DEMO")
+    await user.should_see("Search: DEMO", retries=30)
+    user.find(kind=ui.button, content="+ WisecondorX").click()
+    await user.should_see("Exonic only", retries=30)
+    user.find("Locus (optional)").type("chr2:165000000-165500000")
+    user.find(marker="search-button").click()
+    for _ in range(100):
+        if tables:
+            break
+        await asyncio.sleep(0.05)
+    [row] = tables[-1]["rows"]
+    assert (row["sample"], row["Diagnostic"]) == ("S3", "")
+
+    built = len(tables)
+    with user.client:
+        tables[-1]["on_row_action"]({"action": "open_diagnostic", "row": row})
+    await user.should_see("Diagnostic Review", retries=30)
+    user.find(marker="diagnostic-save").click()
+
+    lines = (data_dir / "diagnostics" / "svs.tsv").read_text().splitlines()
+    assert lines[1].split("\t")[:2] == ["1001", "chr2:165114001-165316000:del"]
+    for _ in range(100):
+        if len(tables) > built:
+            break
+        await asyncio.sleep(0.05)
+    [row] = tables[-1]["rows"]
+    assert row["Diagnostic"] == "uncertain"
