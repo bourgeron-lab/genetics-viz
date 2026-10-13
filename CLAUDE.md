@@ -109,6 +109,7 @@ src/genetics_viz/
     str_plots.py                  # ECharts builders for the STR views
     str_validation.py             # validations/strs.tsv writer (role-guarded) and reader
     validation_files.py           # The validation kinds (SNV/SV/STR) and their files
+    diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR) and their files
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
@@ -213,7 +214,13 @@ Config files (YAML) are loaded once at module level.
 - **Cohort context is optional and loads off-thread** (`load_cohort_context`, cached on `(path, mtime, size)`). The EH table is built only once the context is in. Built earlier, it would be replaced before the browser mounted it, and its container observer would time out.
 - **The cohort panel (`cohort_str_tab.py`) counts only the filtered individuals.** Rows are restricted by `restrict_to`, a semi-join on `(family_id, sample)`, since a sample can sit in two families. The founders' statistics and the "common" flag stay whole-cohort, from `loci.tsv`. Flagged genotypes come from the genotype table already in memory, not `flags.tsv`.
 - **STR validations live in `validations/strs.tsv`**, keyed `<chrom>:<pos>-<end>:<LOCUS>`. The catalog label is not in the key, so a validation survives a new catalog. The file has the SNV/SV header plus `CuratedRepeats`, so `load_validation_map` and the badges work unchanged. Writes go through `save_str_validation`, which checks `can_write()` itself.
-- REViewer images: `reviewer_filename` in `str.yaml`, looked up in the sample's `str/expansionhunter/`, and shown with `loading="lazy"` because they run to a megabyte each.
+- **STR diagnostics live in `diagnostics/strs.tsv`**, with the SNV/SV diagnostic header and the same key as STR validations. The locus dialog opens the shared `show_diagnostic_dialog` from an anchor *outside* its refreshable section, because an ignore toggle refreshes that section and would otherwise delete the dialog that sent it. The family table is redrawn when the locus dialog closes, not under it.
+- **REViewer images** are written by the pipeline's `EXPANSIONHUNTER_REVIEWER` step to the sample's `str/expansionhunter/reviewer/` (`reviewer_subdir` and `reviewer_filename` in `str.yaml`). Things to know:
+  - Only flagged genotypes (pathogenic, carrier, intermediate) are drawn.
+  - `<sample>.<label>.metrics.tsv` is written for every reviewed sample and marks it reviewed.
+  - Images are named by the catalog's **LocusId**, while the table names VariantIds: `FXN_A` is drawn as `FXN`. The catalog is not in the data directory, so `reviewer_path` falls back to the longest drawn locus the variant extends with `_`.
+  - The older `str/reviewer/` directory comes from a separate STRchive run with other locus IDs, and is deliberately not shown.
+  - Images are shown with `loading="lazy"`, because each one runs to a megabyte.
 
 ### Cohort Discovery
 - **A cohort is a directory under `cohorts/`.** The directory name is the cohort name.
@@ -277,6 +284,7 @@ The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields
 ## Conventions
 
 - **Validation kinds are listed once**, in `utils/validation_files.py`. The All validations and Statistics pages loop over it, so a new kind is one entry there plus its writer.
+- **Diagnostic kinds are listed once**, in `utils/diagnostic_files.py`. The following loop over it: the Diagnostic All and Statistics pages, the cohort and home summaries, and `load_family_diagnostics`. The per-kind table callers (wombat, svs, search, validation/file) name their own file. `save_diagnostic_entry` and `update_diagnostic_ignore_status` check `can_write()` themselves.
 - Utility code shared across pages lives in `utils/`, not duplicated in page components.
 - YAML configs live in `config/`, loaded by corresponding `utils/*.py` modules.
 - All new ClinVar terms must be added to `config/clinvar_colors.yaml`.

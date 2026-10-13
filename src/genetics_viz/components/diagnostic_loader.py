@@ -5,7 +5,9 @@ import fcntl
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
+from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.tsv import clean_tsv_field
 
 # Verdict used when curators disagree on the same variant for the same sample.
@@ -28,7 +30,7 @@ def ensure_diagnostic_file(file_path: Path) -> None:
 def load_diagnostic_map(
     diagnostic_file_path: Path, family_id: str | None = None
 ) -> Dict[Tuple[str, str], List[Tuple[str, str, str, str, str]]]:
-    """Load diagnostic data from snvs.tsv or svs.tsv into a lookup map.
+    """Load one kind's diagnostics file into a lookup map.
 
     Args:
         diagnostic_file_path: Path to the diagnostics file
@@ -123,7 +125,13 @@ def save_diagnostic_entry(
     comment: str,
     diagnostic: str,
 ) -> None:
-    """Append a diagnostic entry to the TSV file with file locking."""
+    """Append a diagnostic entry to the TSV file with file locking.
+
+    Raises ``PermissionError`` for a reader: the dialog hides its save button
+    from them, and this is the backend half of that guard.
+    """
+    if not can_write():
+        raise PermissionError("Only curators and administrators record diagnostics.")
     ensure_diagnostic_file(diagnostic_file)
     with open(diagnostic_file, "a") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -150,7 +158,11 @@ def update_diagnostic_ignore_status(
 
     Returns:
         True if update was successful, False otherwise
+
+    Raises ``PermissionError`` for a reader, as :func:`save_diagnostic_entry`.
     """
+    if not can_write():
+        raise PermissionError("Only curators and administrators edit diagnostics.")
     if not diagnostic_file.exists():
         return False
 
@@ -190,12 +202,11 @@ def update_diagnostic_ignore_status(
 
 
 def load_family_diagnostics(
-    snv_file: Path,
-    sv_file: Path,
+    data_dir: Path,
     family_id: str,
     sample_ids: List[str],
 ) -> List[Dict[str, Any]]:
-    """Load the diagnostic entries for a family and set of samples.
+    """Load the diagnostic entries of every kind for a family and set of samples.
 
     Rows are merged twice over, so a variant is listed once per verdict rather
     than once per saved record:
@@ -215,15 +226,16 @@ def load_family_diagnostics(
     ``_entries`` keeps the underlying records so a caller can show who recorded
     what - see :func:`format_diagnostic_contributors`.
 
-    Returns one row dict per (source, variant, verdict).
+    Returns one row dict per (source, variant, verdict). ``_source`` is the
+    kind in lower case: ``"snv"``, ``"sv"`` or ``"str"``.
     """
     per_sample: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
     sample_set = set(sample_ids)
 
-    for diag_file in [snv_file, sv_file]:
+    for dtype, diag_file in diagnostic_paths(data_dir):
         if not diag_file.exists():
             continue
-        source = "snv" if diag_file == snv_file else "sv"
+        source = dtype.lower()
         with open(diag_file, "r") as f:
             reader = csv.DictReader(f, delimiter="\t")
             for row in reader:

@@ -17,16 +17,17 @@ from genetics_viz.pages.cohort.components.status_panel import (
 )
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.data_availability import (
+    check_family_availability,
+    check_sample_availability,
+)
+from genetics_viz.utils.diagnostic_files import diagnostic_paths
+from genetics_viz.utils.pedigree import load_family_pedigree
 from genetics_viz.utils.pedigree_labels import (
     PHENO_LABELS,
     PHENO_ORDER,
     normalize_pheno,
 )
-from genetics_viz.utils.data_availability import (
-    check_family_availability,
-    check_sample_availability,
-)
-from genetics_viz.utils.pedigree import load_family_pedigree
 from genetics_viz.utils.sharding import get_family_path, get_sample_path
 
 # Diagnostic priority for "highest" resolution
@@ -69,8 +70,7 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
 
     # Load diagnostics per sample (highest priority wins)
     sample_diag: Dict[str, str] = defaultdict(str)
-    for fname in ["snvs.tsv", "svs.tsv"]:
-        diag_file = data_dir / "diagnostics" / fname
+    for _dtype, diag_file in diagnostic_paths(data_dir):
         if not diag_file.exists():
             continue
         with open(diag_file, "r") as f:
