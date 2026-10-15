@@ -32,7 +32,9 @@ from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.data import get_static_prefix
 from genetics_viz.utils.diagnostic_files import diagnostic_path
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
+from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.str_eh import (
+    add_locus_badges,
     FLAGGED,
     STATUSES,
     SUPPORT,
@@ -268,6 +270,7 @@ def render_eh_subtab(
         )
         if state["hide_normal"]:
             rows = [r for r in rows if r["worst_rank"] >= 1]
+        add_locus_badges(rows, get_gene_scorer())
 
         index = {m.sample: i for i, m in enumerate(members)}
         num = {"sortable": True, "sorting": "numerical"}
@@ -283,7 +286,8 @@ def render_eh_subtab(
                 "sortable": False,
             },
             {"id": "locus", "header": "Locus", "group": "Locus", "sortable": True,
-             "filter": {"type": "text"}},
+             "filter": {"type": "text"}, "cellType": "gene_badge",
+             "badgesField": "LocusBadges"},
             {"id": "disease", "header": "Disease", "group": "Locus", "sortable": True,
              "filter": {"type": "text"}, "maxWidth": 220},
             {"id": "inheritance", "header": "Inh.", "group": "Locus", "sortable": True},

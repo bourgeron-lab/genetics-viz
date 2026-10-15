@@ -47,7 +47,7 @@ def test_matching_identifiers_expand_old_symbols(snapshot):
 
 
 def test_links(app_config):
-    assert genetrek.gene_url("SHANK3") == "http://genetrek.test/?gene=SHANK3"
+    assert genetrek.gene_url("SHANK3") == "http://genetrek.test/?search=SHANK3"
     url = genetrek.search_url(["SHANK3", "chr22:1-100"])
     assert url == "http://genetrek.test/#search=SHANK3,chr22:1-100&genome=GRCh38"
 

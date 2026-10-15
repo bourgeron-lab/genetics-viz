@@ -67,12 +67,12 @@ async def test_wombat_table_badges_link_and_moi(user, monkeypatch):
     rows = {r["VEP_SYMBOL"]: r for r in table["rows"]}
 
     [badge] = rows["SHANK3"]["GeneBadges"]
-    assert badge["href"] == "http://genetrek.test/?gene=SHANK3"
+    assert badge["href"] == "http://genetrek.test/?search=SHANK3"
     assert badge["color"] == TIER1 and badge["textColor"] == "white"
     assert "Tier 1: High-confidence NDD v7" in badge["tooltip"]
     # The old symbol resolves to the gene it names now.
     [old] = rows["KIAA1109"]["GeneBadges"]
-    assert old["color"] == TIER1 and old["href"].endswith("?gene=BLTP1")
+    assert old["color"] == TIER1 and old["href"].endswith("?search=BLTP1")
 
     assert rows["SHANK3"]["MOI"] == "AD ✓"
     assert rows["KIAA1109"]["MOI"] == "AR ✓"

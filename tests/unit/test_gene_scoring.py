@@ -65,7 +65,7 @@ def test_badges_sorted_capped_linked(snapshot, app_config):
     assert [b["label"] for b in badges[:2]] == ["SHANK3", "BLTP1"]
     assert len(badges) == 7 and badges[-1]["label"] == "+2 genes"
     assert badges[-1]["href"].startswith("http://genetrek.test/#search=")
-    assert badges[0]["href"] == "http://genetrek.test/?gene=SHANK3"
+    assert badges[0]["href"] == "http://genetrek.test/?search=SHANK3"
     assert gs.badge_labels(badges) == [b["label"] for b in badges[:6]]
 
 
@@ -76,7 +76,7 @@ def test_badge_options(snapshot, app_config):
     )
     assert [b["label"] for b in badges] == ["PLAIN", "SHANK3"]
     assert "borderColor" in badges[1] and "borderColor" not in badges[0]
-    assert badges[0]["href"].endswith("?gene=PLAIN")
+    assert badges[0]["href"].endswith("?search=PLAIN")
 
 
 def test_split_genes_and_html(snapshot, app_config):

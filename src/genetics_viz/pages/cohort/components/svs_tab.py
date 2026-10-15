@@ -26,6 +26,7 @@ from genetics_viz.utils.column_names import (
     reorder_columns_by_group,
 )
 from genetics_viz.utils.cytobands import CHROM_ORDER, VALIDATION_COLORS
+from genetics_viz.utils.genetrek import search_url
 from genetics_viz.utils.gene_scoring import (
     build_gene_badges,
     get_gene_scorer,
@@ -354,6 +355,10 @@ def render_wisecondorx_subtab(
                 row["GeneBadges"] = build_gene_badges(
                     symbols, gene_scorer, bordered=exonic
                 )
+                # The displayed region (curated when curated) opens GeneTrek
+                # on the genes it overlaps.
+                locus = row.get("chr:start-end")
+                row["_genetrek_url"] = search_url([locus]) if locus else ""
 
                 # genic/exonic symbol and ENSG columns, one badge per gene
                 for col_name in _GENE_BADGE_COLUMNS:

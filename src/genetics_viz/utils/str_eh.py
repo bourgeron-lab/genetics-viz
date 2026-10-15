@@ -32,6 +32,7 @@ import yaml
 from .sharding import get_family_path, get_sample_path
 from .tsv import read_tsv_or_none
 from .diagnostic_badges import STATUS_CFG as DIAGNOSTIC_CFG
+from .gene_scoring import gene_badge
 from .validation_badges import STATUS_CFG
 
 logger = logging.getLogger(__name__)
@@ -424,6 +425,20 @@ def locus_gene(locus: str) -> str:
     symbols, with a ``_<suffix>`` on a locus with several variants.
     """
     return locus.split("_", 1)[0]
+
+
+def add_locus_badges(rows: List[Dict[str, Any]], scorer: Any) -> None:
+    """Give each row's ``locus`` a gene badge (``LocusBadges``), in place.
+
+    The badge shows the locus id but is coloured, described and linked as
+    the gene the locus is named after. ``scorer`` is a
+    ``gene_scoring.GeneScorer``, taken on the event loop by the caller.
+    """
+    for row in rows:
+        locus = row.get("locus")
+        row["LocusBadges"] = (
+            [gene_badge(locus_gene(locus), scorer, label=locus)] if locus else []
+        )
 
 
 def is_transmission(row: Dict[str, Any]) -> bool:

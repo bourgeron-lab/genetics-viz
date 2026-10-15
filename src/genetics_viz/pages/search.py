@@ -55,7 +55,7 @@ from genetics_viz.utils.column_names import (
     reorder_columns_by_group,
 )
 from genetics_viz.utils.data import get_data_store
-from genetics_viz.utils.genetrek import get_snapshot
+from genetics_viz.utils.genetrek import get_snapshot, search_url
 from genetics_viz.utils.inheritance import annotate_moi
 from genetics_viz.utils.genesets import (
     geneset_filter_expr,
@@ -98,6 +98,7 @@ _INTERNAL_KEYS = {
     "VEP_Gene_badges",
     "MoiBadges",
     "_moi_rank",
+    "_genetrek_url",
     "Diagnostic_badge",
 }
 
@@ -1815,6 +1816,11 @@ def search_cohort_page(cohort_name: str) -> None:
                             # All per-component filters (impact, exclude, validation, calls)
                             # are already applied — use all_rows directly
                             rows = all_rows.copy()
+                            # An SV's region (curated when curated) opens GeneTrek
+                            # on the genes it overlaps.
+                            for r in rows:
+                                if r.get("_source_type") == "wisecondorx":
+                                    r["_genetrek_url"] = search_url([r["Variant"]])
 
                             def get_columns():
                                 cols: List[Dict[str, Any]] = [
