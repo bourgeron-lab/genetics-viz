@@ -233,10 +233,13 @@ def split_genes(value: Any, separators: str = ",&") -> List[str]:
     return out
 
 
-def gene_badge(identifier: str, scorer: GeneScorer) -> Dict[str, Any]:
+def gene_badge(
+    identifier: str, scorer: GeneScorer, label: Optional[str] = None
+) -> Dict[str, Any]:
+    """One gene's badge; ``label`` shows another name (an STR locus id)."""
     color = scorer.color(identifier)
     return {
-        "label": identifier,
+        "label": label or identifier,
         "color": color,
         "textColor": text_color_for(color),
         "tooltip": scorer.tooltip(identifier),

@@ -355,6 +355,16 @@ a.dt-gene-badge:hover {
     outline-offset: 1px;
 }
 
+/* An SV region linking to GeneTrek. */
+a.dt-locus-link {
+    color: inherit;
+    text-decoration: underline dotted;
+}
+
+a.dt-locus-link:hover {
+    color: #1565c0;
+}
+
 /* The floating tooltip showing a gene badge's multi-line text. */
 .dt-val-tooltip-floating.dt-gene-tip {
     white-space: pre-line;

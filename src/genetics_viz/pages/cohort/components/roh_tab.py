@@ -23,6 +23,7 @@ import polars as pl
 from nicegui import ui
 
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.gene_scoring import build_gene_badges, get_gene_scorer
 from genetics_viz.utils.ancestry import Variant, get_region_color
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.roh import (
@@ -343,6 +344,11 @@ def _render_genes(
             "text-gray-500 italic"
         )
         return
+    scorer = get_gene_scorer()
+    for row in rows:
+        row["GeneBadges"] = build_gene_badges(
+            [row["gene"]] if row["gene"] else [], scorer, cap=None
+        )
     # Longest ROH first. The table's sort indicator does not reorder the
     # initial rows by itself.
     rows.sort(
@@ -357,6 +363,8 @@ def _render_genes(
             "header": "Gene",
             "sortable": True,
             "filter": {"type": "text", "placeholder": "Filter genes..."},
+            "cellType": "gene_badge",
+            "badgesField": "GeneBadges",
         },
         {"id": "gene_id", "header": "Gene ID", "sortable": True},
         {"id": "roh", "header": "ROH", "sortable": True, "sortField": "roh_sort"},

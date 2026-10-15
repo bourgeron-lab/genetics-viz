@@ -897,17 +897,23 @@ class DataTable {
 
     _renderCuratedLocusCell(value, meta, rowData) {
         if (value === null || value === undefined || value === '') return '';
-        var escaped = this._escapeHtml(String(value));
+        var html = this._escapeHtml(String(value));
         var curatedField = meta.curatedField || 'IsCurated';
         var tooltipField = meta.tooltipField || '_curated_tooltip';
         if (rowData[curatedField]) {
             var tooltip = rowData[tooltipField] || '';
-            var html = '<span style="color: #2e7d32; font-weight: bold;"';
-            if (tooltip) html += ' data-tooltip="' + this._escapeAttr(tooltip) + '"';
-            html += '>' + escaped + '</span>';
-            return html;
+            var span = '<span style="color: #2e7d32; font-weight: bold;"';
+            if (tooltip) span += ' data-tooltip="' + this._escapeAttr(tooltip) + '"';
+            html = span + '>' + html + '</span>';
         }
-        return escaped;
+        // An SV's region opens GeneTrek's table on the genes it overlaps.
+        var href = rowData[meta.hrefField || '_genetrek_url'];
+        if (href) {
+            html = '<a class="dt-locus-link" href="' + this._escapeAttr(href) +
+                '" target="_blank" rel="noopener noreferrer"' +
+                ' title="Genes in this region, in GeneTrek">' + html + '</a>';
+        }
+        return html;
     }
 
     // ---- Pagination ----

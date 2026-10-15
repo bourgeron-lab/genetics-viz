@@ -533,8 +533,12 @@ def stop_refresh() -> None:
 
 
 def gene_url(symbol: str) -> str:
-    """GeneTrek's page for one gene (its info dialog)."""
-    return f"{get_genetrek_url()}?gene={urllib.parse.quote(symbol)}"
+    """GeneTrek's table filtered to one gene (``?search=``).
+
+    A single symbol is public knowledge, so it may travel in the query string;
+    patient-derived loci and gene lists go through :func:`search_url` instead.
+    """
+    return f"{get_genetrek_url()}?search={urllib.parse.quote(symbol)}"
 
 
 def search_url(tokens: Iterable[str], genome: str = "GRCh38") -> str:

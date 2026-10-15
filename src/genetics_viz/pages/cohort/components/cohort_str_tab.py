@@ -19,7 +19,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from nicegui import ui
 
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.str_eh import (
+    add_locus_badges,
     CohortContext,
     cohort_flagged_rows,
     cohort_locus_rows,
@@ -129,6 +131,9 @@ def render_cohort_str_tab(
             keys = _keys(filtered_state)
             locus_rows = cohort_locus_rows(context, keys)
             flagged = cohort_flagged_rows(context, keys)
+            scorer = get_gene_scorer()
+            add_locus_badges(locus_rows, scorer)
+            add_locus_badges(flagged, scorer)
             shown = len({k for k in keys})
             ui.label(
                 f"{shown} individuals shown, {len(flagged)} flagged genotypes."
@@ -165,6 +170,8 @@ def render_cohort_str_tab(
                             "header": "Locus",
                             "sortable": True,
                             "filter": {"type": "text"},
+                            "cellType": "gene_badge",
+                            "badgesField": "LocusBadges",
                         },
                         {"id": "n_pathogenic", "header": "Path.", **num},
                         {"id": "n_carrier", "header": "Carr.", **num},
@@ -217,6 +224,8 @@ def render_cohort_str_tab(
                             "header": "Locus",
                             "sortable": True,
                             "filter": {"type": "text"},
+                            "cellType": "gene_badge",
+                            "badgesField": "LocusBadges",
                         },
                         {
                             "id": "status",

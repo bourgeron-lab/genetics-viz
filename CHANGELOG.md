@@ -5,6 +5,15 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Gene badges open GeneTrek's table on the gene** (`?search=SYMBOL`) instead of its gene dialog (`?gene=`).
+
+### Added
+- **More GeneTrek links.** The family ROH tab's "Genes in ROH" Gene column and the STR `Locus` columns (family EH table, cohort loci and flagged genotypes) are gene badges, coloured by your tiers and linked to GeneTrek; an STR locus is shown under its id and linked as its gene (`FXN_A` as FXN).
+- **An SV's `chr:start-end`** (SVs tab, Search results) opens GeneTrek's table on the genes the region overlaps, through the `#search=` fragment so a patient's locus stays out of server logs.
+
 ## [0.17.0] - 2026-10-15
 
 ### Added

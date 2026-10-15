@@ -113,6 +113,10 @@ async def test_roh_relationship_wording_is_hidden_from_readers(user, monkeypatch
     assert not any(
         "cousin" in label or "degree" in label for label in roh_threshold_labels(user)
     )
+    genes = next(t for t in tables if "gene_id" in t["columns"])
+    [badge] = genes["rows"][0]["GeneBadges"]
+    assert badge["label"] == "GENEA"
+    assert badge["href"] == "http://genetrek.test/?search=GENEA"
 
 
 async def test_roh_relationship_wording_is_shown_to_curators(user, monkeypatch):
@@ -161,6 +165,9 @@ async def test_family_str_tab_pivots_members_and_adds_cohort_context(user, monke
     assert {"m0", "m1", "m2", "founders_max", "cohort_flagged"} <= set(table["columns"])
     first = table["rows"][0]
     assert first["locus"] == "HTT"
+    [locus_badge] = first["LocusBadges"]
+    assert locus_badge["label"] == "HTT"
+    assert locus_badge["href"] == "http://genetrek.test/?search=HTT"
     assert [b["label"] for b in first["m2_badges"]] == ["18", "40·IR"]
     assert _tab(user, "EH").props.get("label") == "EH (2 flagged)"
 
@@ -202,6 +209,10 @@ async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
         ("S3", "HTT"),
         ("S2", "FXN"),
     }
+    assert all(
+        r["LocusBadges"][0]["href"].endswith("?search=" + r["locus"].split("_")[0])
+        for r in flagged["rows"]
+    )
 
     individuals = tables[0]
     with user.client:
@@ -368,6 +379,10 @@ async def test_sv_diagnostic_saved_from_search_is_read_back(
         await asyncio.sleep(0.05)
     [row] = tables[-1]["rows"]
     assert (row["sample"], row["Diagnostic"]) == ("S3", "")
+    # The SV's region opens GeneTrek on its genes, in the fragment.
+    assert row["_genetrek_url"] == (
+        f"http://genetrek.test/#search={row['Variant']}&genome=GRCh38"
+    )
 
     built = len(tables)
     with user.client:
