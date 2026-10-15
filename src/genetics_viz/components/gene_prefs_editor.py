@@ -227,7 +227,9 @@ def _geneset_row(gs: GenesetInfo, draft: Dict[str, Any], preview) -> None:
             ASSIGNMENT_OPTIONS,
             value=draft["sets"].get(gs.key, HIDDEN),
             on_change=on_change,
-        ).props("dense outlined options-dense").classes("w-28 shrink-0")
+        ).props("dense outlined options-dense").classes("w-28 shrink-0").mark(
+            f"geneset-{gs.key}"
+        )
         with ui.column().classes("gap-0 min-w-0"):
             with ui.row().classes("items-center gap-1"):
                 ui.label(gs.label).classes("text-sm font-medium")

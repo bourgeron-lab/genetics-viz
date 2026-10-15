@@ -37,9 +37,8 @@ async def test_profile_card_saves_a_tier_change(user, config_file):
     await user.should_see("High-confidence NDD v7")
     await user.should_not_see("Use as default for everyone")
 
-    select = next(
-        s for s in user.find(ui.select).elements if s.value == 1
-    )  # hc_ndd, Tier 1 in the packaged default
+    [select] = user.find(marker="geneset-hc_ndd").elements
+    assert select.value == 1  # Tier 1 in the packaged default
     with user.client:
         select.set_value("show")
     user.find(kind=ui.button, content="Save").click()
