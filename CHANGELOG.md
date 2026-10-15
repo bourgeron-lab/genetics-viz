@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.0] - 2026-10-15
 
 ### Added
 - **Gene badges come from GeneTrek.** The genesets and their membership are read from GeneTrek's API (`genetrek_url` in the config, default the dev instance `https://genetrek-py.dev.pasteur.cloud/`), no longer from the packaged `genesets.yaml` / `genesets.tsv`, which are removed.
