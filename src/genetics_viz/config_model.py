@@ -42,6 +42,13 @@ class AppConfig:
     storage_secret: str = ""
     poll_interval: int = 30
     ancestry_reference_dir: str = ""
+    genetrek_url: str = ""
+    genetrek_cache_dir: str = ""
+
+
+#: GeneTrek instance used when the config names none. The dev instance, until
+#: the production one serves the same API.
+DEFAULT_GENETREK_URL = "https://genetrek-py.dev.pasteur.cloud/"
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +137,8 @@ def load_config(config_path: Path) -> AppConfig:
 
     poll_interval = int(raw.get("poll_interval") or 30)
     ancestry_reference_dir = str(raw.get("ancestry_reference_dir") or "")
+    genetrek_url = str(raw.get("genetrek_url") or "")
+    genetrek_cache_dir = str(raw.get("genetrek_cache_dir") or "")
 
     config = AppConfig(
         config_path=config_path,
@@ -138,6 +147,8 @@ def load_config(config_path: Path) -> AppConfig:
         storage_secret=storage_secret,
         poll_interval=poll_interval,
         ancestry_reference_dir=ancestry_reference_dir,
+        genetrek_url=genetrek_url,
+        genetrek_cache_dir=genetrek_cache_dir,
     )
     _app_config = config
 
@@ -181,6 +192,10 @@ def save_config(config: AppConfig) -> None:
         data["ancestry_reference_dir"] = config.ancestry_reference_dir
     if config.poll_interval != 30:
         data["poll_interval"] = config.poll_interval
+    if config.genetrek_url:
+        data["genetrek_url"] = config.genetrek_url
+    if config.genetrek_cache_dir:
+        data["genetrek_cache_dir"] = config.genetrek_cache_dir
 
     with open(config.config_path, "w") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -213,3 +228,35 @@ def get_ancestry_reference_dir() -> Optional[Path]:
     if not _app_config.ancestry_reference_dir:
         return None
     return Path(_app_config.ancestry_reference_dir)
+
+
+def get_genetrek_url() -> str:
+    """Return the GeneTrek base URL, always ending in ``/``."""
+    url = (_app_config.genetrek_url if _app_config else "") or DEFAULT_GENETREK_URL
+    return url if url.endswith("/") else url + "/"
+
+
+def get_genetrek_cache_dir() -> Optional[Path]:
+    """Return where the GeneTrek snapshot is cached, or ``None`` with no config.
+
+    Defaults to ``.genetrek/`` next to the config file: that directory is
+    already writable, since ``load_config`` may write the file back.
+    """
+    if _app_config is None:
+        return None
+    if _app_config.genetrek_cache_dir:
+        return Path(_app_config.genetrek_cache_dir)
+    return _app_config.config_path.parent / ".genetrek"
+
+
+def get_preferences_path() -> Optional[Path]:
+    """Return the per-user preferences file, next to the config file.
+
+    Kept out of the config file itself: ``save_config`` rewrites that file
+    whole from the in-memory singleton, so frequent profile saves there would
+    race with admin saves.
+    """
+    if _app_config is None:
+        return None
+    path = _app_config.config_path
+    return path.with_name(f"{path.stem}.preferences.yaml")

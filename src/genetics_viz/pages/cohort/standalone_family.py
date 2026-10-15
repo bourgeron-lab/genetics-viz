@@ -359,13 +359,9 @@ async def standalone_family_page(family_id: str) -> None:
                                                 "text-xs font-mono"
                                             )
                                         gene_str = entry.get("Gene", "")
-                                        if gene_str and is_sv:
+                                        if gene_str:
                                             _render_sv_gene_badges(
                                                 gene_str, gene_scorer
-                                            )
-                                        elif gene_str:
-                                            ui.label(gene_str).classes(
-                                                "text-xs text-blue-700 font-medium"
                                             )
                                         ui.space()
                                         ui.label(entry.get("Sample", "")).classes(
@@ -427,6 +423,7 @@ async def standalone_family_page(family_id: str) -> None:
                                 cohort_name="",
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                family=family,
                             )
                         else:
                             with ui.column().classes(

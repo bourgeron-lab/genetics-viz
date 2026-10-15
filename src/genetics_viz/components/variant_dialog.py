@@ -11,7 +11,13 @@ from typing import Any, Callable, Dict, List, Optional
 from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store, get_static_prefix
-from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.inheritance import infer_inheritance
+from genetics_viz.utils.gene_scoring import (
+    build_gene_badges,
+    gene_badges_html,
+    get_gene_scorer,
+    split_genes,
+)
 from genetics_viz.utils.tsv import clean_tsv_field
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 
@@ -90,74 +96,6 @@ def _update_ignore_status(
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     return True
-
-
-# Genotype values that indicate the allele is carried (het or hom-alt)
-_GT_CARRIES = {"0/1", "1/0", "1/1"}
-# Genotype value that confirms absence (hom-ref)
-_GT_ABSENT = {"0/0"}
-# Missing / not-tested sentinel values
-_GT_MISSING = {"./.", ".", ""}
-
-
-def _infer_inheritance(sample_gt: str, father_gt: str, mother_gt: str) -> str:
-    """Infer inheritance mode from VCF-style genotype strings.
-
-    Args:
-        sample_gt: Child/sample genotype (e.g. "0/1", "1/1", "0/0")
-        father_gt: Father's genotype
-        mother_gt: Mother's genotype
-
-    Returns:
-        One of the inheritance dropdown values:
-        "unknown", "de novo", "paternal", "maternal",
-        "not paternal", "not maternal", "either", "homozygous"
-    """
-    s = sample_gt.strip() if sample_gt else ""
-    f = father_gt.strip() if father_gt else ""
-    m = mother_gt.strip() if mother_gt else ""
-
-    f_carries = f in _GT_CARRIES
-    f_absent = f in _GT_ABSENT
-    f_missing = f in _GT_MISSING
-
-    m_carries = m in _GT_CARRIES
-    m_absent = m in _GT_ABSENT
-    m_missing = m in _GT_MISSING
-
-    # --- Hom-alt sample (1/1) ---
-    if s == "1/1":
-        # Both parents carry → homozygous (autosomal recessive)
-        if f_carries and m_carries:
-            return "homozygous"
-        return "unknown"
-
-    # --- Het sample (0/1 or 1/0) ---
-    if s in ("0/1", "1/0"):
-        # Both parents known
-        if f_carries and m_carries:
-            return "either"
-        if f_carries and m_absent:
-            return "paternal"
-        if f_absent and m_carries:
-            return "maternal"
-        if f_absent and m_absent:
-            return "de novo"
-
-        # One parent known, other missing
-        if f_carries and m_missing:
-            return "paternal"
-        if m_carries and f_missing:
-            return "maternal"
-        if f_absent and m_missing:
-            return "not paternal"
-        if m_absent and f_missing:
-            return "not maternal"
-
-        return "unknown"
-
-    # --- All other cases (0/0, ./., missing, etc.) ---
-    return "unknown"
 
 
 def show_variant_dialog(
@@ -404,16 +342,10 @@ def show_variant_dialog(
                 if not gene_list_str or gene_list_str == "-":
                     return ui.label("-").classes("text-base text-gray-900 font-medium")
 
-                genes = [g.strip() for g in str(gene_list_str).split(",") if g.strip()]
-                with ui.row().classes("gap-1 flex-wrap"):
-                    for gene in genes:
-                        color = gene_scorer.get_gene_color(gene)
-                        text_color = "black" if color == "#ffffff" else "white"
-                        tooltip_text = gene_scorer.get_gene_tooltip(gene)
-                        ui.html(
-                            f'<span class="q-badge" style="background-color: {color}; color: {text_color}; padding: 2px 6px; border-radius: 4px; font-size: 12px;" title="{tooltip_text}">{gene}</span>',
-                            sanitize=False,
-                        )
+                badges = build_gene_badges(
+                    split_genes(gene_list_str), gene_scorer, cap=None, sort=False
+                )
+                ui.html(gene_badges_html(badges), sanitize=False)
 
             # Variant details card (collapsible, above IGV)
             ui.label("Variant Details").classes("text-xl font-semibold mb-2")
@@ -430,7 +362,15 @@ def show_variant_dialog(
                         "fafmax_faf95_max_genomes",
                     ]
 
-                    excluded_fields = primary_fields + ["#CHROM", "POS", "REF", "ALT"]
+                    excluded_fields = primary_fields + [
+                        "#CHROM",
+                        "POS",
+                        "REF",
+                        "ALT",
+                        "MOI",
+                        "MoiBadges",
+                        "_moi_rank",
+                    ]
 
                     with ui.row().classes("gap-6 flex-wrap items-center"):
                         for field in primary_fields:
@@ -456,6 +396,17 @@ def show_variant_dialog(
                                             if variant_data[field] is not None
                                             else "-"
                                         ).classes("text-base text-gray-900 font-medium")
+                        # Fit with the gene's mode of inheritance, from the
+                        # table row (annotate_moi); hover for the reasoning.
+                        if variant_data.get("MoiBadges"):
+                            with ui.column().classes("gap-0"):
+                                ui.label("MOI").classes(
+                                    "text-xs font-semibold text-gray-500"
+                                )
+                                ui.html(
+                                    gene_badges_html(variant_data["MoiBadges"]),
+                                    sanitize=False,
+                                )
 
                     other_fields = {
                         k: v
@@ -647,7 +598,7 @@ def show_variant_dialog(
                         user_input.value = get_current_user()
 
                         ui.label("Inheritance:").classes("font-semibold ml-4")
-                        inferred_inheritance = _infer_inheritance(
+                        inferred_inheritance = infer_inheritance(
                             variant_data.get("sample_gt", ""),
                             variant_data.get("father_gt", ""),
                             variant_data.get("mother_gt", ""),

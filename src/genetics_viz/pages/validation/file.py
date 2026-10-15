@@ -31,7 +31,11 @@ from genetics_viz.utils.column_names import (
 )
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
-from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.gene_scoring import (
+    build_gene_badges,
+    get_gene_scorer,
+    split_genes,
+)
 from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.validation_badges import build_validation_badge
 from genetics_viz.utils.wisecondorx import build_call_colors, infer_sv_type
@@ -313,21 +317,14 @@ async def validation_file_page(filename: str) -> None:
 
                     # Gene/symbol columns → gene_badge
                     if "symbol" in col_lower or "gene" in col_lower:
-                        value = row.get(col_name, "")
-                        if value and value != "-":
-                            genes = [
-                                g.strip() for g in str(value).split(",") if g.strip()
-                            ]
-                            row[f"{col_name}_badges"] = [
-                                {
-                                    "label": gene,
-                                    "color": gene_scorer.get_gene_color(gene),
-                                    "tooltip": gene_scorer.get_gene_tooltip(gene),
-                                }
-                                for gene in genes
-                            ]
-                        else:
-                            row[f"{col_name}_badges"] = []
+                        genes = [
+                            g
+                            for g in split_genes(row.get(col_name, ""), ",")
+                            if g != "-"
+                        ]
+                        row[f"{col_name}_badges"] = build_gene_badges(
+                            genes, gene_scorer, cap=None, sort=False
+                        )
 
                     # Consequence / impact columns → badge_list
                     elif "impact" in col_lower or col_name == "VEP_Consequence":

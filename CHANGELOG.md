@@ -5,6 +5,29 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Gene badges come from GeneTrek.** The genesets and their membership are read from GeneTrek's API (`genetrek_url` in the config, default the dev instance `https://genetrek-py.dev.pasteur.cloud/`), no longer from the packaged `genesets.yaml` / `genesets.tsv`, which are removed.
+  - The whole GeneTrek table is downloaded once per GeneTrek release (about 4 MB) and cached in `genetrek_cache_dir` (default `.genetrek/` next to the config). The app checks for a new release every 6 hours and works offline on the last one.
+  - Old and alias symbols resolve to the current gene: a VEP `KIAA1109` is coloured as `BLTP1`.
+  - Clicking a badge opens the gene in GeneTrek (`?gene=SYMBOL`). The tooltip lists the gene's genesets by tier, how many other GeneTrek sets it is in, and its LOEUF, s-het, EAGLE class and mode of inheritance.
+  - The "+N genes" badge opens GeneTrek's table on all of the cell's genes, and the SV dialog links its region to GeneTrek. Both use the `#search=` fragment, which never reaches a server log.
+- **Gene badge settings in the Profile page.** Each geneset is assigned to Tier 1-4, Show (tooltip only) or Hidden; a gene takes the colour of its best tier, and each tier's colour can be changed. A live preview shows the result. Settings are saved server-side in `<config name>.preferences.yaml`; an administrator can make theirs the default for everyone.
+- **Geneset filters offer GeneTrek.** The Search page and the family Wombat tab filter on the user's tiers ("Tier 1", "Tiers 1-2"...), every GeneTrek gene list, and the data directory's `params/genesets/*.tsv` as before, in one grouped, searchable menu.
+- **MOI column** in the Wombat tab, the Search results and the variant dialog: whether each variant fits its gene's modes of inheritance (✓ consistent, ? possible, ✗ inconsistent), with the reasoning in the tooltip.
+  - Modes are pooled from all of GeneTrek's inheritance sources.
+  - Recessive genes: homozygous with carrier parents, compound heterozygous in trans or in cis, a single heterozygous variant. Second hits are looked for among the rows of the same table.
+  - A male's chrX call outside the pseudoautosomal regions is read as hemizygous, and a dominant variant inherited from an unaffected parent is marked possible.
+
+### Changed
+- Gene badges of every table are sorted best tier first and capped at six (the Wombat tab and validation pages were not), with a readable text colour on any badge colour.
+- Gene badge tooltips in tables are multi-line instead of one clipped line.
+
+### Fixed
+- **Wombat sub-tabs opened more than 30 s after the page loaded showed no table.** Tables now wait for their container with no timeout, and each sub-tab is built the first time it is opened.
+- The family Wombat tab's geneset filter split `VEP_SYMBOL` on `,` only, so `&`-joined symbols never matched.
+
 ## [0.16.0] - 2026-10-13
 
 ### Added

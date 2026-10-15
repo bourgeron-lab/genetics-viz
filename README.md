@@ -109,9 +109,21 @@ user_list:
 # cannot draw the reference panel behind them.
 ancestry_reference_dir: /path/to/references/ancestry-pgs
 
+# Optional. The GeneTrek instance gene badges link to and take their genesets
+# from (default: the dev instance). Its data is cached in genetrek_cache_dir
+# (default: .genetrek/ next to this file) and refreshed when GeneTrek
+# publishes a new release, so the app still works offline on the last one.
+genetrek_url: https://genetrek-py.dev.pasteur.cloud/
+# genetrek_cache_dir: /path/to/cache
+
 # Auto-generated on first run — do not edit manually
 storage_secret: "<hex-string>"
 ```
+
+Each user's gene badge settings (which GeneTrek genesets colour badges, and
+how) are saved in `<config name>.preferences.yaml` next to the config file,
+from the Profile page. An administrator can make their own settings the default
+for everyone.
 
 ### Generating Password Hashes
 

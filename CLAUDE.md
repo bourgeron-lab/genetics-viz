@@ -21,7 +21,7 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
 ## Tests and CI
 
 - `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
-- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the `GeneScorer` singleton. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache and the per-user gene scorers. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
 - An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
 - **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
   - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
@@ -47,7 +47,8 @@ src/genetics_viz/
   components/
     tanstack_table.py             # DataTable: TanStack table bridge (JS/CSS injection)
     column_selector.py            # Column visibility dialog with presets
-    filters.py                    # Reusable filter menu components
+    filters.py                    # Reusable filter menus (validation statuses, genesets)
+    gene_prefs_editor.py          # Profile card: GeneTrek tiers per geneset, live preview
     header.py                     # Shared page header with data dir dropdown + user menu
     validation_loader.py          # Validation TSV loading and badge logic
     variant_dialog.py             # IGV variant inspection dialog
@@ -55,6 +56,8 @@ src/genetics_viz/
     diagnostic_dialog.py          # Diagnostic review dialog
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
+    genetrek.yaml                 # GeneTrek refresh period, tier colours, default profile
+    inheritance.yaml              # MOI flag: GeneTrek mode strings -> codes, verdict colours, PAR
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
     str.yaml                      # STR class/status colours, support codes, REViewer filename
     clinvar_colors.yaml           # ClinVar significance term -> color
@@ -66,7 +69,7 @@ src/genetics_viz/
     view_presets.yaml             # Column visibility presets
   pages/
     login.py                      # Login page (no auth required)
-    profile.py                    # User profile (view role, change password)
+    profile.py                    # User profile (role, password, gene badge tiers)
     search.py                     # Cohort-wide variant search with individual filters
     admin/
       directories.py              # Admin: manage data directories
@@ -116,7 +119,11 @@ src/genetics_viz/
     cohort_state.py               # .ghfc-ngs.state.json parsing, drift, step rows
     cytobands.py                  # Cytoband, chromosome, ideogram constants
     data.py                       # Multi-store registry, per-user data dir selection
-    gene_scoring.py               # Gene scoring and color coding
+    gene_scoring.py               # Per-user tier scorer + the shared gene badge builders
+    genesets.py                   # Geneset filter sources (tiers, GeneTrek, local TSVs) + matchers
+    genetrek.py                   # GeneTrek snapshot: API fetch, disk cache, index, links
+    inheritance.py                # Trio transmission + MOI consistency verdicts
+    user_preferences.py           # <config>.preferences.yaml: per-user prefs, locked atomic writes
     ghfc_ngs_docs.py              # Upstream params.md fetch + link rewriting
     pipeline_params.py            # <NAME>.params.yml discovery and parsing
     score_colors.py               # Continuous score color ranges
@@ -269,13 +276,26 @@ Card geometry for the home page lives in `_CARD_BASE` / `_SECTION_X` in `home.py
 
 Short test data hides all of this: the synthetic fixtures (`24/24`) fitted where the real counts (`522/522 samples`) did not.
 
+### GeneTrek (gene badges, genesets, modes of inheritance)
+GeneTrek (`genetrek_url` in the app config, default the dev instance) is the lab's gene database. The app reads it **as a snapshot**: the whole table is one ~4 MB parquet (`/api/download/database`), downloaded once per GeneTrek `release` (`/api/health`) and cached under `genetrek_cache_dir` (default `<config dir>/.genetrek/`). `utils/genetrek.py` holds it.
+- **Never call the API per gene.** Tables render thousands of badges whose tooltips are computed in Python before the table is sent. The snapshot also means GeneTrek never learns which genes a user looks at; only a click reveals one.
+- **Startup loads the disk cache, then checks the release, both off-thread** (`start_refresh`), and re-checks every `refresh_hours`. Pages render with neutral badges until the snapshot is in. A failed refresh keeps the previous snapshot and records the error; it never raises (`except Exception` is deliberate there).
+- **Resolve identifiers through the snapshot** (`resolve`): symbol, then ENSG, then previous symbol, then alias — the last two only when they name exactly one gene. VEP symbols lag HGNC (`KIAA1109` is `BLTP1`). Filters use `matching_identifiers` to expand a set with those old names instead of resolving every cell.
+- **Geneset versions coexist** (`hc_ndd_v1` … `hc_ndd_v7`). Their alias (`hc_ndd`) names the current one, so preferences are keyed by `GenesetInfo.key` (alias first). A key GeneTrek drops is kept in the file and ignored.
+- **Badges are coloured by tiers, not a sum.** Each user assigns sets to Tier 1-4, "show" (tooltip only) or hidden; a gene takes the best tier's colour. A sum would double-count versions and roll-ups. `GeneScorer` is per user: call `get_gene_scorer()` on the event loop (it reads `app.storage.user`), never inside `asyncio.to_thread`.
+- **Build badges with `build_gene_badges` / `gene_badge_html`** (`utils/gene_scoring.py`), never by hand: they carry `href` (GeneTrek `?gene=`), `textColor` and the multi-line tooltip, and cap a cell at six with a "+N genes" badge linking to GeneTrek's table (`search_url`, a `#search=` fragment so patient gene lists and loci stay out of server logs).
+- **Multi-line table tooltips** use `data-gene-tip`, shown by the floating tooltip in `data_table.js`; the CSS `data-tooltip` is one clipped line. `badge_list` cells switch automatically when a tooltip has a newline.
+- **Preferences live in `<config stem>.preferences.yaml`, not the config file.** `save_config` rewrites the config whole from memory and truncates before locking; profile saves there would race with admin saves. `user_preferences.py` locks a `.lock` file, re-reads, changes one entry and `os.replace`s. Saving checks the user itself; the default is admin-only.
+- **MOI flag** (`utils/inheritance.py`, `config/inheritance.yaml`): a gene's modes are pooled from every GeneTrek field in category `Inheritance`, because the combined `inheritance` holds one mode. Recessive second hits are looked for only among the rows of the same table (`annotate_moi`), and the tooltip says so. A male's chrX call outside PAR is hemizygous whatever the GT says. The DNM tab is not wired: `render_dnm_tab` has no caller.
+
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.
 
 ### TanStack Table
 - `DataTable` in `tanstack_table.py` bridges Python to vanilla JS TanStack Table.
 - Per-client JS/CSS injection via `client._dt_scripts_injected` attribute (avoids global set memory leak).
-- MutationObserver with 30-second timeout for container detection.
+- Tables are created when their container enters the document, with no timeout (`static/js/data_table_mount.js`, one shared MutationObserver). Quasar mounts only the shown tab panel, and a left keep-alive panel sits detached, so a table built for a hidden tab gets its container whenever the tab is opened. `update_data` / `set_column_visibility` calls made before that are queued.
+- A tab bar whose panels each hold a table builds each panel on first view (the Wombat sub-tabs, as the family page's tabs).
 
 ### Async
 - Use `asyncio.to_thread()` to offload blocking I/O (e.g., `pl.read_csv()`) in NiceGUI page handlers.

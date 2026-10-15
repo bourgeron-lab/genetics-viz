@@ -93,8 +93,10 @@ jobs:
               "genetics_viz/config/roh.yaml",
               "genetics_viz/config/vep_consequences.yaml",
               "genetics_viz/config/cytobands_hg38.tsv",
-              "genetics_viz/config/genesets.tsv",
+              "genetics_viz/config/genetrek.yaml",
+              "genetics_viz/config/inheritance.yaml",
               "genetics_viz/static/js/data_table.js",
+              "genetics_viz/static/js/data_table_mount.js",
               "genetics_viz/static/css/data_table.css",
           ]
           missing = [n for n in required if n not in names]

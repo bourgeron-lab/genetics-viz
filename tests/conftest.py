@@ -1,7 +1,7 @@
 """Shared fixtures: synthetic data, an application config, and a clean global state.
 
 Most of the app keeps module-level state (the loaded config, the data store
-registry, file caches keyed on stat, a gene-scoring singleton). Without the
+registry, file caches keyed on stat, the GeneTrek snapshot and gene scorers). Without the
 autouse reset below, tests would pass or fail depending on their order.
 """
 
@@ -20,9 +20,11 @@ from genetics_viz.utils import (
     cohort_state,
     data,
     gene_scoring,
+    genetrek,
     ghfc_ngs_docs,
     pipeline_params,
     roh,
+    user_preferences,
     str_eh,
     sharding,
 )
@@ -46,9 +48,9 @@ def _reset_globals() -> None:
     pipeline_params.clear_params_cache()
     ghfc_ngs_docs.clear_doc_cache()
     sharding.clear_sharding_cache()
-    gene_scoring.GeneScorer._instance = None
-    gene_scoring.GeneScorer._initialized = False
-    gene_scoring._gene_scorer = None
+    genetrek.clear_genetrek_cache()
+    user_preferences.clear_preferences_cache()
+    gene_scoring.clear_scorer_cache()
     change_monitor._change_callbacks.clear()
 
 
@@ -61,7 +63,10 @@ def clean_globals() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail loudly if anything tries to fetch the ghfc-ngs docs for real."""
+    """Fail loudly on any real network access (ghfc-ngs docs, GeneTrek).
+
+    ``urllib.request`` is one shared module, so this patch covers every caller.
+    """
 
     def refuse(*args, **kwargs):
         raise AssertionError("network access attempted in a test")
@@ -82,7 +87,29 @@ def reference_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def config_file(tmp_path: Path, data_dir: Path, reference_root: Path) -> Path:
+def genetrek_cache(tmp_path: Path) -> Path:
+    """A GeneTrek snapshot cache, as the app leaves it after a download."""
+    return datagen.build_genetrek_cache(tmp_path / "genetrek-cache")
+
+
+@pytest.fixture
+def snapshot(genetrek_cache: Path) -> genetrek.GenetrekSnapshot:
+    """The synthetic GeneTrek snapshot, installed as the app's current one."""
+    import polars as pl
+
+    snap = genetrek.build_snapshot(
+        pl.read_parquet(genetrek_cache / f"{datagen.GENETREK_RELEASE}.parquet"),
+        datagen.GENETREK_FIELDS,
+        release=datagen.GENETREK_RELEASE,
+    )
+    genetrek.set_snapshot(snap)
+    return snap
+
+
+@pytest.fixture
+def config_file(
+    tmp_path: Path, data_dir: Path, reference_root: Path, genetrek_cache: Path
+) -> Path:
     """An application YAML config over the synthetic data and reference."""
     path = tmp_path / "genetics_viz.yaml"
     path.write_text(
@@ -102,6 +129,10 @@ def config_file(tmp_path: Path, data_dir: Path, reference_root: Path) -> Path:
                 "storage_secret": "test-storage-secret",
                 "poll_interval": 3600,
                 "ancestry_reference_dir": str(reference_root),
+                # Never reached: the network is refused in tests, so the app
+                # runs on the cache, as it would offline.
+                "genetrek_url": "http://genetrek.test/",
+                "genetrek_cache_dir": str(genetrek_cache),
             }
         )
     )

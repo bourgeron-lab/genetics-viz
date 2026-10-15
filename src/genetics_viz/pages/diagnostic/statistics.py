@@ -366,10 +366,7 @@ async def diagnostic_statistics_page() -> None:
                                     # Score each gene, pick highest
                                     scored = []
                                     for sym in symbols:
-                                        score, _ = gene_scorer.get_gene_score_and_sets(
-                                            sym
-                                        )
-                                        scored.append((sym, score))
+                                        scored.append((sym, gene_scorer.rank(sym)))
                                     max_score = max(s for _, s in scored)
                                     if max_score > 0:
                                         # Keep all genes tied at the top score

@@ -1,7 +1,8 @@
-"""Profile page — view role and change password."""
+"""Profile page — view role, change password, set up gene badges."""
 
 from nicegui import ui
 
+from genetics_viz.components.gene_prefs_editor import render_gene_prefs_card
 from genetics_viz.components.header import create_header
 from genetics_viz.config_model import (
     get_config,
@@ -22,7 +23,7 @@ def profile_page() -> None:
     username = get_current_user()
     role = get_current_role()
 
-    with ui.column().classes("w-full max-w-xl mx-auto p-6"):
+    with ui.column().classes("w-full max-w-4xl mx-auto p-6"):
         ui.label("Profile").classes("text-3xl font-bold text-blue-900 mb-6")
 
         # User info card
@@ -110,3 +111,5 @@ def profile_page() -> None:
             ui.button("Change Password", icon="lock", on_click=change_password).props(
                 "color=blue unelevated"
             )
+
+        render_gene_prefs_card(username)

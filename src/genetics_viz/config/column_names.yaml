@@ -207,6 +207,11 @@ VEP_SYMBOL:
   group: "VEP"
   min_width: 100
   max_width: 250
+MOI:
+  name: "MOI"
+  group: "VEP"
+  min_width: 70
+  max_width: 220
 VEP_SYMBOL_SOURCE:
   name: "symbol_source"
   group: "VEP"

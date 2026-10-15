@@ -61,3 +61,16 @@ def test_default_data_dir_falls_back_to_first(app_config):
     assert get_default_data_dir(app_config) == app_config.data_directories[0].path
     app_config.data_directories[0].default = False
     assert get_default_data_dir(app_config) == app_config.data_directories[0].path
+
+
+def test_genetrek_keys_survive_an_admin_save(tmp_path):
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        "storage_secret: s\ngenetrek_url: https://gt.example/\n"
+        "genetrek_cache_dir: /tmp/gt\n"
+    )
+    config = config_model.load_config(path)
+    config_model.save_config(config)
+    reloaded = config_model.load_config(path)
+    assert reloaded.genetrek_url == "https://gt.example/"
+    assert reloaded.genetrek_cache_dir == "/tmp/gt"

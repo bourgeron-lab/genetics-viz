@@ -1,0 +1,40 @@
+# GeneTrek integration: snapshot refresh, badge tiers and the default profile.
+#
+# The GeneTrek instance itself is per deployment and lives in the application
+# config (`genetrek_url`). Everything here ships with the release.
+
+# How often the app asks GeneTrek whether a new release is out. A release is
+# downloaded once (about 4 MB) and cached on disk; between releases a check is
+# one small request.
+refresh_hours: 6
+
+# Badge colour per tier, best first. A gene takes the colour of the best tier
+# any of its genesets is assigned to; a gene in no tiered set stays neutral.
+tier_colors:
+  - "#c62828"  # tier 1, red
+  - "#ef6c00"  # tier 2, orange
+  - "#f9a825"  # tier 3, yellow
+  - "#1565c0"  # tier 4, blue
+neutral_color: "#eeeeee"
+
+# Default profile for a user who never saved one, unless an administrator has
+# set another. Keys are GeneTrek field names or, better, their aliases: an
+# alias (`hc_ndd`) follows the current version, a versioned name
+# (`hc_ndd_v7`) stays pinned. Values: 1-4 for a tier, or `show` to list the
+# set in the tooltip without colouring. Unlisted sets are hidden.
+default_sets:
+  hc_ndd: 1
+  sfari_1: 1
+  spark: 1
+  candidate_ndd: 2
+  constraint: 3
+  syngo: 4
+  chrom_epi_tf_combined: 4
+  autism_combined_v7: show
+  sysndd_definitive: show
+  haploinsufficient: show
+  panelapp_aus_all: show
+  panelapp_eng_all: show
+
+# Genes previewed on the profile page while editing.
+preview_genes: [SHANK3, SCN2A, CHD8, DLG4, GRIN2B, NRXN1, BRCA2, TTN]

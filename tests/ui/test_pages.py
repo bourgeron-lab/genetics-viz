@@ -68,6 +68,30 @@ async def test_family_page_and_its_tabs(user):
     assert any("reference" in str(c.options.get("title", {})).lower() for c in charts)
 
 
+async def test_wombat_sub_tab_builds_its_table_when_opened(user, monkeypatch):
+    """Each Wombat config's table is built when its sub-tab is first shown.
+
+    Quasar mounts only the shown panel, so a table built at page load for a
+    hidden sub-tab had no container in the browser until the tab was opened.
+    """
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Wombat Configuration: default", retries=30)
+    assert [len(t["rows"]) for t in tables] == [6]
+    await user.should_not_see("Wombat Configuration: strict")
+
+    open_tab(user, "wombat-subtabs", "strict")
+    await user.should_see("Wombat Configuration: strict", retries=30)
+    assert [len(t["rows"]) for t in tables] == [6, 2]
+
+    # Back and forth builds nothing again.
+    open_tab(user, "wombat-subtabs", "default")
+    open_tab(user, "wombat-subtabs", "strict")
+    await asyncio.sleep(0.3)
+    assert len(tables) == 2
+
+
 async def open_family_roh(user, monkeypatch, username):
     await login(user, username)
     tables = capture_tables(monkeypatch)
