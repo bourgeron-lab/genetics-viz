@@ -26,7 +26,12 @@ from genetics_viz.utils.column_names import (
     reorder_columns_by_group,
 )
 from genetics_viz.utils.cytobands import CHROM_ORDER, VALIDATION_COLORS
-from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.gene_scoring import (
+    build_gene_badges,
+    get_gene_scorer,
+    split_genes,
+    tier_legend_html,
+)
 from genetics_viz.utils.wisecondorx import (
     WISECONDORX_CONFIG,
     build_call_colors,
@@ -160,29 +165,10 @@ def render_wisecondorx_subtab(
             ui.label("File Path:").classes("font-semibold")
             ui.label(str(aberrations_file)).classes("text-sm text-gray-600 font-mono")
 
-        # Gene badge legend
-        with ui.row().classes("gap-4 mt-3 items-center"):
-            ui.label("Gene badges:").classes("text-sm font-semibold")
-            with ui.row().classes("gap-2 items-center"):
-                ui.html(
-                    '<span class="q-badge" style="background-color: #ffffff; color: black; border: 2px solid black; padding: 2px 6px; border-radius: 4px; font-size: 12px;">Gene</span>',
-                    sanitize=False,
-                )
-                ui.label("(exonic - black border)").classes("text-xs text-gray-600")
-            with ui.row().classes("gap-2 items-center"):
-                ui.html(
-                    '<span class="q-badge" style="background-color: #ffffff; color: black; padding: 2px 6px; border-radius: 4px; font-size: 12px;">Gene</span>',
-                    sanitize=False,
-                )
-                ui.label("(genic - no border)").classes("text-xs text-gray-600")
-            with ui.row().classes("gap-2 items-center"):
-                ui.html(
-                    '<span class="q-badge" style="background-color: #8b0000; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">Gene</span>',
-                    sanitize=False,
-                )
-                ui.label("(color indicates geneset importance)").classes(
-                    "text-xs text-gray-600"
-                )
+        # Gene badge legend: the user's tiers, plus the exonic border
+        ui.html(
+            tier_legend_html(get_gene_scorer(), exonic_border=True), sanitize=False
+        ).classes("mt-3")
 
         # CNV call legend
         with ui.row().classes("gap-4 mt-2 items-center"):
@@ -355,106 +341,32 @@ def render_wisecondorx_subtab(
             # Add gene badge information for all rows
             gene_scorer = get_gene_scorer()
             for row in all_rows:
-                # Process main gene column
-                gene_str = row.get("gene", "")
-                if gene_str and gene_str != "-":
-                    # Parse gene string format: "SYMBOL:type,SYMBOL2:type"
-                    gene_badges = []
-                    for gene_part in str(gene_str).split(","):
-                        if ":" in gene_part:
-                            symbol = gene_part.split(":")[0].strip()
-                            gene_type = gene_part.split(":")[1].strip()
-                        else:
-                            symbol = gene_part.strip()
-                            gene_type = ""
+                # Main gene column: "SYMBOL:type,SYMBOL2:type"; exonic genes
+                # get a black border.
+                symbols, exonic = [], set()
+                for gene_part in split_genes(row.get("gene", ""), ","):
+                    symbol, _, gene_type = gene_part.partition(":")
+                    symbol = symbol.strip()
+                    if symbol and symbol != "-":
+                        symbols.append(symbol)
+                        if gene_type.strip() == "exonic":
+                            exonic.add(symbol)
+                row["GeneBadges"] = build_gene_badges(
+                    symbols, gene_scorer, bordered=exonic
+                )
 
-                        if symbol:
-                            score, _ = gene_scorer.get_gene_score_and_sets(symbol)
-                            color = gene_scorer.get_gene_color(symbol)
-                            tooltip = gene_scorer.get_gene_tooltip(symbol)
-                            is_exonic = gene_type.strip() == "exonic"
-                            gene_badges.append(
-                                {
-                                    "label": symbol,
-                                    "color": color,
-                                    "tooltip": tooltip,
-                                    "type": gene_type,
-                                    "score": score,
-                                    "borderColor": "black" if is_exonic else None,
-                                }
-                            )
-
-                    # Sort by score (descending)
-                    gene_badges.sort(key=lambda x: x["score"], reverse=True)
-
-                    # Limit to first 6 genes and add "+X genes" indicator if needed
-                    total_genes = len(gene_badges)
-                    if total_genes > 6:
-                        gene_badges = gene_badges[:6]
-                        # Add a "+X genes" badge
-                        remaining_count = total_genes - 6
-                        gene_badges.append(
-                            {
-                                "label": f"+{remaining_count} genes",
-                                "color": "#9e9e9e",  # grey color
-                                "tooltip": f"{remaining_count} more genes",
-                                "type": "",
-                            }
-                        )
-
-                    row["GeneBadges"] = gene_badges
-                else:
-                    row["GeneBadges"] = []
-
-                # Process genic_symbol, exonic_symbol columns
-                for col_name in ["genic_symbol", "exonic_symbol"]:
-                    col_value = row.get(col_name, "")
-                    if col_value and col_value != "-":
-                        badges = []
-                        symbols = [
-                            s.strip() for s in str(col_value).split(",") if s.strip()
-                        ]
-                        for symbol in symbols:
-                            color = gene_scorer.get_gene_color(symbol)
-                            tooltip = gene_scorer.get_gene_tooltip(symbol)
-                            is_exonic = col_name == "exonic_symbol"
-                            badges.append(
-                                {
-                                    "label": symbol,
-                                    "color": color,
-                                    "tooltip": tooltip,
-                                    "isExonic": is_exonic,
-                                    "borderColor": "black" if is_exonic else None,
-                                }
-                            )
-                        row[f"{col_name}_badges"] = badges
-                    else:
-                        row[f"{col_name}_badges"] = []
-
-                # Process genic_ensg, exonic_ensg, VEP_Gene columns (ENSG IDs)
-                for col_name in ["genic_ensg", "exonic_ensg", "VEP_Gene"]:
-                    col_value = row.get(col_name, "")
-                    if col_value and col_value != "-":
-                        badges = []
-                        ensgs = [
-                            e.strip() for e in str(col_value).split(",") if e.strip()
-                        ]
-                        for ensg in ensgs:
-                            color = gene_scorer.get_gene_color(ensg)
-                            tooltip = gene_scorer.get_gene_tooltip(ensg)
-                            is_exonic = col_name == "exonic_ensg"
-                            badges.append(
-                                {
-                                    "label": ensg,
-                                    "color": color,
-                                    "tooltip": tooltip,
-                                    "isExonic": is_exonic,
-                                    "borderColor": "black" if is_exonic else None,
-                                }
-                            )
-                        row[f"{col_name}_badges"] = badges
-                    else:
-                        row[f"{col_name}_badges"] = []
+                # genic/exonic symbol and ENSG columns, one badge per gene
+                for col_name in _GENE_BADGE_COLUMNS:
+                    idents = [
+                        g for g in split_genes(row.get(col_name, ""), ",") if g != "-"
+                    ]
+                    row[f"{col_name}_badges"] = build_gene_badges(
+                        idents,
+                        gene_scorer,
+                        cap=None,
+                        sort=False,
+                        bordered=idents if col_name.startswith("exonic") else (),
+                    )
 
         # Initial load of validations
         reload_validations()

@@ -8,6 +8,7 @@ presets:
       - Variant
       - VEP_Consequence
       - VEP_SYMBOL
+      - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
       - sample
@@ -24,6 +25,7 @@ presets:
       - Variant
       - VEP_Consequence
       - VEP_SYMBOL
+      - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
       - nhomalt_genomes
@@ -41,6 +43,7 @@ presets:
     columns:
       - Variant
       - VEP_SYMBOL
+      - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
       - MPC
@@ -61,6 +64,7 @@ presets:
       - Variant
       - VEP_Consequence
       - VEP_SYMBOL
+      - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
       - SpliceAI_maxDS
@@ -79,6 +83,7 @@ presets:
       - Variant
       - VEP_Consequence
       - VEP_SYMBOL
+      - MOI
       - svlen
       - sample
       - sample_gt

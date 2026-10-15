@@ -15,7 +15,11 @@ from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
 from genetics_viz.utils.diagnostic_files import DIAGNOSTIC_TYPES, diagnostic_paths
-from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.gene_scoring import (
+    build_gene_badges,
+    get_gene_scorer,
+    split_genes,
+)
 from genetics_viz.utils.str_eh import status_info
 from genetics_viz.utils.vep import format_consequence_display, get_consequence_color
 from genetics_viz.utils.wisecondorx import WISECONDORX_CONFIG
@@ -140,40 +144,9 @@ async def diagnostic_all_page() -> None:
                 gene_scorer = get_gene_scorer()
                 for row in diagnostics_data:
                     # Gene badges
-                    gene_str = row.get("Gene", "")
-                    if gene_str:
-                        gene_badges = []
-                        # SNVs: single symbol; SVs: comma-separated
-                        for part in str(gene_str).split(","):
-                            symbol = part.strip()
-                            if symbol:
-                                score, _ = gene_scorer.get_gene_score_and_sets(symbol)
-                                color = gene_scorer.get_gene_color(symbol)
-                                tooltip = gene_scorer.get_gene_tooltip(symbol)
-                                gene_badges.append(
-                                    {
-                                        "label": symbol,
-                                        "color": color,
-                                        "tooltip": tooltip,
-                                        "score": score,
-                                    }
-                                )
-                        # Sort by score descending
-                        gene_badges.sort(key=lambda x: x["score"], reverse=True)
-                        # Truncate to 6 + "+X genes"
-                        total = len(gene_badges)
-                        if total > 6:
-                            gene_badges = gene_badges[:6]
-                            gene_badges.append(
-                                {
-                                    "label": f"+{total - 6} genes",
-                                    "color": "#9e9e9e",
-                                    "tooltip": f"{total - 6} more genes",
-                                }
-                            )
-                        row["GeneBadges"] = gene_badges
-                    else:
-                        row["GeneBadges"] = []
+                    row["GeneBadges"] = build_gene_badges(
+                        split_genes(row.get("Gene", ""), ","), gene_scorer
+                    )
 
                     # Impact badges
                     impact_str = row.get("Impact", "")

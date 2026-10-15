@@ -40,7 +40,13 @@ from genetics_viz.pages.cohort.components.wombat_tab import (
 )
 from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
-from genetics_viz.utils.gene_scoring import GeneScorer, get_gene_scorer
+from genetics_viz.utils.gene_scoring import (
+    GeneScorer,
+    build_gene_badges,
+    gene_badges_html,
+    get_gene_scorer,
+    split_genes,
+)
 
 
 def _parse_sv_cytoband(variant: str) -> str:
@@ -60,38 +66,14 @@ def _parse_sv_cytoband(variant: str) -> str:
 
 
 def _render_sv_gene_badges(gene_str: str, gene_scorer: GeneScorer) -> None:
-    """Render gene badges for an SV entry, sorted by descending geneset score.
+    """Render the gene badges of a diagnostic entry, best tier first.
 
-    Shows up to 6 genes as colored badges, then a "+X genes" overflow label.
-    Mirrors the pattern used in svs_tab.py for DataTable gene badges.
+    Takes SV ``SYMBOL:type`` lists as well as plain symbols. Shows up to six
+    genes, then a "+N genes" badge linking to all of them in GeneTrek.
     """
-    genes = []
-    for gene_part in str(gene_str).split(","):
-        gene_part = gene_part.strip()
-        if not gene_part or gene_part == "-":
-            continue
-        # Handle "SYMBOL:type" format
-        symbol = gene_part.split(":")[0].strip()
-        if symbol:
-            score, _ = gene_scorer.get_gene_score_and_sets(symbol)
-            color = gene_scorer.get_gene_color(symbol)
-            tooltip = gene_scorer.get_gene_tooltip(symbol)
-            genes.append(
-                {"symbol": symbol, "score": score, "color": color, "tooltip": tooltip}
-            )
-
-    # Sort by score descending
-    genes.sort(key=lambda g: g["score"], reverse=True)
-
-    total = len(genes)
-    display_genes = genes[:6]
-
-    for g in display_genes:
-        ui.badge(g["symbol"], color=g["color"]).classes("text-xs").tooltip(g["tooltip"])
-
-    if total > 6:
-        remaining = total - 6
-        ui.label(f"+{remaining} genes").classes("text-xs text-gray-500 italic")
+    symbols = [part.split(":")[0].strip() for part in split_genes(gene_str, ",")]
+    badges = build_gene_badges([s for s in symbols if s and s != "-"], gene_scorer)
+    ui.html(gene_badges_html(badges), sanitize=False)
 
 
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
@@ -367,13 +349,9 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                                         # Gene display: badges for SVs, plain label for SNVs
                                         gene_str = entry.get("Gene", "")
-                                        if gene_str and is_sv:
+                                        if gene_str:
                                             _render_sv_gene_badges(
                                                 gene_str, gene_scorer
-                                            )
-                                        elif gene_str:
-                                            ui.label(gene_str).classes(
-                                                "text-xs text-blue-700 font-medium"
                                             )
 
                                         ui.space()
@@ -476,6 +454,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                 cohort_name=cohort_name,
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                family=family,
                             )
                         else:
                             with ui.column().classes(

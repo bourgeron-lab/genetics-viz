@@ -21,6 +21,7 @@ from nicegui import ui
 from genetics_viz.config_model import load_config
 from genetics_viz.utils.change_monitor import start_polling, stop_polling
 from genetics_viz.utils.data import get_static_prefix_map, init_all_data_stores
+from genetics_viz.utils.genetrek import start_refresh, stop_refresh
 
 # Import pages to register routes — this triggers all @ui.page decorators.
 from genetics_viz.pages import (  # noqa: F401
@@ -99,6 +100,10 @@ def _init_from_config(config_file: Path) -> None:
 
     nicegui_app.on_startup(lambda: start_polling(interval=config.poll_interval))
     nicegui_app.on_shutdown(stop_polling)
+    # GeneTrek snapshot: the disk cache first, then the current release,
+    # both off the event loop. Pages render with neutral badges meanwhile.
+    nicegui_app.on_startup(start_refresh)
+    nicegui_app.on_shutdown(stop_refresh)
 
 
 # Auto-initialize when module is reloaded (for --reload mode)

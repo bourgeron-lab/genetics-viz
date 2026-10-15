@@ -344,6 +344,26 @@
     padding: 2px 6px;
 }
 
+/* Gene badges link to GeneTrek. */
+a.dt-gene-badge {
+    text-decoration: none;
+    cursor: pointer;
+}
+
+a.dt-gene-badge:hover {
+    outline: 2px solid rgba(0, 0, 0, 0.35);
+    outline-offset: 1px;
+}
+
+/* The floating tooltip showing a gene badge's multi-line text. */
+.dt-val-tooltip-floating.dt-gene-tip {
+    white-space: pre-line;
+    max-width: 480px;
+    padding: 6px 10px;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
 .dt-score-badge {
     padding: 2px 6px;
     font-variant-numeric: tabular-nums;

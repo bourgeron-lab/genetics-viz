@@ -588,7 +588,10 @@ class DataTable {
             if (this.selection) {
                 var self = this;
                 (function(rowData) {
-                    tr.addEventListener('click', function() {
+                    tr.addEventListener('click', function(e) {
+                        // A link in the row (a gene badge opening GeneTrek)
+                        // must not also select the row.
+                        if (e.target.closest('a')) return;
                         self._handleRowSelection(rowData);
                     });
                     tr.style.cursor = 'pointer';
@@ -779,9 +782,14 @@ class DataTable {
         var html = '<div class="dt-badge-wrap">';
         for (var i = 0; i < badges.length; i++) {
             var b = badges[i];
-            var textColor = b.color === '#ffffff' ? 'black' : 'white';
+            var textColor = b.textColor || (b.color === '#ffffff' ? 'black' : 'white');
             html += '<span class="dt-badge" style="background-color: ' + b.color + '; color: ' + textColor + ';"';
-            if (b.tooltip) html += ' data-tooltip="' + this._escapeAttr(b.tooltip) + '"';
+            if (b.tooltip) {
+                // A multi-line tooltip goes to the floating tooltip; the CSS
+                // one is a single clipped line.
+                var attr = b.tooltip.indexOf('\n') !== -1 ? 'data-gene-tip' : 'data-tooltip';
+                html += ' ' + attr + '="' + this._escapeAttr(b.tooltip) + '"';
+            }
             html += '>' + this._escapeHtml(b.label) + '</span>';
         }
         html += '</div>';
@@ -797,12 +805,21 @@ class DataTable {
         var html = '<div class="dt-badge-wrap">';
         for (var i = 0; i < badges.length; i++) {
             var b = badges[i];
-            var textColor = b.color === '#ffffff' ? 'black' : 'white';
-            var borderStyle = '';
-            if (b.borderColor) borderStyle = 'border: 2px solid ' + b.borderColor + ';';
-            html += '<span class="dt-badge dt-gene-badge" style="background-color: ' + b.color + '; color: ' + textColor + '; ' + borderStyle + '"';
-            if (b.tooltip) html += ' data-tooltip="' + this._escapeAttr(b.tooltip) + '"';
-            html += '>' + this._escapeHtml(b.label) + '</span>';
+            var textColor = b.textColor || (b.color === '#ffffff' ? 'black' : 'white');
+            var style = 'background-color: ' + b.color + '; color: ' + textColor + ';';
+            if (b.borderColor) style += ' border: 2px solid ' + b.borderColor + ';';
+            // Multi-line tooltip: shown by the floating tooltip, not the CSS
+            // one, which is single-line and clipped by the cell.
+            var tip = b.tooltip ? ' data-gene-tip="' + this._escapeAttr(b.tooltip) + '"' : '';
+            var label = this._escapeHtml(b.label);
+            if (b.href) {
+                html += '<a class="dt-badge dt-gene-badge" href="' + this._escapeAttr(b.href) +
+                    '" target="_blank" rel="noopener noreferrer" style="' + style + '"' + tip + '>' +
+                    label + '</a>';
+            } else {
+                html += '<span class="dt-badge dt-gene-badge" style="' + style + '"' + tip + '>' +
+                    label + '</span>';
+            }
         }
         html += '</div>';
         return html;
@@ -1065,13 +1082,20 @@ class DataTable {
 
     _bindValTooltip(scrollContainer) {
         scrollContainer.addEventListener('mouseenter', function(e) {
-            var wrap = e.target.closest('.dt-val-wrap') || e.target.closest('.dt-diag-wrap');
-            if (!wrap) return;
-            var src = wrap.querySelector('.dt-val-tooltip');
-            if (!src) return;
-
+            if (!e.target.closest) return;
             var tip = DataTable._getFloatingTooltip();
-            tip.innerHTML = src.innerHTML;
+            var wrap = e.target.closest('[data-gene-tip]');
+            if (wrap) {
+                tip.textContent = wrap.getAttribute('data-gene-tip');
+                tip.classList.add('dt-gene-tip');
+            } else {
+                wrap = e.target.closest('.dt-val-wrap') || e.target.closest('.dt-diag-wrap');
+                if (!wrap) return;
+                var src = wrap.querySelector('.dt-val-tooltip');
+                if (!src) return;
+                tip.innerHTML = src.innerHTML;
+                tip.classList.remove('dt-gene-tip');
+            }
 
             var rect = wrap.getBoundingClientRect();
             tip.style.display = 'block';
@@ -1093,7 +1117,9 @@ class DataTable {
         }, true);
 
         scrollContainer.addEventListener('mouseleave', function(e) {
-            var wrap = e.target.closest('.dt-val-wrap') || e.target.closest('.dt-diag-wrap');
+            if (!e.target.closest) return;
+            var wrap = e.target.closest('[data-gene-tip]') ||
+                e.target.closest('.dt-val-wrap') || e.target.closest('.dt-diag-wrap');
             if (!wrap) return;
             var tip = document.getElementById('dt-val-floating-tooltip');
             if (tip) tip.style.display = 'none';

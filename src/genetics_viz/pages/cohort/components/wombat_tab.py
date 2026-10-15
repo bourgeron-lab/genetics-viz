@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import polars as pl
 from nicegui import ui
@@ -13,7 +13,10 @@ from nicegui import ui
 from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.utils.tsv import read_tsv_or_none
-from genetics_viz.components.filters import create_validation_filter_menu
+from genetics_viz.components.filters import (
+    create_geneset_filter_menu,
+    create_validation_filter_menu,
+)
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
 from genetics_viz.components.diagnostic_loader import (
@@ -35,15 +38,26 @@ from genetics_viz.utils.column_names import (
     get_schema_overrides,
     reorder_columns_by_group,
 )
-from genetics_viz.utils.gene_scoring import get_gene_scorer
-from genetics_viz.utils.genesets import load_genesets
+from genetics_viz.utils.gene_scoring import (
+    build_gene_badges,
+    get_gene_scorer,
+    split_genes,
+)
+from genetics_viz.utils.genesets import (
+    cell_matches,
+    geneset_sources,
+    selected_symbols,
+)
 from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.clinvar import (
     CLINVAR_COLORS,
     format_clinvar_display,
     get_clinvar_color,
 )
+from genetics_viz.utils.genetrek import get_snapshot
+from genetics_viz.utils.inheritance import annotate_moi, family_pedigree
 from genetics_viz.utils.wombat import aggregate_by_variant
+from genetics_viz.models import Family
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
     format_consequence_display,
@@ -79,6 +93,7 @@ def render_wombat_tab(
     cohort_name: str,
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
+    family: Optional[Family] = None,
 ) -> None:
     """Render the Wombat tab panel content.
 
@@ -88,6 +103,8 @@ def render_wombat_tab(
         cohort_name: Cohort name
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
+        family: The family's pedigree, for the MOI column's sex and parental
+            phenotypes
     """
     wombat_dir = get_family_path(store.data_dir, family_id) / "wombat"
 
@@ -103,7 +120,7 @@ def render_wombat_tab(
     )
 
     wombat_files = []
-    for tsv_file in wombat_dir.glob("*.tsv"):
+    for tsv_file in sorted(wombat_dir.glob("*.tsv")):
         match = pattern.match(tsv_file.name)
         if match:
             vep_config = match.group(1)
@@ -122,8 +139,9 @@ def render_wombat_tab(
         ).classes("text-gray-500 italic")
         return
 
-    # Load genesets from params/genesets (once, shared across all configs)
-    available_genesets = load_genesets(store.data_dir)
+    # Gene sets for the filter menu (shared across all configs): the user's
+    # tiers, GeneTrek's lists and the data directory's params/genesets/*.tsv
+    available_genesets = geneset_sources(store.data_dir, get_gene_scorer())
 
     # Create dictionaries to store data for each wombat config
     wombat_data: Dict[str, Dict[str, Any]] = {}
@@ -158,7 +176,7 @@ def render_wombat_tab(
             config_has_data[wf["wombat_config"]] = False
 
     # Create subtabs — disable empty ones, add variant count badges
-    with ui.tabs().classes("w-full") as wombat_subtabs:
+    with ui.tabs().classes("w-full").mark("wombat-subtabs") as wombat_subtabs:
         subtab_refs = {}
         for wf in wombat_files:
             cname = wf["wombat_config"]
@@ -173,14 +191,20 @@ def render_wombat_tab(
             subtab_refs[cname] = tab
 
     # Pick first enabled sub-tab as default
-    first_active = next(
+    first_active_name = next(
         (
-            subtab_refs[wf["wombat_config"]]
+            wf["wombat_config"]
             for wf in wombat_files
             if config_has_data.get(wf["wombat_config"], False)
         ),
-        list(subtab_refs.values())[0],
+        wombat_files[0]["wombat_config"],
     )
+    first_active = subtab_refs[first_active_name]
+
+    # Each sub-tab is built the first time it is shown, as the family page's
+    # tabs are: a config nobody opens costs nothing. Keyed by config name,
+    # which is the tab name the "update:model-value" event reports.
+    unbuilt_panels: Dict[str, tuple] = {}
 
     with (
         ui.tab_panels(wombat_subtabs, value=first_active)
@@ -188,13 +212,17 @@ def render_wombat_tab(
         .classes("w-full")
     ):
         for wf in wombat_files:
-            with ui.tab_panel(subtab_refs[wf["wombat_config"]]):
-                config_name = wf["wombat_config"]
-
+            config_name = wf["wombat_config"]
+            with ui.tab_panel(subtab_refs[config_name]):
                 if not config_has_data.get(config_name, False):
                     ui.label("No variants found").classes("text-gray-500 italic mt-4")
                     continue
 
+                with ui.element("div").classes("w-full") as panel_slot:
+                    with ui.column().classes("w-full items-center py-16"):
+                        ui.spinner(size="xl", color="blue")
+
+            def build_panel(wf=wf, config_name=config_name) -> None:
                 df = config_dfs[config_name]
 
                 with ui.card().classes("w-full p-4"):
@@ -318,50 +346,17 @@ def render_wombat_tab(
                         else:
                             row["ClinVarBadges"] = []
 
-                        # Add gene badges with color coding based on genesets
+                        # Gene badges, coloured by the user's GeneTrek tiers
                         gene_scorer = get_gene_scorer()
-
-                        # Process VEP_SYMBOL
-                        symbol_str = row.get("VEP_SYMBOL", "")
-                        if symbol_str:
-                            symbols = [
-                                s.strip()
-                                for s in str(symbol_str).split(",")
-                                if s.strip()
-                            ]
-                            row["GeneBadges"] = []
-                            for symbol in symbols:
-                                color = gene_scorer.get_gene_color(symbol)
-                                tooltip = gene_scorer.get_gene_tooltip(symbol)
-                                row["GeneBadges"].append(
-                                    {
-                                        "label": symbol,
-                                        "color": color,
-                                        "tooltip": tooltip,
-                                    }
-                                )
-                        else:
-                            row["GeneBadges"] = []
-
-                        # Process VEP_Gene (ENSG IDs)
-                        gene_str = row.get("VEP_Gene", "")
-                        if gene_str:
-                            genes = [
-                                g.strip() for g in str(gene_str).split(",") if g.strip()
-                            ]
-                            row["VEP_Gene_badges"] = []
-                            for gene in genes:
-                                color = gene_scorer.get_gene_color(gene)
-                                tooltip = gene_scorer.get_gene_tooltip(gene)
-                                row["VEP_Gene_badges"].append(
-                                    {
-                                        "label": gene,
-                                        "color": color,
-                                        "tooltip": tooltip,
-                                    }
-                                )
-                        else:
-                            row["VEP_Gene_badges"] = []
+                        row["GeneBadges"] = build_gene_badges(
+                            split_genes(row.get("VEP_SYMBOL", "")), gene_scorer
+                        )
+                        row["VEP_Gene_badges"] = build_gene_badges(
+                            split_genes(row.get("VEP_Gene", ""), ","),
+                            gene_scorer,
+                            cap=None,
+                            sort=False,
+                        )
 
                         add_validation_status_to_row(
                             row, validation_map, variant_key, sample_id
@@ -406,9 +401,16 @@ def render_wombat_tab(
                             position="top",
                         )
 
+                    # MOI: does each variant fit its gene's mode of inheritance?
+                    annotate_moi(
+                        all_rows,
+                        get_snapshot(),
+                        pedigree=family_pedigree(family.samples if family else []),
+                    )
+
                     # All available columns (add Variant and Validation columns, exclude n_grouped from display)
                     all_columns = reorder_columns_by_group(
-                        ["Variant"]
+                        ["Variant", "MOI"]
                         + [
                             col
                             for col in df.columns
@@ -457,7 +459,6 @@ def render_wombat_tab(
                         "sorting": [],
                         "page": 0,
                     }
-                    wombat_data[config_name]["_geneset_cbs"] = {}
                     wombat_data[config_name]["_impact_cbs"] = {}
 
                     # Create a container for the data table
@@ -527,189 +528,15 @@ def render_wombat_tab(
                                         "gap-2 items-center flex-wrap"
                                     ):
                                         # Genesets filter
-                                        if available_genesets:
-                                            geneset_btn_ref: Dict[str, Any] = {
-                                                "button": None
-                                            }
-
-                                            geneset_btn = ui.button(
-                                                "Genesets", icon="list"
-                                            ).props("outline")
-                                            geneset_btn_ref["button"] = geneset_btn
-
-                                            with geneset_btn:
-                                                with ui.menu():
-                                                    ui.label(
-                                                        "Select Genesets:"
-                                                    ).classes(
-                                                        "px-4 py-2 font-semibold text-sm"
-                                                    )
-                                                    ui.separator()
-
-                                                    with ui.column().classes("p-2"):
-                                                        with ui.row().classes(
-                                                            "gap-2 mb-2"
-                                                        ):
-
-                                                            def select_all_genesets(
-                                                                _e=None,
-                                                                cfg=config_name,
-                                                            ):
-                                                                wombat_data[cfg][
-                                                                    "selected_genesets"
-                                                                ]["value"] = list(
-                                                                    available_genesets.keys()
-                                                                )
-                                                                for cb in wombat_data[
-                                                                    cfg
-                                                                ][
-                                                                    "_geneset_cbs"
-                                                                ].values():
-                                                                    cb.value = True
-                                                                if geneset_btn_ref[
-                                                                    "button"
-                                                                ]:
-                                                                    geneset_btn_ref[
-                                                                        "button"
-                                                                    ].props(
-                                                                        remove="outline",
-                                                                        add="unelevated color=green",
-                                                                    )
-                                                                    geneset_btn_ref[
-                                                                        "button"
-                                                                    ].update()
-                                                                wombat_data[cfg][
-                                                                    "_refresh"
-                                                                ]["fn"]()
-
-                                                            def select_no_genesets(
-                                                                _e=None,
-                                                                cfg=config_name,
-                                                            ):
-                                                                wombat_data[cfg][
-                                                                    "selected_genesets"
-                                                                ]["value"] = []
-                                                                for cb in wombat_data[
-                                                                    cfg
-                                                                ][
-                                                                    "_geneset_cbs"
-                                                                ].values():
-                                                                    cb.value = False
-                                                                if geneset_btn_ref[
-                                                                    "button"
-                                                                ]:
-                                                                    geneset_btn_ref[
-                                                                        "button"
-                                                                    ].props(
-                                                                        remove="unelevated color=green",
-                                                                        add="outline",
-                                                                    )
-                                                                    geneset_btn_ref[
-                                                                        "button"
-                                                                    ].update()
-                                                                wombat_data[cfg][
-                                                                    "_refresh"
-                                                                ]["fn"]()
-
-                                                            ui.button(
-                                                                "All",
-                                                                on_click=select_all_genesets,
-                                                            ).props(
-                                                                "size=sm flat dense"
-                                                            ).classes("text-xs")
-                                                            ui.button(
-                                                                "None",
-                                                                on_click=select_no_genesets,
-                                                            ).props(
-                                                                "size=sm flat dense"
-                                                            ).classes("text-xs")
-
-                                                        ui.separator()
-
-                                                        for gs_name in sorted(
-                                                            available_genesets.keys()
-                                                        ):
-
-                                                            def make_geneset_handler(
-                                                                name,
-                                                                cfg=config_name,
-                                                            ):
-                                                                def handler(e):
-                                                                    if e.value:
-                                                                        if (
-                                                                            name
-                                                                            not in wombat_data[
-                                                                                cfg
-                                                                            ][
-                                                                                "selected_genesets"
-                                                                            ]["value"]
-                                                                        ):
-                                                                            wombat_data[
-                                                                                cfg
-                                                                            ][
-                                                                                "selected_genesets"
-                                                                            ][
-                                                                                "value"
-                                                                            ].append(
-                                                                                name
-                                                                            )
-                                                                    else:
-                                                                        if (
-                                                                            name
-                                                                            in wombat_data[
-                                                                                cfg
-                                                                            ][
-                                                                                "selected_genesets"
-                                                                            ]["value"]
-                                                                        ):
-                                                                            wombat_data[
-                                                                                cfg
-                                                                            ][
-                                                                                "selected_genesets"
-                                                                            ][
-                                                                                "value"
-                                                                            ].remove(
-                                                                                name
-                                                                            )
-                                                                    if geneset_btn_ref[
-                                                                        "button"
-                                                                    ]:
-                                                                        if wombat_data[
-                                                                            cfg
-                                                                        ][
-                                                                            "selected_genesets"
-                                                                        ]["value"]:
-                                                                            geneset_btn_ref[
-                                                                                "button"
-                                                                            ].props(
-                                                                                remove="outline",
-                                                                                add="unelevated color=green",
-                                                                            )
-                                                                        else:
-                                                                            geneset_btn_ref[
-                                                                                "button"
-                                                                            ].props(
-                                                                                remove="unelevated color=green",
-                                                                                add="outline",
-                                                                            )
-                                                                        geneset_btn_ref[
-                                                                            "button"
-                                                                        ].update()
-                                                                    wombat_data[cfg][
-                                                                        "_refresh"
-                                                                    ]["fn"]()
-
-                                                                return handler
-
-                                                            wombat_data[config_name][
-                                                                "_geneset_cbs"
-                                                            ][gs_name] = ui.checkbox(
-                                                                f"{gs_name} ({len(available_genesets[gs_name])} genes)",
-                                                                value=False,
-                                                                on_change=make_geneset_handler(
-                                                                    gs_name
-                                                                ),
-                                                            ).classes("text-sm")
+                                        create_geneset_filter_menu(
+                                            wombat_data[config_name][
+                                                "selected_genesets"
+                                            ],
+                                            available_genesets,
+                                            on_change=lambda cfg=config_name: (
+                                                wombat_data[cfg]["_refresh"]["fn"]()
+                                            ),
+                                        )
 
                                         # Impacts filter
                                         impact_btn_ref: Dict[str, Any] = {
@@ -1056,19 +883,13 @@ def render_wombat_tab(
                             # Apply geneset filter
                             selected_gs = data["selected_genesets"]["value"]
                             if selected_gs:
-                                combined_genes: set = set()
-                                for gs_name in selected_gs:
-                                    combined_genes.update(
-                                        available_genesets.get(gs_name, set())
-                                    )
+                                wanted = selected_symbols(
+                                    available_genesets, selected_gs
+                                )
                                 rows = [
                                     r
                                     for r in rows
-                                    if any(
-                                        s.strip().upper() in combined_genes
-                                        for s in str(r.get("VEP_SYMBOL", "")).split(",")
-                                        if s.strip()
-                                    )
+                                    if cell_matches(r.get("VEP_SYMBOL"), wanted)
                                 ]
 
                             # Apply impact filter (only if not all selected)
@@ -1141,6 +962,10 @@ def render_wombat_tab(
                                     elif col == "VEP_Gene":
                                         col_def["cellType"] = "gene_badge"
                                         col_def["badgesField"] = "VEP_Gene_badges"
+                                    elif col == "MOI":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "MoiBadges"
+                                        col_def["sortField"] = "_moi_rank"
                                     else:
                                         col_type = get_column_type(col)
                                         if col_type in ("int", "float"):
@@ -1895,3 +1720,21 @@ def render_wombat_tab(
                     ui.label("No data available").classes("text-gray-500 italic mt-4")
                 except Exception as e:
                     ui.label(f"Error reading file: {e}").classes("text-red-500 mt-4")
+
+            unbuilt_panels[config_name] = (panel_slot, build_panel)
+
+    def build_subtab(config_name: str) -> None:
+        entry = unbuilt_panels.pop(config_name, None)
+        if entry is None:
+            return
+        panel_slot, build_panel = entry
+        panel_slot.clear()
+        with panel_slot:
+            build_panel()
+
+    def on_subtab_change(e) -> None:
+        if e.args in unbuilt_panels:
+            ui.timer(0.1, lambda: build_subtab(e.args), once=True)
+
+    wombat_subtabs.on("update:model-value", on_subtab_change)
+    build_subtab(first_active_name)

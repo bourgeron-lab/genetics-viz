@@ -7,7 +7,6 @@ from genetics_viz.utils import (
     clinvar,
     column_names,
     cytobands,
-    gene_scoring,
     locus,
     pedigree_labels,
     score_colors,
@@ -152,16 +151,6 @@ def test_every_pedigree_code_has_a_label_and_colour():
         )
     for code in pedigree_labels.SEX_ORDER:
         assert code in pedigree_labels.SEX_LABELS and code in pedigree_labels.SEX_COLORS
-
-
-def test_gene_scoring_colours_and_lookup():
-    scorer = gene_scoring.get_gene_scorer()
-    assert gene_scoring.GeneScorer.score_to_color(0) == "#ffffff"
-    assert gene_scoring.GeneScorer.score_to_color(
-        100
-    ) == gene_scoring.GeneScorer.score_to_color(8)
-    assert scorer.get_gene_score_and_sets("NOT_A_GENE_XYZ") == (0.0, [])
-    assert gene_scoring.get_gene_scorer() is scorer
 
 
 def test_schema_overrides_use_polars_types():

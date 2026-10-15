@@ -15,7 +15,10 @@ exercise the traps found so far:
   role-dependent ROH wording has something to hide;
 - ExpansionHunter tables with a child's expansion above both parents, an AR
   carrier, a male's single chrX allele, a ``LowDepth`` call and a locus with no
-  thresholds; family 1002 has no STR results at all.
+  thresholds; family 1002 has no STR results at all;
+- a GeneTrek snapshot cache with a renamed gene (``KIAA1109`` -> ``BLTP1``), an
+  alias shared by two genes, versioned lists and a gene whose sources disagree
+  on its mode of inheritance; and Wombat rows for each MOI verdict.
 """
 
 import gzip
@@ -523,4 +526,142 @@ def build_data_dir(root: Path) -> Path:
         if fid != "1002":
             str_rows += build_str_results(data, fid, members)
     build_cohort_str_results(demo, "DEMO", str_rows)
+    build_wombat_results(data)
     return data
+
+
+# ---------------------------------------------------------------------------
+# GeneTrek snapshot and Wombat results
+# ---------------------------------------------------------------------------
+
+GENETREK_RELEASE = "test-release"
+
+#: GeneTrek's field list, trimmed to what the app reads, in the API's shape.
+GENETREK_FIELDS: List[Dict] = [
+    {"name": "hgnc_symbol", "category": "Gene identity", "value_type": "string", "id_type": "symbol"},
+    {"name": "hgnc_name", "category": "Gene identity", "value_type": "string"},
+    {"name": "hgnc_prev_symbol", "category": "Gene identity", "value_type": "string"},
+    {"name": "hgnc_alias_symbol", "category": "Gene identity", "value_type": "string"},
+    {"name": "ensg", "category": "Gene identity", "value_type": "string", "id_type": "ensg"},
+    {"name": "loeuf", "category": "Constraint", "value_type": "float"},
+    {"name": "eagle_score", "category": "Gene lists", "value_type": "categorical"},
+    {"name": "hc_ndd_v7", "fullname": "High-confidence NDD v7", "category": "Gene lists",
+     "subcategory": "GeneTrek", "visibility": "primary", "value_type": "boolean",
+     "aliases": ["hc_ndd"], "n_genes": 3, "description": "High-confidence NDD genes"},
+    {"name": "hc_ndd_v6", "fullname": "High-confidence NDD v6", "category": "Gene lists",
+     "subcategory": "GeneTrek", "visibility": "secondary", "value_type": "boolean",
+     "n_genes": 2},
+    {"name": "sfari_1", "fullname": "SFARI 1", "category": "Gene lists",
+     "subcategory": "Autism", "visibility": "secondary", "value_type": "boolean",
+     "aliases": [], "n_genes": 1},
+    {"name": "constraint", "fullname": "Constrained genes", "category": "Constraint",
+     "visibility": "primary", "value_type": "boolean", "n_genes": 2,
+     "derived_from": ["loeuf"]},
+    {"name": "syngo", "fullname": "SynGO", "category": "Function",
+     "visibility": "primary", "value_type": "boolean", "n_genes": 1},
+    {"name": "inheritance", "fullname": "Mode of inheritance", "category": "Inheritance",
+     "value_type": "categorical"},
+    {"name": "inheritance_panelapp_t", "fullname": "Mode of inheritance from PanelApp",
+     "category": "Inheritance", "value_type": "categorical"},
+]  # fmt: skip
+
+#: symbol, name, prev, alias, ensg, loeuf, eagle, hc7, hc6, sfari, constraint,
+#: syngo, inheritance, inheritance_panelapp
+GENETREK_GENES: List[Sequence] = [
+    ("SHANK3", "SH3 and ankyrin 3", None, "PROSAP2", "ENSG00000251322", 0.36, "Definitive",
+     True, True, True, True, True, "Autosomal Dominant", "Autosomal or pseudoautosomal dominant"),
+    ("BLTP1", "bridge-like lipid transfer 1", "KIAA1109", None, "ENSG00000138688", 0.62, None,
+     True, True, False, False, False, "Autosomal Recessive", None),
+    ("XRG", "an X-linked recessive gene", None, None, "ENSG00000000001", None, None,
+     True, False, False, False, False, "X-linked Recessive", None),
+    ("ARONLY", "a recessive gene", None, "SHARED", "ENSG00000000002", 0.9, None,
+     False, False, False, True, False, "Autosomal Recessive", None),
+    ("BOTH", "dominant in one source", None, "SHARED", "ENSG00000000003", 0.9, None,
+     False, False, False, False, False, "Autosomal Recessive", "Autosomal or pseudoautosomal dominant"),
+    ("PLAIN", "in no set", None, None, "ENSG00000000004", None, None,
+     False, False, False, False, False, None, None),
+]  # fmt: skip
+
+
+def genetrek_frame():
+    """GeneTrek's table for the genes above, typed as the API's parquet is."""
+    import polars as pl
+
+    names = [
+        "hgnc_symbol", "hgnc_name", "hgnc_prev_symbol", "hgnc_alias_symbol", "ensg",
+        "loeuf", "eagle_score", "hc_ndd_v7", "hc_ndd_v6", "sfari_1", "constraint",
+        "syngo", "inheritance", "inheritance_panelapp_t",
+    ]  # fmt: skip
+    df = pl.DataFrame([list(g) for g in GENETREK_GENES], schema=names, orient="row")
+    return df.with_columns(
+        pl.col("loeuf").cast(pl.Float32),
+        pl.col("eagle_score", "inheritance", "inheritance_panelapp_t").cast(
+            pl.Categorical
+        ),
+    )
+
+
+def build_genetrek_cache(cache_dir: Path) -> Path:
+    """The on-disk cache the app writes after a download."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    genetrek_frame().write_parquet(cache_dir / f"{GENETREK_RELEASE}.parquet")
+    (cache_dir / "fields.json").write_text(
+        json.dumps(
+            {
+                "release": GENETREK_RELEASE,
+                "fetched_at": "2026-10-01T12:00:00",
+                "fields": GENETREK_FIELDS,
+            }
+        )
+    )
+    return cache_dir
+
+
+WOMBAT_COLUMNS = [
+    "#CHROM", "POS", "REF", "ALT", "sample", "sex", "sample_gt", "father",
+    "mother", "father_gt", "mother_gt", "VEP_Consequence", "VEP_SYMBOL",
+    "VEP_Gene", "fafmax_faf95_max_genomes",
+]  # fmt: skip
+
+#: Family 1001's child S3 (male, affected; parents S1, S2 unaffected):
+#: an AD de novo, an AR compound het in trans (one row under the gene's old
+#: symbol), an X-linked recessive hemizygous call, an AR single het, and a
+#: gene GeneTrek gives no mode.
+WOMBAT_ROWS = [
+    ("chr22", 50674000, "G", "A", "S3", "1", "0/1", "S1", "S2", "0/0", "0/0",
+     "missense_variant", "SHANK3", "ENSG00000251322", 0.0),
+    ("chr7", 32000000, "C", "T", "S3", "1", "0/1", "S1", "S2", "0/1", "0/0",
+     "stop_gained", "KIAA1109", "ENSG00000138688", 0.0001),
+    ("chr7", 32100000, "A", "G", "S3", "1", "0|1", "S1", "S2", "0/0", "0/1",
+     "missense_variant", "BLTP1", "ENSG00000138688", 0.0002),
+    ("chrX", 70000000, "T", "C", "S3", "1", "1/1", "S1", "S2", "0/0", "0/1",
+     "missense_variant", "XRG", "ENSG00000000001", 0.0),
+    ("chr1", 1000, "A", "C", "S3", "1", "0/1", "S1", "S2", "0/1", "0/0",
+     "synonymous_variant", "ARONLY", "ENSG00000000002", 0.001),
+    ("chr2", 2000, "G", "T", "S3", "1", "0/1", "S1", "S2", "0/0", "0/1",
+     "missense_variant", "PLAIN", "ENSG00000000004", 0.001),
+]  # fmt: skip
+
+
+def build_wombat_results(data: Path) -> None:
+    """Family 1001's Wombat tables (two configs) and the DEMO cohort's."""
+    wombat = family_dir(data, "1001") / "wombat"
+    write_tsv(
+        wombat / "1001.rare.vep1.annotated.default.tsv", WOMBAT_COLUMNS, WOMBAT_ROWS
+    )
+    # A second config, so the family page has a second Wombat sub-tab
+    write_tsv(
+        wombat / "1001.rare.vep1.annotated.strict.tsv",
+        WOMBAT_COLUMNS,
+        WOMBAT_ROWS[:2],
+    )
+    write_tsv(
+        data / "cohorts" / "DEMO" / "wombat" / "DEMO.rare.vep1.default.results.tsv",
+        WOMBAT_COLUMNS,
+        WOMBAT_ROWS,
+    )
+    write_tsv(
+        data / "params" / "genesets" / "local_list.tsv",
+        ["gene"],
+        [("ARONLY",), ("PLAIN",)],
+    )

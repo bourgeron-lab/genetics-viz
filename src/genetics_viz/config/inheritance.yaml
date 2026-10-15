@@ -1,0 +1,52 @@
+# Mode-of-inheritance (MOI) consistency flag.
+#
+# A gene's modes come from GeneTrek's "Inheritance" fields (the combined call
+# plus each source's), read from the snapshot. A gene may carry several modes;
+# a variant is judged against each and the best verdict wins.
+
+# GeneTrek's raw values -> mode codes. A raw value missing here is logged once
+# and ignored; `~` ignores it silently.
+modes:
+  "Autosomal Dominant": AD
+  "Autosomal or pseudoautosomal dominant": AD
+  "Autosomal or pseudoautosomal dominant - paternally imprinted": AD
+  "Autosomal or pseudoautosomal dominant - maternally imprinted": AD
+  "Autosomal Recessive": AR
+  "Autosomal or pseudoautosomal recessive": AR
+  "X-linked Dominant": XLD
+  "X-linked Recessive": XLR
+  "X-linked other": XL
+  "Mitochondrial": MT
+  "Somatic": ~
+
+mode_labels:
+  AD: autosomal dominant
+  AR: autosomal recessive
+  XLD: X-linked dominant
+  XLR: X-linked recessive
+  XL: X-linked
+  MT: mitochondrial
+
+# Verdicts, best first. `rank` sorts the MOI column.
+statuses:
+  consistent:
+    label: "✓"
+    color: "#2e7d32"
+    text_color: white
+    rank: 3
+  possible:
+    label: "?"
+    color: "#f9a825"
+    text_color: black
+    rank: 2
+  inconsistent:
+    label: "✗"
+    color: "#9e9e9e"
+    text_color: white
+    rank: 1
+
+# Pseudoautosomal regions of chrX (GRCh38). A male is diploid there, so a call
+# inside them is read like an autosomal one.
+par_regions_grch38:
+  - [10001, 2781479]
+  - [155701383, 156030895]

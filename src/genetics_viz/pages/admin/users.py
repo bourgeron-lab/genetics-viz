@@ -15,6 +15,7 @@ from genetics_viz.config_model import (
     save_config,
 )
 from genetics_viz.utils.auth import check_auth, get_current_user, is_admin
+from genetics_viz.utils.user_preferences import remove_user_preferences
 
 
 @ui.page("/admin/users")
@@ -200,6 +201,7 @@ def admin_users_page() -> None:
                                                 if u.username != uname
                                             ]
                                             save_config(cfg)
+                                            remove_user_preferences(uname)
                                             ui.notify(
                                                 f"User {uname} removed",
                                                 type="positive",

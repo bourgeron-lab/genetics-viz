@@ -99,13 +99,13 @@ def test_column_types_are_known():
         assert spec.get("type", "string") in _TYPE_MAP, col
 
 
-def test_every_geneset_is_a_column_of_the_table():
-    columns = (CONFIG / "genesets.tsv").read_text().split("\n", 1)[0].split("\t")
-    for name, spec in load("genesets.yaml").items():
-        assert name in columns, name
-        assert HEX.match(spec["color"]) and isinstance(spec["score"], (int, float)), (
-            name
-        )
+def test_genetrek_config_is_well_formed():
+    cfg = load("genetrek.yaml")
+    assert len(cfg["tier_colors"]) == 4
+    assert all(HEX.match(c) for c in cfg["tier_colors"] + [cfg["neutral_color"]])
+    for key, value in cfg["default_sets"].items():
+        assert value == "show" or value in (1, 2, 3, 4), key
+    assert float(cfg["refresh_hours"]) > 0
 
 
 def test_pipeline_steps_are_complete():

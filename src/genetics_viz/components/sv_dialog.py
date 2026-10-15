@@ -13,13 +13,24 @@ import yaml
 from nicegui import ui
 
 from genetics_viz.utils.data import get_data_store, get_static_prefix
-from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.gene_scoring import (
+    build_gene_badges,
+    gene_badges_html,
+    get_gene_scorer,
+    split_genes,
+    tier_legend_html,
+)
+from genetics_viz.utils.genetrek import search_url
 from genetics_viz.utils.tsv import clean_tsv_field
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 from genetics_viz.utils.wisecondorx import infer_sv_type
 
 
 # Load WisecondorX thresholds and colors from YAML
+#: SV columns holding genes, rendered as badges (exonic ones bordered).
+_GENE_COLUMNS = ("genic_symbol", "exonic_symbol", "genic_ensg", "exonic_ensg")
+
+
 def _load_wisecondorx_config():
     config_path = (
         Path(__file__).parent.parent / "config" / "wisecondorx_thresholds.yaml"
@@ -496,25 +507,31 @@ def show_sv_dialog(
                 if not gene_value_str or str(gene_value_str) in ["-", ""]:
                     return ui.label("-").classes("text-base text-gray-900 font-medium")
 
-                with ui.row().classes("gap-1 flex-wrap"):
-                    for item in str(gene_value_str).split(","):
-                        if ":" in item:
-                            gene_name, gene_type = item.split(":", 1)
-                            gene_name = gene_name.strip()
-                            is_exonic = gene_type.strip() == "exonic"
-                        else:
-                            gene_name = item.strip()
-                            is_exonic = False
+                symbols, exonic = [], set()
+                for item in split_genes(gene_value_str, ","):
+                    gene_name, _, gene_type = item.partition(":")
+                    symbols.append(gene_name.strip())
+                    if gene_type.strip() == "exonic":
+                        exonic.add(gene_name.strip())
+                badges = build_gene_badges(
+                    symbols, gene_scorer, cap=None, bordered=exonic
+                )
+                ui.html(gene_badges_html(badges), sanitize=False)
 
-                        color = gene_scorer.get_gene_color(gene_name)
-                        text_color = "black" if color == "#ffffff" else "white"
-                        tooltip_text = gene_scorer.get_gene_tooltip(gene_name)
-                        border_style = "border: 2px solid black;" if is_exonic else ""
-
-                        ui.html(
-                            f'<span class="q-badge" style="background-color: {color}; color: {text_color}; {border_style} padding: 2px 6px; border-radius: 4px; font-size: 12px;" title="{tooltip_text}">{gene_name}</span>',
-                            sanitize=False,
-                        )
+            def render_gene_column(value, exonic: bool):
+                """A genic/exonic symbol or ENSG column as badges."""
+                idents = [g for g in split_genes(value, ",") if g != "-"]
+                if not idents:
+                    ui.label("-").classes("text-sm text-gray-800 break-all")
+                    return
+                badges = build_gene_badges(
+                    idents,
+                    gene_scorer,
+                    cap=None,
+                    sort=False,
+                    bordered=idents if exonic else (),
+                )
+                ui.html(gene_badges_html(badges), sanitize=False)
 
             # SV details card
             ui.label("SV Details").classes("text-xl font-semibold mb-2")
@@ -523,24 +540,18 @@ def show_sv_dialog(
                 with ui.column().classes("p-4 gap-4"):
                     # Legends
                     with ui.row().classes("gap-4 items-center flex-wrap"):
-                        # Gene badge legend
-                        with ui.row().classes("gap-2 items-center"):
-                            ui.label("Gene badges:").classes("text-xs font-semibold")
-                            ui.html(
-                                '<span class="q-badge" style="background-color: #ffffff; color: black; border: 2px solid black; padding: 2px 6px; border-radius: 4px; font-size: 10px;">Exonic</span>',
-                                sanitize=False,
-                            )
-                            ui.label("(black border)").classes("text-xs text-gray-500")
-                            ui.html(
-                                '<span class="q-badge" style="background-color: #ffffff; color: black; padding: 2px 6px; border-radius: 4px; font-size: 10px;">Genic</span>',
-                                sanitize=False,
-                            )
-                            ui.label("(no border)").classes("text-xs text-gray-500")
-                            ui.html(
-                                '<span class="q-badge" style="background-color: #8b0000; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px;">Color</span>',
-                                sanitize=False,
-                            )
-                            ui.label("(geneset score)").classes("text-xs text-gray-500")
+                        # Gene badge legend: the user's tiers, exonic border
+                        ui.html(
+                            tier_legend_html(gene_scorer, exonic_border=True),
+                            sanitize=False,
+                        )
+                        ui.link(
+                            "Region in GeneTrek",
+                            search_url([locus]),
+                            new_tab=True,
+                        ).classes("text-xs").tooltip(
+                            "Open GeneTrek's table filtered to the genes this SV overlaps"
+                        )
 
                         ui.separator().props("vertical").classes("mx-2")
 
@@ -775,75 +786,10 @@ def show_sv_dialog(
                                             "text-xs font-semibold text-gray-500"
                                         )
                                         # Render gene/symbol fields with color-coded badges
-                                        if key in ["genic_symbol", "exonic_symbol"]:
-                                            if value and str(value) not in ["-", ""]:
-                                                is_exonic = "exonic" in key
-                                                with ui.row().classes(
-                                                    "gap-1 flex-wrap"
-                                                ):
-                                                    for item in str(value).split(","):
-                                                        gene_name = item.strip()
-                                                        color = (
-                                                            gene_scorer.get_gene_color(
-                                                                gene_name
-                                                            )
-                                                        )
-                                                        text_color = (
-                                                            "black"
-                                                            if color == "#ffffff"
-                                                            else "white"
-                                                        )
-                                                        tooltip_text = gene_scorer.get_gene_tooltip(
-                                                            gene_name
-                                                        )
-                                                        border_style = (
-                                                            "border: 2px solid black;"
-                                                            if is_exonic
-                                                            else ""
-                                                        )
-                                                        ui.html(
-                                                            f'<span class="q-badge" style="background-color: {color}; color: {text_color}; {border_style} padding: 2px 6px; border-radius: 4px; font-size: 12px;" title="{tooltip_text}">{gene_name}</span>',
-                                                            sanitize=False,
-                                                        )
-                                            else:
-                                                ui.label("-").classes(
-                                                    "text-sm text-gray-800 break-all"
-                                                )
-                                        elif key in ["genic_ensg", "exonic_ensg"]:
-                                            # Render ENSG IDs with color-coded badges
-                                            if value and str(value) not in ["-", ""]:
-                                                is_exonic = "exonic" in key
-                                                with ui.row().classes(
-                                                    "gap-1 flex-wrap"
-                                                ):
-                                                    for item in str(value).split(","):
-                                                        ensg_id = item.strip()
-                                                        color = (
-                                                            gene_scorer.get_gene_color(
-                                                                ensg_id
-                                                            )
-                                                        )
-                                                        text_color = (
-                                                            "black"
-                                                            if color == "#ffffff"
-                                                            else "white"
-                                                        )
-                                                        tooltip_text = gene_scorer.get_gene_tooltip(
-                                                            ensg_id
-                                                        )
-                                                        border_style = (
-                                                            "border: 2px solid black;"
-                                                            if is_exonic
-                                                            else ""
-                                                        )
-                                                        ui.html(
-                                                            f'<span class="q-badge" style="background-color: {color}; color: {text_color}; {border_style} padding: 2px 6px; border-radius: 4px; font-size: 12px;" title="{tooltip_text}">{ensg_id}</span>',
-                                                            sanitize=False,
-                                                        )
-                                            else:
-                                                ui.label("-").classes(
-                                                    "text-sm text-gray-800 break-all"
-                                                )
+                                        if key in _GENE_COLUMNS:
+                                            render_gene_column(
+                                                value, key.startswith("exonic")
+                                            )
                                         else:
                                             # Default rendering for other fields
                                             ui.label(

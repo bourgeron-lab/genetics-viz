@@ -19,7 +19,10 @@ from genetics_viz.components.diagnostic_loader import (
     load_diagnostic_map,
 )
 from genetics_viz.components.search_stats import show_stats_dialog
-from genetics_viz.components.filters import create_validation_filter_menu
+from genetics_viz.components.filters import (
+    create_geneset_filter_menu,
+    create_validation_filter_menu,
+)
 from genetics_viz.utils.locus import (
     filter_bed_dataframe,
     filter_dataframe,
@@ -52,8 +55,19 @@ from genetics_viz.utils.column_names import (
     reorder_columns_by_group,
 )
 from genetics_viz.utils.data import get_data_store
-from genetics_viz.utils.genesets import load_genesets
-from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.genetrek import get_snapshot
+from genetics_viz.utils.inheritance import annotate_moi
+from genetics_viz.utils.genesets import (
+    geneset_filter_expr,
+    geneset_sources,
+    selected_symbols,
+)
+from genetics_viz.utils.gene_scoring import (
+    badge_labels,
+    build_gene_badges,
+    get_gene_scorer,
+    split_genes,
+)
 from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.clinvar import (
     CLINVAR_COLORS,
@@ -82,6 +96,8 @@ _INTERNAL_KEYS = {
     "ClinVarBadges",
     "GeneBadges",
     "VEP_Gene_badges",
+    "MoiBadges",
+    "_moi_rank",
     "Diagnostic_badge",
 }
 
@@ -103,34 +119,6 @@ def _generate_tsv(rows: List[Dict[str, Any]], columns: List[str]) -> str:
     for row in rows:
         writer.writerow([row.get(col, "") for col in columns])
     return output.getvalue()
-
-
-def _build_gene_badges(symbols: List[str], gene_scorer) -> List[Dict[str, Any]]:
-    """Build score-sorted, capped gene badges (svs_tab pattern)."""
-    badges = []
-    for s in symbols:
-        score, _ = gene_scorer.get_gene_score_and_sets(s)
-        badges.append(
-            {
-                "label": s,
-                "color": gene_scorer.get_gene_color(s),
-                "tooltip": gene_scorer.get_gene_tooltip(s),
-                "score": score,
-            }
-        )
-    badges.sort(key=lambda x: x["score"], reverse=True)
-    total = len(badges)
-    if total > 6:
-        badges = badges[:6]
-        remaining = total - 6
-        badges.append(
-            {
-                "label": f"+{remaining} genes",
-                "color": "#9e9e9e",
-                "tooltip": f"{remaining} more genes",
-            }
-        )
-    return badges
 
 
 def _apply_curated_coordinates(
@@ -224,6 +212,24 @@ def _pedigree_data_from_cohort(cohort_name: str) -> Dict[str, Dict[str, str]]:
                 "Phenotype": sample.phenotype or "",
             }
     return pedigree_data
+
+
+def _moi_pedigree(pedigree_data: Dict[str, Dict[str, str]]):
+    """Pedigree lookup for ``annotate_moi`` over ``_pedigree_data_from_cohort``."""
+
+    def lookup(sample_id: str) -> Dict[str, Optional[str]]:
+        ped = pedigree_data.get(sample_id)
+        if ped is None:
+            return {}
+        father = pedigree_data.get(ped.get("Father", ""), {})
+        mother = pedigree_data.get(ped.get("Mother", ""), {})
+        return {
+            "sex": ped.get("Sex"),
+            "father_pheno": father.get("Phenotype"),
+            "mother_pheno": mother.get("Phenotype"),
+        }
+
+    return lookup
 
 
 @ui.page("/search/{cohort_name}")
@@ -324,8 +330,9 @@ def search_cohort_page(cohort_name: str) -> None:
                 {v.get("Phenotype", "") for v in pedigree_data.values()} - _PED_MISSING
             )
 
-            # Load genesets from params/genesets
-            available_genesets = load_genesets(store.data_dir)
+            # Gene sets for the filter menus: the user's tiers, GeneTrek's
+            # lists and the data directory's params/genesets/*.tsv
+            available_genesets = geneset_sources(store.data_dir, get_gene_scorer())
 
             # Separate source lists by type for UI
             wombat_sources = [
@@ -408,89 +415,10 @@ def search_cohort_page(cohort_name: str) -> None:
 
             # --- Helper: build geneset menu for a component ---
             def _build_geneset_menu(comp: Dict[str, Any]) -> None:
-                """Build an inline genesets dropdown menu for a component."""
-                if not available_genesets:
-                    return
-                comp_genesets = comp["genesets"]
-                geneset_btn = ui.button("Genesets", icon="list").props(
-                    (
-                        "outline"
-                        if not comp_genesets["value"]
-                        else "unelevated color=green"
-                    )
-                    + " dense size=sm"
+                """Build the genesets dropdown menu for a component."""
+                create_geneset_filter_menu(
+                    comp["genesets"], available_genesets, button_props="dense size=sm"
                 )
-                btn_ref = {"button": geneset_btn}
-                with geneset_btn:
-                    with ui.menu():
-                        ui.label("Select Genesets:").classes(
-                            "px-4 py-2 font-semibold text-sm"
-                        )
-                        ui.separator()
-                        with ui.column().classes("p-2"):
-                            gs_cbs: Dict[str, Any] = {}
-
-                            def _update_gs_btn():
-                                if btn_ref["button"]:
-                                    if comp_genesets["value"]:
-                                        btn_ref["button"].props(
-                                            remove="outline",
-                                            add="unelevated color=green",
-                                        )
-                                    else:
-                                        btn_ref["button"].props(
-                                            remove="unelevated color=green",
-                                            add="outline",
-                                        )
-                                    btn_ref["button"].update()
-
-                            with ui.row().classes("gap-2 mb-2"):
-
-                                def _gs_all(
-                                    cbs=gs_cbs, st=comp_genesets, upd=_update_gs_btn
-                                ):
-                                    st["value"] = list(available_genesets.keys())
-                                    for cb in cbs.values():
-                                        cb.value = True
-                                    upd()
-
-                                def _gs_none(
-                                    cbs=gs_cbs, st=comp_genesets, upd=_update_gs_btn
-                                ):
-                                    st["value"] = []
-                                    for cb in cbs.values():
-                                        cb.value = False
-                                    upd()
-
-                                ui.button("All", on_click=_gs_all).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-                                ui.button("None", on_click=_gs_none).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-
-                            ui.separator()
-                            for gs_name in sorted(available_genesets.keys()):
-
-                                def make_gs_handler(
-                                    name, st=comp_genesets, upd=_update_gs_btn
-                                ):
-                                    def handler(e):
-                                        if e.value:
-                                            if name not in st["value"]:
-                                                st["value"].append(name)
-                                        else:
-                                            if name in st["value"]:
-                                                st["value"].remove(name)
-                                        upd()
-
-                                    return handler
-
-                                gs_cbs[gs_name] = ui.checkbox(
-                                    f"{gs_name} ({len(available_genesets[gs_name])} genes)",
-                                    value=gs_name in comp_genesets["value"],
-                                    on_change=make_gs_handler(gs_name),
-                                ).classes("text-sm")
 
             # --- Helper: build impact menu for a wombat component ---
             def _build_impact_menu(comp: Dict[str, Any]) -> None:
@@ -1240,50 +1168,19 @@ def search_cohort_page(cohort_name: str) -> None:
                     def _apply_geneset_filter(df, comp, source_type):
                         if not comp["genesets"]["value"]:
                             return df
-                        combined_genes = set()
-                        for gs_name in comp["genesets"]["value"]:
-                            combined_genes.update(
-                                available_genesets.get(gs_name, set())
-                            )
-                        if not combined_genes:
+                        wanted = selected_symbols(
+                            available_genesets, comp["genesets"]["value"]
+                        )
+                        if not wanted:
                             return df
-
-                        if source_type == "wombat" and "VEP_SYMBOL" in df.columns:
-
-                            def matches_gs(symbol_str):
-                                if not symbol_str:
-                                    return False
-                                symbols = [
-                                    s.strip().upper()
-                                    for s in str(symbol_str).split("&")
-                                ]
-                                return any(s in combined_genes for s in symbols)
-
-                            return df.filter(
-                                pl.col("VEP_SYMBOL").map_elements(
-                                    matches_gs, return_dtype=pl.Boolean
-                                )
-                            )
-                        elif source_type == "wisecondorx":
+                        if source_type == "wombat":
+                            sym_col = "VEP_SYMBOL"
+                        else:
                             exonic = comp.get("exonic_only", {}).get("value", False)
                             sym_col = "exonic_symbol" if exonic else "genic_symbol"
-                            if sym_col in df.columns:
-
-                                def matches_gs_bed(symbol_str):
-                                    if not symbol_str:
-                                        return False
-                                    symbols = [
-                                        s.strip().upper()
-                                        for s in str(symbol_str).split(",")
-                                    ]
-                                    return any(s in combined_genes for s in symbols)
-
-                                return df.filter(
-                                    pl.col(sym_col).map_elements(
-                                        matches_gs_bed, return_dtype=pl.Boolean
-                                    )
-                                )
-                        return df
+                        if sym_col not in df.columns:
+                            return df
+                        return df.filter(geneset_filter_expr(sym_col, wanted))
 
                     # --- Process each component ---
                     all_wombat_dfs: List[pl.DataFrame] = []
@@ -1526,25 +1423,11 @@ def search_cohort_page(cohort_name: str) -> None:
                                 row["ClinVarBadges"] = []
 
                             # Gene badges from VEP_SYMBOL (score-sorted, capped)
-                            symbol_str = row.get("VEP_SYMBOL", "")
-                            if symbol_str:
-                                all_symbols: List[str] = []
-                                for s in str(symbol_str).split(","):
-                                    for part in s.split("&"):
-                                        p = part.strip()
-                                        if p and p not in all_symbols:
-                                            all_symbols.append(p)
-                                row["GeneBadges"] = _build_gene_badges(
-                                    all_symbols, gene_scorer
-                                )
-                            else:
-                                row["GeneBadges"] = []
-                            # Synthetic "gene" column for unified display
-                            row["gene"] = ",".join(
-                                b["label"]
-                                for b in row["GeneBadges"]
-                                if not b["label"].startswith("+")
+                            row["GeneBadges"] = build_gene_badges(
+                                split_genes(row.get("VEP_SYMBOL", "")), gene_scorer
                             )
+                            # Synthetic "gene" column for unified display
+                            row["gene"] = ",".join(badge_labels(row["GeneBadges"]))
 
                             # Gene badges from VEP_Gene (ENSG IDs)
                             gene_str = row.get("VEP_Gene", "")
@@ -1554,14 +1437,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                     for g in str(gene_str).split(",")
                                     if g.strip()
                                 ]
-                                row["VEP_Gene_badges"] = [
-                                    {
-                                        "label": g,
-                                        "color": gene_scorer.get_gene_color(g),
-                                        "tooltip": gene_scorer.get_gene_tooltip(g),
-                                    }
-                                    for g in genes
-                                ]
+                                row["VEP_Gene_badges"] = build_gene_badges(
+                                    genes, gene_scorer, cap=None, sort=False
+                                )
                             else:
                                 row["VEP_Gene_badges"] = []
 
@@ -1697,17 +1575,13 @@ def search_cohort_page(cohort_name: str) -> None:
                                     for s in str(genic_str).split(",")
                                     if s.strip()
                                 ]
-                                row["GeneBadges"] = _build_gene_badges(
+                                row["GeneBadges"] = build_gene_badges(
                                     symbols, gene_scorer
                                 )
                             else:
                                 row["GeneBadges"] = []
                             # Synthetic "gene" column for unified display
-                            row["gene"] = ",".join(
-                                b["label"]
-                                for b in row["GeneBadges"]
-                                if not b["label"].startswith("+")
-                            )
+                            row["gene"] = ",".join(badge_labels(row["GeneBadges"]))
 
                             row["VEP_Gene_badges"] = []
 
@@ -1780,6 +1654,8 @@ def search_cohort_page(cohort_name: str) -> None:
                     # Remove internal/coordinate columns kept for filtering
                     all_col_set -= {"_source_type", "chr", "start", "end"}
                     all_col_set.add("gene")
+                    if wombat_filtered is not None:
+                        all_col_set.add("MOI")
                     if wcx_filtered is not None:
                         all_col_set.add("svlen")
                     all_columns = list(all_col_set)
@@ -1802,6 +1678,7 @@ def search_cohort_page(cohort_name: str) -> None:
                         "Variant",
                         "VEP_Consequence",
                         "gene",
+                        "MOI",
                         "VEP_CLIN_SIG",
                         "fafmax_faf95_max_genomes",
                         "FID",
@@ -1916,6 +1793,14 @@ def search_cohort_page(cohort_name: str) -> None:
                     # Impact, exclude, validation filters are now applied per-component
                     # (wombat rows filtered by _wombat_row_passes, wcx rows filtered by call filter)
 
+                    # MOI: does each SNV fit its gene's mode of inheritance?
+                    # Second hits are looked for among these results only.
+                    annotate_moi(
+                        all_rows,
+                        get_snapshot(),
+                        pedigree=_moi_pedigree(pedigree_data),
+                    )
+
                     # Update progress: ready to display
                     progress.set_value(100)
                     status_label.set_text("Complete!")
@@ -1975,6 +1860,10 @@ def search_cohort_page(cohort_name: str) -> None:
                                     elif col == "VEP_Gene":
                                         col_def["cellType"] = "gene_badge"
                                         col_def["badgesField"] = "VEP_Gene_badges"
+                                    elif col == "MOI":
+                                        col_def["cellType"] = "badge_list"
+                                        col_def["badgesField"] = "MoiBadges"
+                                        col_def["sortField"] = "_moi_rank"
                                     elif col == "wisecondorX":
                                         col_def["cellType"] = "cnv_call"
                                         col_def["callColors"] = build_call_colors()

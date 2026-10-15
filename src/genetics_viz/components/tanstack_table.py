@@ -18,6 +18,7 @@ TANSTACK_CDN = "https://cdn.jsdelivr.net/npm/@tanstack/table-core@8.21.3/+esm"
 
 _STATIC_DIR = Path(__file__).parent.parent / "static"
 _JS_PATH = _STATIC_DIR / "js" / "data_table.js"
+_MOUNT_JS_PATH = _STATIC_DIR / "js" / "data_table_mount.js"
 _CSS_PATH = _STATIC_DIR / "css" / "data_table.css"
 
 
@@ -33,8 +34,10 @@ def _inject_once() -> None:
 
     ui.add_head_html(f"<style>{css_source}</style>")
     # Use run_javascript instead of a <script> tag so that injection works
-    # even when called from timer callbacks (lazy-loaded tabs).
+    # even when called from timer callbacks (lazy-loaded tabs). The mount
+    # registry runs first, synchronously: every table registers with it.
     ui.run_javascript(f"""
+        {_MOUNT_JS_PATH.read_text()}
         (function() {{
             if (window.TanStackTable && window.DataTable) return;
             import('{TANSTACK_CDN}').then(function(mod) {{
@@ -43,6 +46,7 @@ def _inject_once() -> None:
                     getCoreRowModel: mod.getCoreRowModel,
                 }};
                 {js_source}
+                window._dtMount.flush();
             }}).catch(function(err) {{
                 console.error('Failed to load TanStack Table:', err);
             }});
@@ -171,95 +175,34 @@ class DataTable:
         data = json.dumps(self.rows, default=str)
         inst_id = self.instance_id
 
-        # Use JS setTimeout instead of ui.timer to avoid creating a NiceGUI
-        # element that can lose its parent slot when @ui.refreshable re-renders.
-        # Use a bounded polling loop instead of MutationObserver — polling is
-        # more reliable here since we know exactly which element to look for,
-        # and avoids the race where the element appears between the initial
-        # getElementById and observer.observe() calls.
-        ui.run_javascript(f"""
-            (function() {{
-                var attempts = 0;
-                var MAX_ATTEMPTS = 150;  // ~30s at 200ms intervals
-
-                function tryInit() {{
-                    // Already initialized (re-render guard)
-                    if (window['_dt_{inst_id}']) return;
-
-                    // Wait for TanStack library + DataTable class
-                    if (!window.TanStackTable || !window.DataTable) {{
-                        if (++attempts < MAX_ATTEMPTS) {{
-                            setTimeout(tryInit, 200);
-                        }} else {{
-                            console.error(
-                                'TanStack Table library did not load for '
-                                + '{inst_id}'
-                            );
-                        }}
-                        return;
-                    }}
-
-                    // Wait for container element in DOM
-                    var el = document.getElementById('{inst_id}');
-                    if (el) {{
-                        window['_dt_{inst_id}'] = new DataTable(
-                            {config}, {data}
-                        );
-                        return;
-                    }}
-
-                    if (++attempts < MAX_ATTEMPTS) {{
-                        setTimeout(tryInit, 200);
-                    }} else {{
-                        console.error(
-                            'DataTable container {inst_id} never appeared '
-                            + 'in DOM'
-                        );
-                    }}
-                }}
-
-                setTimeout(tryInit, 100);
-            }})();
-        """)
+        # The table is created when its container enters the document, however
+        # late (data_table_mount.js): a table built inside a tab panel that is
+        # not shown has no container until the panel is opened.
+        ui.run_javascript(f"window._dtMount.add('{inst_id}', {config}, {data});")
 
     def update_data(self, rows: list[dict[str, Any]]) -> None:
         """Push new row data to the browser table."""
         self.rows = rows
         data = json.dumps(rows, default=str)
         inst_id = self.instance_id
-        ui.run_javascript(f"""
-            (function pushData() {{
-                if (!window['_dt_{inst_id}']) {{
-                    setTimeout(pushData, 100);
-                    return;
-                }}
-                window['_dt_{inst_id}'].setData({data});
-            }})();
-        """)
+        ui.run_javascript(
+            f"window._dtMount.whenReady('{inst_id}', "
+            f"function(t) {{ t.setData({data}); }});"
+        )
 
     def set_column_visibility(self, visible_ids: list[str]) -> None:
         """Show only the columns whose IDs are in *visible_ids*."""
         vis = json.dumps(visible_ids)
         inst_id = self.instance_id
-        ui.run_javascript(f"""
-            (function tryVis(n) {{
-                if (!window['_dt_{inst_id}']) {{
-                    if (n < 50) setTimeout(function() {{ tryVis(n+1) }}, 200);
-                    return;
-                }}
-                window['_dt_{inst_id}'].setColumnVisibility({vis});
-            }})(1);
-        """)
+        ui.run_javascript(
+            f"window._dtMount.whenReady('{inst_id}', "
+            f"function(t) {{ t.setColumnVisibility({vis}); }});"
+        )
 
     def destroy(self) -> None:
         """Clean up the JS instance."""
         inst_id = self.instance_id
-        ui.run_javascript(f"""
-            if (window['_dt_{inst_id}']) {{
-                window['_dt_{inst_id}'].destroy();
-                delete window['_dt_{inst_id}'];
-            }}
-        """)
+        ui.run_javascript(f"window._dtMount.remove('{inst_id}');")
 
     # ---- Page change handler ----
 
