@@ -5,6 +5,14 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Variants per sample in the family Stats dialogs** (Wombat sub-tabs and SVs → WisecondorX), to spot a sample with an abnormal number of calls, such as a child with dozens of de novo variants.
+  - "Variants per Sample (current view)": one bar per selected member, following the table's filters (SNV/Indel for Wombat, call type for SVs).
+  - "Compared with the cohort (unfiltered)": each member's raw count placed on the cohort's per-sample distribution for the same config, from the cohort-level Wombat results or WisecondorX BED. Shows the group's median [Q1-Q3], the member's percentile and a High/Low flag (outside Q1-Q3 by more than 1.5 × IQR), with a histogram per group.
+  - Founders and non-founders are compared within their own group, every pedigree sample counting 0 when it has no call, so the parents' zeros do not make every child with a de novo call look like an outlier.
+
 ## [0.18.0] - 2026-10-15
 
 ### Changed
