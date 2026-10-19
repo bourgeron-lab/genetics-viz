@@ -5,6 +5,17 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] - 2026-10-19
+
+### Fixed
+- **Cohort de novo tables without a header** (CANDY_mpx, CANDY_mpx_ghent, PMS: a blank line, then the rows) are read with the header of a family file of the same config. This fixes:
+  - the family Stats dialog's "Compared with the cohort", which showed every sample at 0;
+  - the Search page, which built no table on them;
+  - the cohort page's Statistics panel.
+
+  With no family header that fits, each says the file has no header instead of showing wrong results.
+- **The Search page's default Wombat source** no longer depends on file listing order, and a table under the older `.annotated.` name is listed under its config name (`strict`, not `annotated.strict`), in Search and in the Statistics panel.
+
 ## [0.18.1] - 2026-10-19
 
 ### Added
