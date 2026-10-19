@@ -402,6 +402,52 @@ async def test_sv_diagnostic_saved_from_search_is_read_back(
     assert row["Diagnostic"] == "uncertain"
 
 
+async def _search_wombat_source(user, source, locus):
+    """Run a search on one Wombat source of DEMO, by locus."""
+    await user.open("/search/DEMO")
+    await user.should_see("Search: DEMO", retries=30)
+    select = user.find(kind=ui.select, content="Source").elements.pop()
+    assert list(select.options) == ["wombat/default", "wombat/strict"]
+    assert select.value == "wombat/default"
+    with user.client:
+        select.set_value(f"wombat/{source}")
+    user.find("Locus (optional)").type(locus)
+    user.find(marker="search-button").click()
+
+
+async def test_search_reads_a_headerless_cohort_wombat_table(user, monkeypatch):
+    """DEMO's "strict" table has no header; family 1001's file lends its own."""
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await _search_wombat_source(user, "strict", "chr7:31000000-33000000")
+    for _ in range(100):
+        if tables:
+            break
+        await asyncio.sleep(0.05)
+    [table] = tables
+    # Only the strict table's two rows; "default" also has BLTP1 on chr7
+    assert [(r["VEP_SYMBOL"], r["sample"]) for r in table["rows"]] == [
+        ("KIAA1109", "S3")
+    ]
+
+
+async def test_search_says_when_a_headerless_table_has_no_header_to_borrow(
+    user, data_dir
+):
+    (
+        datagen.family_dir(data_dir, "1001")
+        / "wombat"
+        / "1001.rare.vep1.annotated.strict.tsv"
+    ).unlink()
+    await login(user, "reader")
+    await _search_wombat_source(user, "strict", "chr7:31000000-33000000")
+    await user.should_see(marker="search-source-error", retries=30)
+    await user.should_see(
+        "Cannot search Wombat source strict: "
+        "DEMO.rare.vep1.annotated.strict.results.tsv has no header line"
+    )
+
+
 def _sample_charts(user, marker):
     return [c.options for c in user.find(marker=marker).elements]
 
@@ -457,7 +503,6 @@ async def test_sv_stats_count_calls_per_sample(user, data_dir):
 
 async def test_wombat_stats_read_a_headerless_cohort_file(user, data_dir):
     """The cohort "strict" table has no header; the family file lends its own."""
-    datagen.build_headerless_cohort_wombat(data_dir)
     await login(user, "reader")
     await user.open("/cohort/DEMO/family/1001")
     await user.should_see("Wombat Configuration: default", retries=30)
