@@ -453,3 +453,26 @@ async def test_sv_stats_count_calls_per_sample(user, data_dir):
         for b in bars
     )
     await user.should_see("DEMO_aberrations.bed", retries=10)
+
+
+async def test_wombat_stats_read_a_headerless_cohort_file(user, data_dir):
+    """The cohort "strict" table has no header; the family file lends its own."""
+    datagen.build_headerless_cohort_wombat(data_dir)
+    await login(user, "reader")
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Wombat Configuration: default", retries=30)
+    open_tab(user, "wombat-subtabs", "strict")
+    await user.should_see("Wombat Configuration: strict", retries=30)
+    # The default sub-tab's Stats button is built first; strict's is the newest
+    stats_buttons = user.find(kind=ui.button, content="Stats").elements
+    UserInteraction(user, {max(stats_buttons, key=lambda b: b.id)}, "Stats").click()
+    await user.should_see("DEMO.rare.vep1.annotated.strict.results.tsv", retries=10)
+    await user.should_see(marker="sample-count-histogram", retries=30)
+    await user.should_not_see("no comparison available")
+    non_founders = next(
+        h
+        for h in _sample_charts(user, "sample-count-histogram")
+        if "non-founders" in h["title"]["text"]
+    )
+    (line,) = non_founders["series"][0]["markLine"]["data"]
+    assert line["label"]["formatter"] == "S3: 2"

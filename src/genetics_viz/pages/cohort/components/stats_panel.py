@@ -9,7 +9,10 @@ from nicegui import run, ui
 
 from genetics_viz.models import Cohort, DataStore
 from genetics_viz.utils.genesets import load_genesets
-from genetics_viz.utils.sample_counts import count_variants_per_sample
+from genetics_viz.utils.sample_counts import (
+    MissingHeaderError,
+    count_variants_per_sample,
+)
 
 
 def _discover_wombat_configs(store: DataStore, cohort: Cohort) -> List[str]:
@@ -160,7 +163,15 @@ def render_stats_panel(
 
             for gs_name in genesets:
                 genes = geneset_genes.get(gs_name)
-                counts = await run.io_bound(count_variants_per_sample, tsv_path, genes)
+                try:
+                    counts = await run.io_bound(
+                        count_variants_per_sample, tsv_path, genes
+                    )
+                except MissingHeaderError as exc:
+                    # Counting it anyway would plot every sample at 0
+                    spinner_container.clear()
+                    ui.notify(f"Cannot plot: {exc}", type="negative")
+                    return
 
                 # Compute per-phenotype lists
                 pheno_counts: Dict[str, List[int]] = {}

@@ -3,12 +3,14 @@
 import os
 
 import polars as pl
+import pytest
 
 import datagen
 from genetics_viz.models import Cohort
 from genetics_viz.utils import sample_counts
 from genetics_viz.utils.sample_counts import (
     FOUNDERS,
+    MissingHeaderError,
     NON_FOUNDERS,
     cohort_sample_counts,
     cohort_wcx_file,
@@ -31,9 +33,8 @@ def test_cohort_files_are_found_by_exact_name(data_dir):
     assert cohort_wombat_file(data_dir, "DEMO", "vep2", "default") is None
     assert cohort_wombat_file(data_dir, "DEMO", "vep1", "strict") is None
     # Older cohorts have only the name that keeps "annotated"
-    annotated = path.with_name("DEMO.rare.vep1.annotated.strict.results.tsv")
-    annotated.write_text(path.read_text())
-    assert cohort_wombat_file(data_dir, "DEMO", "vep1", "strict") == annotated
+    strict = datagen.build_headerless_cohort_wombat(data_dir)
+    assert cohort_wombat_file(data_dir, "DEMO", "vep1", "strict") == strict
     assert cohort_wcx_file(data_dir, "DEMO").name == "DEMO_aberrations.bed"
     assert cohort_wcx_file(data_dir, "NOHEAD") is None
 
@@ -45,6 +46,28 @@ def test_counts_unique_variants_and_aberrations_per_sample(data_dir):
         "S3": 1,
         "S6": 1,
     }
+
+
+def test_a_headerless_cohort_file_borrows_the_family_header(data_dir, tmp_path):
+    """Several real cohort de novo tables are a blank line, then rows."""
+    strict = datagen.build_headerless_cohort_wombat(data_dir)
+    family = (
+        datagen.family_dir(data_dir, "1001")
+        / "wombat"
+        / "1001.rare.vep1.annotated.strict.tsv"
+    )
+    # Counted without a header, every sample would come out at 0
+    with pytest.raises(MissingHeaderError, match="has no header line"):
+        cohort_sample_counts(strict, "wombat")
+    assert sample_counts._count_cache == {}
+
+    assert cohort_sample_counts(strict, "wombat", family) == {"S3": 2}
+
+    narrower = tmp_path / "narrower.tsv"
+    narrower.write_text("\t".join(datagen.WOMBAT_COLUMNS[:-1]) + "\n")
+    sample_counts.clear_sample_count_cache()
+    with pytest.raises(MissingHeaderError, match="columns against its"):
+        cohort_sample_counts(strict, "wombat", narrower)
 
 
 def test_cache_picks_up_a_rewritten_file(data_dir):
