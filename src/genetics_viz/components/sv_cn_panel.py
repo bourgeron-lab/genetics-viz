@@ -57,6 +57,11 @@ class CopyNumberPanel:
     def _data_dirs(self) -> List[Path]:
         return panel_search_dirs(self.data_dir)
 
+    def set_roi(self, roi: Tuple[int, int]) -> None:
+        """New SV bounds (a curated position): the window follows them."""
+        self.roi = roi
+        self.window = cn_window(*roi)
+
     def refresh(self, requests: Sequence[CNRequest]) -> None:
         requests = list(requests)
         self._panel.load(

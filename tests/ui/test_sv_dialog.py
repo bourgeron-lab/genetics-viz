@@ -63,6 +63,33 @@ async def test_copy_number_and_read_evidence(user, monkeypatch):
     father = cn.options["series"][2]["data"]
     assert all(abs(v - 2.0) < 0.01 for _, v in father)
 
+    # The carrier's clips and split reads give the exact breakpoints, which
+    # fill the curated position and re-centre the read views.
+    await user.should_see("Start: 165,114,001 strong", retries=30)
+    await user.should_see("coverage agrees", retries=30)
+    user.find(kind=ui.button, content="Use as curated position").click()
+    await user.should_see("from the reads", retries=30)
+    start_input = next(iter(user.find(kind=ui.input, content="Curated start").elements))
+    end_input = next(iter(user.find(kind=ui.input, content="Curated end").elements))
+    assert (start_input.value, end_input.value) == (str(lo), str(hi))
+
+    # MAPQ 0 reads are drawn on request, faded.
+    low_mapq = next(iter(user.find(marker="read-low-mapq").elements))
+    with user.client:
+        low_mapq.set_value(True)
+    for _ in range(100):
+        reads = await _chart(user, "read-chart")
+        faded = [
+            s
+            for s in reads.options["series"]
+            if s["name"] == "Deletion (+- large insert)"
+            and s["lineStyle"]["opacity"] < 0.5
+        ]
+        if faded:
+            break
+        await asyncio.sleep(0.05)
+    assert faded
+
     # A 200 kb loss forced into one window is too wide for reads: CN only.
     toggle = next(iter(user.find(marker="read-mode").elements))
     with user.client:

@@ -108,6 +108,16 @@ def pick_coverage(
     return coverages[0]
 
 
+def autosomal_median_depth(coverage: SampleCoverage) -> Optional[float]:
+    """The sample's ``autosomal_median_depth`` from its coverage JSON."""
+    try:
+        value = json.loads(coverage.json_path.read_text()).get("autosomal_median_depth")
+        depth = float(value)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    return depth if depth > 0 else None
+
+
 # ---------------------------------------------------------------------------
 # Panel
 # ---------------------------------------------------------------------------

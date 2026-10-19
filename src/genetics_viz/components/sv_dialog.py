@@ -1304,14 +1304,20 @@ def show_sv_dialog(
             # One window around a short SV, one per breakpoint for a long one
             # (utils/sv_view.py). Shared by the IGV reads and the read panel.
             read_mode: Dict[str, str] = {"value": "auto"}
+            read_low_mapq: Dict[str, bool] = {"value": False}
+            # The SV's current bounds: curated when set, and updated by every
+            # curated-position change (_update_roi works on the same dict).
+            read_bounds = {"start": int(roi_start_coord), "end": int(roi_end_coord)}
 
             def current_read_windows():
+                # WisecondorX breakpoints sit on 1 kb bins: wider windows.
                 return read_view_windows(
                     sv_type,
                     chrom,
-                    int(roi_start_coord),
-                    int(roi_end_coord),
+                    read_bounds["start"],
+                    read_bounds["end"],
                     mode=read_mode["value"],
+                    precise=False,
                 )
 
             def on_read_mode_change(e):
@@ -1422,9 +1428,8 @@ def show_sv_dialog(
                 inheritance_ref = {"select": None}
 
                 # Store current ROI coordinates - use curated boundaries if available
-                roi_start = int(curated_start) if curated_start else int(start)
-                roi_end = int(curated_end) if curated_end else int(end)
-                roi_coords = {"start": roi_start, "end": roi_end}
+                # The same dict as read_bounds, so the read views follow it.
+                roi_coords = read_bounds
 
                 def _update_roi():
                     """Update ROI in both IGV instances from roi_coords."""
@@ -1435,6 +1440,7 @@ def show_sv_dialog(
                         else "rgba(0,128,0,0.2)"
                     )
                     roi_description = f"{chrom}:{roi_coords['start']}-{roi_coords['end']} - {call_value}"
+                    read_locus = " ".join(w.locus for w in current_read_windows()[1])
                     update_roi_script = f"""
                     const roiConfig = [
                         {{
@@ -1457,16 +1463,16 @@ def show_sv_dialog(
                     if (window.igvCramBrowser) {{
                         window.igvCramBrowser.clearROIs();
                         window.igvCramBrowser.loadROI(roiConfig);
-                        // Re-center split panes on new boundaries
-                        const s = {roi_coords["start"]};
-                        const e = {roi_coords["end"]};
-                        const splitLocus =
-                            "{chrom}:" + Math.max(0, s - 1500) + "-" + (s + 1500) +
-                            " {chrom}:" + Math.max(0, e - 1500) + "-" + (e + 1500);
-                        window.igvCramBrowser.search(splitLocus);
+                        // Re-center the read windows on the new boundaries
+                        window.igvCramBrowser.search("{read_locus}");
                     }}
                     """
                     ui.run_javascript(update_roi_script)
+                    refresh_read_evidence()
+                    if use_cn:
+                        cn_panel.set_roi((roi_coords["start"], roi_coords["end"]))
+                        if cn_state["loaded"]:
+                            refresh_igv()
 
                 # Buttons for new start/end positions
                 async def on_new_start_click():
@@ -1594,13 +1600,25 @@ def show_sv_dialog(
                         read_evidence_label = ui.label().classes(
                             "text-sm text-gray-500"
                         )
+
+                        def on_low_mapq_change(e):
+                            read_low_mapq["value"] = bool(e.value)
+                            refresh_read_evidence()
+
+                        ui.checkbox(
+                            "Show MAPQ 0 reads (faded)",
+                            value=False,
+                            on_change=on_low_mapq_change,
+                        ).props("dense").classes("text-sm").mark("read-low-mapq")
                     read_panel = ReadEvidencePanel(
                         data_dir=store.data_dir,
                         cohort_dir=cohort.path if cohort else None,
                         cohort_name=cohort_name,
                         params=cohort_params,
-                        breakpoints=[int(roi_start_coord), int(roi_end_coord)],
                         label_for=get_relationship_label,
+                        on_use_breakpoints=lambda s_, e_, approx: use_read_breakpoints(
+                            s_, e_, approx
+                        ),
                     )
 
             def refresh_read_evidence():
@@ -1609,6 +1627,29 @@ def show_sv_dialog(
                 read_panel.refresh(
                     [cn_request(sid) for sid in [sample, *additional_samples["value"]]],
                     windows,
+                    [read_bounds["start"], read_bounds["end"]],
+                    include_low_mapq=read_low_mapq["value"],
+                    sv_type=sv_type,
+                )
+
+            def use_read_breakpoints(new_start, new_end, approximate=False):
+                """Take the suggested breakpoints as the curated position."""
+                for key, value in (("start", new_start), ("end", new_end)):
+                    if value is None:
+                        continue
+                    read_bounds[key] = int(value)
+                    if curated_inputs[key] is not None:
+                        curated_inputs[key].value = str(value)
+                _update_roi()
+                ui.notify(
+                    f"Curated position set to {chrom}:{read_bounds['start']}"
+                    f"-{read_bounds['end']}"
+                    + (
+                        " (approximate, from the coverage: check it)"
+                        if approximate
+                        else " from the reads"
+                    ),
+                    type="warning" if approximate else "positive",
                 )
 
             refresh_read_evidence()

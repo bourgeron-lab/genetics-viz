@@ -16,7 +16,9 @@ from datagen import (
     CNV_MASKED,
     CNV_PANEL_CLUSTER_PATH,
     CNV_TAG,
+    CNV_MEDIAN_DEPTH,
     CRAM_CLIPPED,
+    CRAM_CONCORDANT_LEFT,
     CRAM_SPLITS,
     PAR1_END,
     cram_reference,
@@ -25,7 +27,14 @@ from datagen import (
 from genetics_viz.utils import cnv_coverage as cnv
 from genetics_viz.utils.cnv_plots import cn_option
 from genetics_viz.utils.pipeline_params import load_params
-from genetics_viz.utils.sv_read_plots import SERIES_NAMES, read_option
+from genetics_viz.utils.sv_breakpoints import coverage_profile, suggest_breakpoints
+from genetics_viz.utils.sv_read_plots import (
+    SERIES_NAMES,
+    Cell,
+    Suggested,
+    _arc,
+    read_option,
+)
 from genetics_viz.utils.sv_reads import load_read_evidence
 from genetics_viz.utils.sv_view import auto_mode, read_view_windows
 
@@ -244,11 +253,15 @@ def test_the_mode_can_be_forced_and_a_mate_placed():
 # ---------------------------------------------------------------------------
 
 
-def _s3_reads(data_dir, cfg=None):
+def _s3_reads(data_dir, cfg=None, include_low_mapq=False):
     _, windows = read_view_windows("del", "chr2", *CNV_LOSS)
     cram = sample_dir(data_dir, "S3") / "sequences" / "S3.GRCh38_GIABv3.cram"
     (cells, missing) = load_read_evidence(
-        [cram, None], windows, cram_reference(data_dir.parent), cfg=cfg
+        [cram, None],
+        windows,
+        cram_reference(data_dir.parent),
+        cfg=cfg,
+        include_low_mapq=include_low_mapq,
     )
     assert missing is None
     return windows, cells
@@ -261,7 +274,9 @@ def test_read_signatures_are_classed(data_dir):
         got[p.cls] = got.get(p.cls, 0) + 1
     # Concordant pairs are only counted, for the expected insert band.
     assert got == {"deletion": 6, "inversion_pp": 2, "duplication": 1}
-    assert left.n_concordant == 60
+    # The fixture's pairs reach past the window; those wholly outside it are
+    # not fetched.
+    assert 0.9 * CRAM_CONCORDANT_LEFT < left.n_concordant <= CRAM_CONCORDANT_LEFT
     assert left.insert_lo < left.insert_median < left.insert_hi < left.insert_max
     assert [m.mate for m in left.interchrom] == ["chr5:1000001"]
     # The deletion pairs reach across to the right breakpoint, read bodies at both ends.
@@ -278,6 +293,14 @@ def test_split_reads_keep_both_parts(data_dir):
     assert (split.a1, split.a2) == (CNV_LOSS[0] - 60, CNV_LOSS[0])
     assert (split.b1, split.b2) == (CNV_LOSS[1], CNV_LOSS[1] + 40)
     assert split.y == CNV_LOSS[1] - CNV_LOSS[0] and split.cls == "split"
+    # The read is clipped after its part, the SA part before its own: a
+    # deletion junction, from the end of one to the start of the other.
+    assert (split.ja, split.ja_side, split.jb, split.jb_side) == (
+        CNV_LOSS[0],
+        "right",
+        CNV_LOSS[1],
+        "left",
+    )
 
 
 def test_soft_clips_cluster_at_the_breakpoint(data_dir):
@@ -333,8 +356,182 @@ def test_read_option_draws_one_grid_per_cell_with_two_axes(data_dir):
     assert "no CRAM" in option["title"][3]["text"]  # 2 window titles, then rows
 
 
+def test_low_mapq_evidence_is_kept_only_when_asked(data_dir):
+    _, (left, _) = _s3_reads(data_dir)
+    assert not any(p.low for p in left.pairs)
+    _, (with_low, _) = _s3_reads(data_dir, include_low_mapq=True)
+    low = [p for p in with_low.pairs if p.low]
+    assert [p.cls for p in low] == ["deletion"]
+    # The low pair does not move the expected insert band.
+    assert with_low.insert_lo == left.insert_lo
+
+
+def test_read_depth_is_binned_from_the_reads(data_dir):
+    _, (left, _) = _s3_reads(data_dir)
+    assert len(left.depth) == left.window.width // 25
+    assert max(d for _, d in left.depth) > 0
+
+
+def _s3_evidence(data_dir, cn_sample="S3", strip_reads=False):
+    """S3's read cells, CN tracks and scaled depth, as the panel builds them."""
+    windows, cells = _s3_reads(data_dir)
+    if strip_reads:
+        cells = [dataclasses.replace(c, clips=[], splits=[]) for c in cells]
+    panel = _panel(data_dir)
+    cov = cnv.pick_coverage(cnv.find_sample_coverage(data_dir, cn_sample), panel.tag)
+    cns = [cnv.copy_number(cov, panel, "XY", w.chrom, w.start, w.end) for w in windows]
+    depths = (
+        [[[p, d * 2 / CNV_MEDIAN_DEPTH] for p, d in c.depth] for c in cells]
+        if cn_sample == "S3"
+        else [None, None]
+    )
+    return cells, cns, depths
+
+
+def test_the_fixture_depth_reads_as_copy_number(data_dir):
+    cells, cns, depths = _s3_evidence(data_dir)
+    profile = coverage_profile(depths[0], cns[0])
+    outside = [v for p, v in profile if CNV_LOSS[0] - 1200 < p < CNV_LOSS[0] - 100]
+    inside = [v for p, v in profile if CNV_LOSS[0] + 100 < p < CNV_LOSS[0] + 1200]
+    assert 1.7 < sum(outside) / len(outside) < 2.3
+    assert 0.8 < sum(inside) / len(inside) < 1.3
+
+
+def test_a_deletion_is_suggested_from_clips_splits_and_coverage(data_dir):
+    cells, cns, depths = _s3_evidence(data_dir)
+    start_call, end_call = suggest_breakpoints(cells, cns, depths, "del", *CNV_LOSS)
+    # Start: three clipped reads, the two split reads' clipped ends, and their
+    # junction; coverage drops there, and the deletion pairs allow it.
+    assert (start_call.pos, start_call.clips, start_call.splits) == (
+        CNV_LOSS[0],
+        CRAM_CLIPPED + CRAM_SPLITS,
+        CRAM_SPLITS,
+    )
+    assert start_call.coverage == "supported" and start_call.coverage_delta < -0.5
+    lo, hi = start_call.interval
+    assert lo <= CNV_LOSS[0] <= hi and start_call.interval_pairs == 6
+    assert start_call.confidence == "strong"
+    # End: only the split reads' other part (2 x 2), coverage rises back.
+    assert (end_call.pos, end_call.clips, end_call.splits) == (CNV_LOSS[1], 0, 2)
+    assert end_call.coverage == "supported" and end_call.confidence == "moderate"
+    assert end_call.position() == (CNV_LOSS[1], False)
+
+
+def test_a_threshold_too_high_leaves_a_side_without_an_exact_position(data_dir):
+    cells, cns, depths = _s3_evidence(data_dir)
+    _, end_call = suggest_breakpoints(
+        cells, cns, depths, "del", *CNV_LOSS, cfg={"min_breakpoint_score": 5}
+    )
+    assert end_call.pos is None and end_call.confidence is None
+
+
+def test_mis_oriented_evidence_counts_less(data_dir):
+    cells, cns, depths = _s3_evidence(data_dir)
+    # Deletion-shaped clips and junctions do not make a duplication's start,
+    # and the coverage does not rise there either.
+    start_call, _ = suggest_breakpoints(cells, cns, depths, "dup", *CNV_LOSS)
+    assert start_call.pos is None and start_call.step is None
+
+
+def test_an_inversion_is_judged_on_reads_alone(data_dir):
+    cells, cns, depths = _s3_evidence(data_dir)
+    start_call, _ = suggest_breakpoints(cells, cns, depths, "inv", *CNV_LOSS)
+    # Clips on either side are fine for an inversion; same-strand split reads
+    # are not its kind, so they count for a quarter.
+    assert start_call.pos == CNV_LOSS[0] and start_call.mismatched == CRAM_SPLITS
+    assert start_call.coverage == "n/a" and start_call.step is None
+    # The fixture's ++ pairs sit too far left for a junction there: weak.
+    assert start_call.outside_interval and start_call.confidence == "weak"
+
+
+def test_without_reads_the_coverage_step_is_approximate(data_dir):
+    cells, cns, depths = _s3_evidence(data_dir, strip_reads=True)
+    start_call, end_call = suggest_breakpoints(cells, cns, depths, "del", *CNV_LOSS)
+    assert start_call.pos is None and start_call.coverage == "unknown"
+    pos, approximate = start_call.position()
+    # The fixture drops whole pairs on the deleted haplotype, which blurs its
+    # depth step over about a fragment (~350 bp) on the loss side.
+    assert approximate and CNV_LOSS[0] - 100 <= pos <= CNV_LOSS[0] + 400
+    assert start_call.step.delta < -0.5
+    # The pairs still place it.
+    lo, hi = start_call.interval
+    assert lo <= CNV_LOSS[0] <= hi
+
+
+def test_a_flat_coverage_contradicts_a_deletion(data_dir):
+    # S3's reads, but the father's flat CN and no read depth.
+    cells, cns, depths = _s3_evidence(data_dir, cn_sample="S1")
+    start_call, _ = suggest_breakpoints(cells, cns, depths, "del", *CNV_LOSS)
+    assert start_call.pos == CNV_LOSS[0]
+    assert start_call.coverage == "contradicted" and start_call.confidence == "weak"
+
+
+def test_no_evidence_suggests_nothing():
+    start_call, end_call = suggest_breakpoints(
+        [None, None], [None, None], [None, None], "del", *CNV_LOSS
+    )
+    for call in (start_call, end_call):
+        assert call.position() == (None, False) and call.interval is None
+
+
+def test_split_read_arcs_are_half_ellipses():
+    points = _arc(1000, 2000, 500, 4)
+    xs, ys = zip(*points)
+    assert ys[0] == ys[-1] == 500 and max(ys) == pytest.approx(2000)
+    # Steep ends: the first step rises a lot over very little x.
+    assert (ys[1] / ys[0] - 1) / ((xs[1] - xs[0]) / 1000) > 10
+
+
+def test_read_option_draws_depth_and_suggested_breakpoints(data_dir):
+    windows, (left, right) = _s3_reads(data_dir, include_low_mapq=True)
+    depth = [[p, d * 2 / 30] for p, d in left.depth]
+    option = read_option(
+        [[Cell(left, None, depth), Cell(right, None, None)]],
+        ["S3 (carrier)"],
+        windows=windows,
+        breakpoints=list(CNV_LOSS),
+        suggested=[
+            Suggested(CNV_LOSS[0] + 10, False, "exact"),
+            Suggested(CNV_LOSS[1] + 10, True, "≈"),
+        ],
+        intervals=[(CNV_LOSS[0] - 50, CNV_LOSS[0] + 50)],
+    )
+    names = [s["name"] for s in option["series"]]
+    assert SERIES_NAMES["read_depth"] in names
+    marks = option["series"][0]["markLine"]["data"]
+    green = [m for m in marks if "label" in m]
+    assert [m["xAxis"] for m in green] == [CNV_LOSS[0] + 10]  # left window only
+    assert green[0]["lineStyle"]["type"] == "solid"
+    right_marks = [
+        m
+        for s in option["series"]
+        if s.get("markLine") and s["xAxisIndex"] == 1
+        for m in s["markLine"]["data"]
+        if "label" in m
+    ]
+    assert right_marks[0]["lineStyle"]["type"] == "dashed"
+    areas = option["series"][0]["markArea"]["data"]
+    assert [a[0].get("xAxis") for a in areas if "xAxis" in a[0]] == [CNV_LOSS[0] - 50]
+    faded = [
+        s
+        for s in option["series"]
+        if s["name"] == SERIES_NAMES["deletion"] and s["lineStyle"]["opacity"] < 0.5
+    ]
+    assert faded  # the MAPQ-0 pair
+
+
+def test_imprecise_calls_get_wider_breakpoint_windows():
+    _, (left, right) = read_view_windows(
+        "del", "chr1", 1_000_000, 2_000_000, precise=False
+    )
+    assert (left.start, left.end) == (995_000, 1_005_000)
+    assert right.width == 10_000
+
+
 def test_coverage_json_is_written_per_sample(data_dir):
     meta = json.loads(
         (sample_dir(data_dir, "S1") / "coverage" / f"S1.{CNV_TAG}.json").read_text()
     )
     assert meta["tag"] == CNV_TAG
+    cov = cnv.find_sample_coverage(data_dir, "S1")[0]
+    assert cnv.autosomal_median_depth(cov) == CNV_MEDIAN_DEPTH
