@@ -5,6 +5,29 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-10-19
+
+### Added
+- **Copy number in the SV dialog.** When the carrier has the normalised coverage bigWig written by the ghfc-ngs `cnv_coverage` step, the SV dialog shows a "Copy Number View" in place of the IGV coverage view. It has one plot per sample (carrier, parents, any added member) with a shared zoom.
+  - Copy number = expected ploidy × sample / median of the cohort's control panel (`cnv_panel_dir` in its params file, built by the `cnv_panel` step), PAR-aware on chrX/chrY.
+  - Bins where the panel is unreliable are greyed.
+  - Each sample's karyotype and fit to the panel are shown, highlighted when the fit is worse than the panel's own cut-off.
+  - Without a panel, or for a karyotype the panel has no group for, the sample's own normalisation is shown, with the reason.
+  - Samples without a bigWig keep the IGV coverage view.
+- **Read evidence (samplot-like) in the SV dialog.** Read pairs are drawn at their insert size and coloured by orientation, as in IGV's "pair orientation & insert size" colouring:
+  - deletion (`+-`, large insert);
+  - duplication (`-+`);
+  - inversions (`++`, `--`);
+  - mates on another chromosome.
+
+  Split reads and a coverage strip are drawn too, for each sample with a CRAM. This needs the new `reference_fasta` config key, the FASTA the CRAMs were aligned to.
+- **Single window or one per breakpoint.** The IGV read view and the read evidence show a short SV in one window, and a long one (wider than IGV's 30 kb alignment window) at each breakpoint. An Auto / Single / Split toggle overrides the choice.
+- The sample dialog's coverage track uses the normalised bigWig when there is one.
+- Workflow tab labels for the `melt`, `cnv_coverage`, `cnv_panel` and `sampleqc` steps.
+
+### Fixed
+- The read view of an SV shorter than 3 kb no longer shows two overlapping windows.
+
 ## [0.18.2] - 2026-10-19
 
 ### Fixed
