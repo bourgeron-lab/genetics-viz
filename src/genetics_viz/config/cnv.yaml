@@ -1,0 +1,64 @@
+# CNV coverage and SV read-evidence display settings.
+#
+# Consumed by utils/cnv_coverage.py, utils/sv_view.py and utils/sv_reads.py.
+# The files themselves (bigWigs, panel.json, fit tables) are written by the
+# ghfc-ngs cnv_coverage and cnv_panel steps; nothing here changes their
+# meaning, only how they are drawn.
+
+copy_number:
+  # A bin is masked (drawn grey, not as a copy number) when the panel cannot
+  # be trusted there: a median under this fraction of the expected ploidy
+  # (segmental duplications, gaps, MAPQ-0 stretches) ...
+  min_median_fraction: 0.5
+  # ... or a spread across the controls above this fraction of the median.
+  max_relative_mad: 0.35
+  # Copy numbers above this are drawn at the cap.
+  y_max: 5
+  # Points drawn per sample. Wider regions are median-aggregated to this.
+  display_points: 1500
+  # Regions with more 250 bp bins than this are read through the bigWig zoom
+  # levels instead of bin by bin (about 50 Mb).
+  max_exact_bins: 200000
+  # Smallest window drawn around an SV, so a short one keeps its flanks.
+  min_window_bp: 20000
+  colors:
+    loss: "#d62728"
+    neutral: "#4b5563"
+    gain: "#2ca02c"
+    masked: "#d1d5db"
+    roi_loss: "rgba(255,0,0,0.12)"
+    roi_gain: "rgba(0,128,0,0.12)"
+
+# Which read view an SV gets: one window around the whole event, or one
+# window per breakpoint.
+read_view:
+  # Same value is set as the igv.js alignment track's visibilityWindow, so the
+  # switch and igv.js agree on what can be drawn in one window.
+  visibility_window_bp: 30000
+  # The single window is the SV span times this, centred on it.
+  expansion: 1.6
+  # Half-width of each breakpoint window in the split view.
+  flank_bp: 1500
+
+read_evidence:
+  # Concordant pairs kept per window (random, seeded). Discordant pairs and
+  # split reads are always all kept.
+  max_concordant_per_window: 1500
+  # A pair is discordant by size beyond median + this many MADs of the
+  # window's proper-pair insert sizes.
+  discordant_insert_mads: 6
+  # Fallback when a window has too few proper pairs to estimate the median.
+  default_insert_max: 1000
+  min_mapq: 1
+  coverage_bin_bp: 25
+  # Colours follow igv.js's "pair orientation & insert size" scheme, so the
+  # read panel and the IGV read view agree.
+  colors:
+    concordant: "#bdbdbd"
+    deletion: "#c80000" # +- with a larger insert than expected
+    duplication: "#009600" # -+ (pair pointing outward)
+    inversion_pp: "#009696" # ++
+    inversion_mm: "#1432c8" # --
+    interchromosomal: "#9c27b0"
+    split: "#000000"
+    coverage: "#9ca3af"

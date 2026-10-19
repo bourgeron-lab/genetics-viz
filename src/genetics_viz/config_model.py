@@ -42,6 +42,7 @@ class AppConfig:
     storage_secret: str = ""
     poll_interval: int = 30
     ancestry_reference_dir: str = ""
+    reference_fasta: str = ""
     genetrek_url: str = ""
     genetrek_cache_dir: str = ""
 
@@ -137,6 +138,7 @@ def load_config(config_path: Path) -> AppConfig:
 
     poll_interval = int(raw.get("poll_interval") or 30)
     ancestry_reference_dir = str(raw.get("ancestry_reference_dir") or "")
+    reference_fasta = str(raw.get("reference_fasta") or "")
     genetrek_url = str(raw.get("genetrek_url") or "")
     genetrek_cache_dir = str(raw.get("genetrek_cache_dir") or "")
 
@@ -147,6 +149,7 @@ def load_config(config_path: Path) -> AppConfig:
         storage_secret=storage_secret,
         poll_interval=poll_interval,
         ancestry_reference_dir=ancestry_reference_dir,
+        reference_fasta=reference_fasta,
         genetrek_url=genetrek_url,
         genetrek_cache_dir=genetrek_cache_dir,
     )
@@ -190,6 +193,8 @@ def save_config(config: AppConfig) -> None:
     # omitted here is silently dropped the next time an admin saves.
     if config.ancestry_reference_dir:
         data["ancestry_reference_dir"] = config.ancestry_reference_dir
+    if config.reference_fasta:
+        data["reference_fasta"] = config.reference_fasta
     if config.poll_interval != 30:
         data["poll_interval"] = config.poll_interval
     if config.genetrek_url:
@@ -228,6 +233,17 @@ def get_ancestry_reference_dir() -> Optional[Path]:
     if not _app_config.ancestry_reference_dir:
         return None
     return Path(_app_config.ancestry_reference_dir)
+
+
+def get_reference_fasta() -> Optional[Path]:
+    """Return the FASTA the CRAMs were aligned to, or ``None`` when unset.
+
+    pysam needs it to decode CRAM reads for the SV read-evidence panel. It must
+    be the alignment reference itself (GRCh38_GIABv3), not a generic hg38.
+    """
+    if _app_config is None or not _app_config.reference_fasta:
+        return None
+    return Path(_app_config.reference_fasta)
 
 
 def get_genetrek_url() -> str:

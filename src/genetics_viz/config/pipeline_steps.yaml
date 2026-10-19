@@ -51,6 +51,29 @@ steps:
     note: >-
       Not measured unless the step was requested: the pipeline skips the whole
       ExpansionHunter planning pass otherwise, so there is nothing to report.
+  melt:
+    label: "MELT (mobile elements)"
+    unit: "samples"
+    note: >-
+      Not measured unless the step was requested.
+  cnv_coverage:
+    label: "CNV coverage"
+    unit: "samples"
+    note: >-
+      Counts samples with both coverage files (bigWig and JSON). The cohort's
+      fit against a control panel is not counted.
+  cnv_panel:
+    label: "CNV control panel"
+    unit: "cohort"
+    note: >-
+      Controls cohort only: 1 of 1 once the panel version is complete. A
+      version is never rebuilt, so samples added since do not reopen it.
+  sampleqc:
+    label: "Sample QC (somalier)"
+    unit: "samples"
+    note: >-
+      Counts samples with a somalier extract; the family and cohort tables
+      are not counted.
   snvs_cohort:
     label: "Cohort merge"
     unit: "cohort"

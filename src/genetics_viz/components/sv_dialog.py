@@ -12,7 +12,11 @@ from typing import Any, Dict, List, Optional
 import yaml
 from nicegui import ui
 
+from genetics_viz.components.sv_cn_panel import CopyNumberPanel
+from genetics_viz.components.sv_read_panel import ReadEvidencePanel
+from genetics_viz.utils.cnv_coverage import CNRequest, find_sample_coverage
 from genetics_viz.utils.data import get_data_store, get_static_prefix
+from genetics_viz.utils.pipeline_params import load_params
 from genetics_viz.utils.gene_scoring import (
     build_gene_badges,
     gene_badges_html,
@@ -23,6 +27,7 @@ from genetics_viz.utils.gene_scoring import (
 from genetics_viz.utils.genetrek import search_url
 from genetics_viz.utils.tsv import clean_tsv_field
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
+from genetics_viz.utils.sv_view import read_view_windows, visibility_window_bp
 from genetics_viz.utils.wisecondorx import infer_sv_type
 
 
@@ -310,8 +315,8 @@ def show_sv_dialog(
             else:
                 sample_parents = {"father": None, "mother": None}
 
+            cohort = store.get_cohort(cohort_name)
             if family_members_override is None or sample_parents_override is None:
-                cohort = store.get_cohort(cohort_name)
                 if cohort:
                     members_data = cohort.get_family_members(family_id)
                     if family_members_override is None:
@@ -326,6 +331,28 @@ def show_sv_dialog(
             # Track additional samples
             additional_samples: Dict[str, List[str]] = {"value": []}
 
+            def has_bedgraph(sample_id: str) -> bool:
+                return (
+                    get_sample_path(store.data_dir, sample_id)
+                    / "sequences"
+                    / f"{sample_id}.by1000.bedgraph.gz"
+                ).exists()
+
+            def has_coverage(sample_id: str) -> bool:
+                """A coverage track can be drawn: bigWig or by1000 bedgraph."""
+                return has_bedgraph(sample_id) or bool(
+                    find_sample_coverage(store.data_dir, sample_id)
+                )
+
+            def cn_request(sample_id: str) -> CNRequest:
+                """The sample's family and pedigree sex, for its panel group."""
+                if cohort:
+                    for fam in cohort.families.values():
+                        member = fam.get_sample(sample_id)
+                        if member is not None:
+                            return CNRequest(sample_id, fam.family_id, member.sex)
+                return CNRequest(sample_id, family_id, None)
+
             # Automatically add parents if available
             for parent_type, parent_id in sample_parents.items():
                 if (
@@ -334,12 +361,7 @@ def show_sv_dialog(
                     and parent_id != "0"
                     and parent_id != sample
                 ):
-                    bedgraph_file = (
-                        get_sample_path(store.data_dir, parent_id)
-                        / "sequences"
-                        / f"{parent_id}.by1000.bedgraph.gz"
-                    )
-                    if bedgraph_file.exists():
+                    if has_coverage(parent_id):
                         additional_samples["value"].append(parent_id)
 
             def get_relationship_label(sample_id: str) -> str:
@@ -423,20 +445,16 @@ def show_sv_dialog(
                     and sample_id not in additional_samples["value"]
                     and sample_id != sample
                 ):
-                    bedgraph_file = (
-                        get_sample_path(store.data_dir, sample_id)
-                        / "sequences"
-                        / f"{sample_id}.by1000.bedgraph.gz"
-                    )
-                    if bedgraph_file.exists():
+                    if has_coverage(sample_id):
                         additional_samples["value"].append(sample_id)
                         refresh_additional_samples()
                         refresh_igv()
                         refresh_igv_vaf()
                         refresh_igv_cram()
+                        refresh_read_evidence()
                     else:
                         ui.notify(
-                            f"Bedgraph file not found for sample: {sample_id}",
+                            f"No coverage file found for sample: {sample_id}",
                             type="warning",
                         )
 
@@ -448,12 +466,7 @@ def show_sv_dialog(
                             parent_id not in additional_samples["value"]
                             and parent_id != sample
                         ):
-                            bedgraph_file = (
-                                get_sample_path(store.data_dir, parent_id)
-                                / "sequences"
-                                / f"{parent_id}.by1000.bedgraph.gz"
-                            )
-                            if bedgraph_file.exists():
+                            if has_coverage(parent_id):
                                 additional_samples["value"].append(parent_id)
                                 added.append(parent_id)
                 if added:
@@ -461,6 +474,7 @@ def show_sv_dialog(
                     refresh_igv()
                     refresh_igv_vaf()
                     refresh_igv_cram()
+                    refresh_read_evidence()
                     ui.notify(f"Added parents: {', '.join(added)}", type="positive")
                 else:
                     ui.notify("No parents to add or files not found", type="warning")
@@ -472,12 +486,7 @@ def show_sv_dialog(
                         member_id not in additional_samples["value"]
                         and member_id != sample
                     ):
-                        bedgraph_file = (
-                            get_sample_path(store.data_dir, member_id)
-                            / "sequences"
-                            / f"{member_id}.by1000.bedgraph.gz"
-                        )
-                        if bedgraph_file.exists():
+                        if has_coverage(member_id):
                             additional_samples["value"].append(member_id)
                             added.append(member_id)
                 if added:
@@ -485,6 +494,7 @@ def show_sv_dialog(
                     refresh_igv()
                     refresh_igv_vaf()
                     refresh_igv_cram()
+                    refresh_read_evidence()
                     ui.notify(f"Added {len(added)} family members", type="positive")
                 else:
                     ui.notify("No additional family members to add", type="warning")
@@ -496,6 +506,7 @@ def show_sv_dialog(
                     refresh_igv()
                     refresh_igv_vaf()
                     refresh_igv_cram()
+                    refresh_read_evidence()
 
             refresh_additional_samples()
 
@@ -819,12 +830,7 @@ def show_sv_dialog(
                 tracks = []
 
                 # Main sample track
-                bedgraph_file = (
-                    get_sample_path(store.data_dir, sample)
-                    / "sequences"
-                    / f"{sample}.by1000.bedgraph.gz"
-                )
-                if bedgraph_file.exists():
+                if has_bedgraph(sample):
                     sample_url_seg = get_sample_url(store.data_dir, sample)
                     main_label = f"{sample} {get_relationship_label(sample)}".strip()
                     tracks.append(
@@ -841,12 +847,7 @@ def show_sv_dialog(
 
                 # Additional samples tracks
                 for add_sample_id in additional_samples["value"]:
-                    bedgraph_file = (
-                        get_sample_path(store.data_dir, add_sample_id)
-                        / "sequences"
-                        / f"{add_sample_id}.by1000.bedgraph.gz"
-                    )
-                    if bedgraph_file.exists():
+                    if has_bedgraph(add_sample_id):
                         add_url_seg = get_sample_url(store.data_dir, add_sample_id)
                         add_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
                         tracks.append(
@@ -941,6 +942,7 @@ def show_sv_dialog(
                             "height": 250,
                             "displayMode": "SQUISHED",
                             "viewAsPairs": True,
+                            "visibilityWindow": visibility_window_bp(),
                             "autoscale": False,
                             "autoscaleGroup": "cram",
                         }
@@ -966,6 +968,7 @@ def show_sv_dialog(
                                 "height": 250,
                                 "displayMode": "SQUISHED",
                                 "viewAsPairs": True,
+                                "visibilityWindow": visibility_window_bp(),
                                 "autoscale": False,
                                 "autoscaleGroup": "cram",
                             }
@@ -1048,89 +1051,123 @@ def show_sv_dialog(
                         )
 
             # IGV.js viewer container for bedgraph (CNV view)
+            # The carrier's normalised coverage bigWig, divided by the cohort's
+            # control panel, replaces the by1000 bedgraph in IGV when present.
+            use_cn = bool(find_sample_coverage(store.data_dir, sample))
             cnv_expansion = (
-                ui.expansion("CNV Coverage View", icon="analytics", value=True)
+                ui.expansion(
+                    "Copy Number View" if use_cn else "CNV Coverage View",
+                    icon="analytics",
+                    value=True,
+                )
                 .classes("w-full mt-4 border border-gray-400 rounded-lg")
                 .props("header-class='text-lg font-bold bg-gray-100'")
             )
 
             with cnv_expansion:
-                igv_container = (
-                    ui.element("div")
-                    .props('id="igv-div"')
-                    .classes("w-full border border-gray-300 rounded-lg")
-                    .style(f"height: {calculate_igv_height()}px")
-                )
+                if use_cn:
+                    cn_panel = CopyNumberPanel(
+                        data_dir=store.data_dir,
+                        cohort_dir=cohort.path if cohort else None,
+                        cohort_name=cohort_name,
+                        params=(
+                            load_params(cohort.params_file)
+                            if cohort and cohort.params_file
+                            else {}
+                        ),
+                        chrom=chrom,
+                        roi=(int(roi_start_coord), int(roi_end_coord)),
+                        call=str(sv_data.get("call", "")),
+                        label_for=get_relationship_label,
+                    )
 
-                @ui.refreshable
-                def refresh_igv():
-                    """Refresh IGV viewer with current tracks."""
-                    igv_container.clear()
+                    def refresh_igv():
+                        """Redraw the copy-number panel for the current samples."""
+                        cn_panel.refresh(
+                            [
+                                cn_request(sid)
+                                for sid in [sample, *additional_samples["value"]]
+                            ]
+                        )
 
-                    # Update container height
-                    try:
-                        new_height = calculate_igv_height()
-                        igv_container.style(f"height: {new_height}px")
-                    except RuntimeError:
-                        pass
+                    refresh_igv()
+                else:
+                    igv_container = (
+                        ui.element("div")
+                        .props('id="igv-div"')
+                        .classes("w-full border border-gray-300 rounded-lg")
+                        .style(f"height: {calculate_igv_height()}px")
+                    )
 
-                    tracks = build_igv_tracks()
+                    @ui.refreshable
+                    def refresh_igv():
+                        """Refresh IGV viewer with current tracks."""
+                        igv_container.clear()
 
-                    # Determine ROI color based on call type
-                    call_value = sv_data.get("call", "")
-                    roi_color = "rgba(255,0,0,0.2)"  # Default red for loss
-                    if "GAIN" in str(call_value).upper():
-                        roi_color = "rgba(0,128,0,0.2)"  # Green for gain
+                        # Update container height
+                        try:
+                            new_height = calculate_igv_height()
+                            igv_container.style(f"height: {new_height}px")
+                        except RuntimeError:
+                            pass
 
-                    # Create ROI description
-                    roi_description = f"{chrom}:{start}-{end} - {call_value}"
+                        tracks = build_igv_tracks()
 
-                    # IGV.js initialization script
-                    igv_script = f"""
-                    (async function() {{
-                        const igvDiv = document.getElementById("igv-div");
-                        if (!igvDiv) return;
+                        # Determine ROI color based on call type
+                        call_value = sv_data.get("call", "")
+                        roi_color = "rgba(255,0,0,0.2)"  # Default red for loss
+                        if "GAIN" in str(call_value).upper():
+                            roi_color = "rgba(0,128,0,0.2)"  # Green for gain
 
-                        // Clear any existing IGV instance
-                        if (window.igvBrowser) {{
-                            igv.removeBrowser(window.igvBrowser);
-                        }}
+                        # Create ROI description
+                        roi_description = f"{chrom}:{start}-{end} - {call_value}"
 
-                        const roiConfig = [
-                            {{
-                                name: "{roi_description}",
-                                color: "{roi_color}",
-                                features: [
-                                    {{
-                                        chr: "{chrom}",
-                                        start: {roi_start_coord},
-                                        end: {roi_end_coord},
-                                        name: "{call_value}"
-                                    }}
-                                ]
+                        # IGV.js initialization script
+                        igv_script = f"""
+                        (async function() {{
+                            const igvDiv = document.getElementById("igv-div");
+                            if (!igvDiv) return;
+
+                            // Clear any existing IGV instance
+                            if (window.igvBrowser) {{
+                                igv.removeBrowser(window.igvBrowser);
                             }}
-                        ];
-                        const options = {{
-                            genome: "hg38",
-                            locus: "{igv_locus}",
-                            tracks: {json.dumps(tracks)},
-                            roi: roiConfig,
-                        }};
 
-                        window.igvBrowser = await igv.createBrowser(igvDiv, options);
+                            const roiConfig = [
+                                {{
+                                    name: "{roi_description}",
+                                    color: "{roi_color}",
+                                    features: [
+                                        {{
+                                            chr: "{chrom}",
+                                            start: {roi_start_coord},
+                                            end: {roi_end_coord},
+                                            name: "{call_value}"
+                                        }}
+                                    ]
+                                }}
+                            ];
+                            const options = {{
+                                genome: "hg38",
+                                locus: "{igv_locus}",
+                                tracks: {json.dumps(tracks)},
+                                roi: roiConfig,
+                            }};
 
-                        // Trigger resize to ensure proper width
-                        setTimeout(() => {{
-                            if (window.igvBrowser && window.igvBrowser.visibilityChange) {{
-                                window.igvBrowser.visibilityChange();
-                            }}
-                        }}, 100);
-                    }})();
-                    """
+                            window.igvBrowser = await igv.createBrowser(igvDiv, options);
 
-                    ui.run_javascript(igv_script, timeout=10.0)
+                            // Trigger resize to ensure proper width
+                            setTimeout(() => {{
+                                if (window.igvBrowser && window.igvBrowser.visibilityChange) {{
+                                    window.igvBrowser.visibilityChange();
+                                }}
+                            }}, 100);
+                        }})();
+                        """
 
-                refresh_igv()
+                        ui.run_javascript(igv_script, timeout=10.0)
+
+                    refresh_igv()
 
             # Handle expansion panel opening to resize IGV
             def on_cnv_expansion_change(e):
@@ -1244,12 +1281,37 @@ def show_sv_dialog(
 
             # Second IGV.js viewer container for CRAM (read-level split view)
             cram_expansion = (
-                ui.expansion("Read-Level Split View", icon="dna")
+                ui.expansion("Read-Level View", icon="dna")
                 .classes("w-full mt-6 border border-gray-400 rounded-lg")
                 .props("default-opened header-class='text-lg font-bold bg-gray-100'")
             )
 
+            # One window around a short SV, one per breakpoint for a long one
+            # (utils/sv_view.py). Shared by the IGV reads and the read panel.
+            read_mode: Dict[str, str] = {"value": "auto"}
+
+            def current_read_windows():
+                return read_view_windows(
+                    sv_type,
+                    chrom,
+                    int(roi_start_coord),
+                    int(roi_end_coord),
+                    mode=read_mode["value"],
+                )
+
+            def on_read_mode_change(e):
+                read_mode["value"] = e.value
+                refresh_igv_cram()
+                refresh_read_evidence()
+
             with cram_expansion:
+                with ui.row().classes("items-center gap-3 px-2 pb-2"):
+                    ui.toggle(
+                        {"auto": "Auto", "single": "Single window", "split": "Split"},
+                        value="auto",
+                        on_change=on_read_mode_change,
+                    ).props("dense no-caps size=sm").mark("read-mode")
+                    read_mode_label = ui.label().classes("text-sm text-gray-500")
                 igv_cram_container = (
                     ui.element("div")
                     .props('id="igv-cram-div"')
@@ -1271,15 +1333,19 @@ def show_sv_dialog(
 
                     cram_tracks = build_cram_tracks()
 
-                    # Split view locus format: "chr:(start-1500)-(start+1500) chr:(end-1500)-(end+1500)"
-                    # Use curated coordinates if available
-                    split_start = int(roi_start_coord)
-                    split_end = int(roi_end_coord)
-                    start_window_start = max(0, split_start - 1500)
-                    start_window_end = split_start + 1500
-                    end_window_start = max(0, split_end - 1500)
-                    end_window_end = split_end + 1500
-                    split_locus = f"{chrom}:{start_window_start}-{start_window_end} {chrom}:{end_window_start}-{end_window_end}"
+                    # Curated coordinates when available; a space-separated
+                    # locus list is igv.js's multi-locus (split) view.
+                    used_mode, windows = current_read_windows()
+                    split_locus = " ".join(w.locus for w in windows)
+                    read_mode_label.text = (
+                        f"{'auto: ' if read_mode['value'] == 'auto' else ''}"
+                        + (
+                            "one window"
+                            if used_mode == "single"
+                            else "one window per breakpoint"
+                        )
+                        + f" (single up to {visibility_window_bp() // 1000} kb shown)"
+                    )
 
                     # Determine ROI color based on call type (same as CNV view)
                     call_value = sv_data.get("call", "")
@@ -1492,6 +1558,26 @@ def show_sv_dialog(
                     """)
 
             cram_expansion.on_value_change(on_cram_expansion_change)
+
+            # Samplot-like view of the same windows: pairs at their insert
+            # size, coloured by orientation, with split reads and coverage.
+            reads_expansion = (
+                ui.expansion("Read Evidence", icon="insights", value=True)
+                .classes("w-full mt-4 border border-gray-400 rounded-lg")
+                .props("header-class='text-lg font-bold bg-gray-100'")
+            )
+            with reads_expansion:
+                read_panel = ReadEvidencePanel(
+                    data_dir=store.data_dir,
+                    breakpoints=[int(roi_start_coord), int(roi_end_coord)],
+                    label_for=get_relationship_label,
+                )
+
+            def refresh_read_evidence():
+                _, windows = current_read_windows()
+                read_panel.refresh([sample, *additional_samples["value"]], windows)
+
+            refresh_read_evidence()
 
             # SV Validation section
             # Determine SV type for variant key (dup for gain, del for loss)

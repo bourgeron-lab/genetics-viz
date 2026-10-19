@@ -18,7 +18,12 @@ exercise the traps found so far:
   thresholds; family 1002 has no STR results at all;
 - a GeneTrek snapshot cache with a renamed gene (``KIAA1109`` -> ``BLTP1``), an
   alias shared by two genes, versioned lists and a gene whose sources disagree
-  on its mode of inheritance; and Wombat rows for each MOI verdict.
+  on its mode of inheritance; and Wombat rows for each MOI verdict;
+- CNV coverage bigWigs for the 1001 trio, the carrier halved over its
+  WisecondorX loss, a control panel (inside DEMO itself) with a masked stretch
+  and PAR-aware sex groups, reached through a compute-cluster
+  ``cnv_panel_dir``; and a reference-free CRAM for S3 with one of each read
+  signature at the loss's breakpoints.
 """
 
 import gzip
@@ -498,6 +503,7 @@ def build_data_dir(root: Path) -> Path:
     params_file = demo / "DEMO.params.yml"
     params_file.write_text(
         "# test params\ncohort_name: DEMO\nsteps:\n  - ancestry\n  - roh\n"
+        f"cnv_panel_dir: {CNV_PANEL_CLUSTER_PATH}\n"
     )
     build_state(demo, "DEMO", pedigree_file, params_file)
     build_cohort_results(demo, "DEMO", DEMO_PEDIGREE)
@@ -527,6 +533,7 @@ def build_data_dir(root: Path) -> Path:
             str_rows += build_str_results(data, fid, members)
     build_cohort_str_results(demo, "DEMO", str_rows)
     build_wombat_results(data)
+    build_cnv_results(data, demo)
     return data
 
 
@@ -686,3 +693,214 @@ def build_headerless_cohort_wombat(data: Path) -> Path:
         "\n" + "".join("\t".join(map(str, r)) + "\n" for r in WOMBAT_ROWS[:2])
     )
     return path
+
+
+# ---------------------------------------------------------------------------
+# CNV coverage, control panel and read evidence
+# ---------------------------------------------------------------------------
+
+CNV_TAG = "cov_b250q1"
+CNV_BIN = 250
+#: As a cohort's params file writes it: a path on the compute cluster.
+CNV_PANEL_CLUSTER_PATH = "/pasteur/helix/projects/x/WGS/cohorts/DEMO/cnv_panel/v1"
+CNV_CHROMS = {"chr2": 242193529, "chrX": 156040895, "chrY": 57227415}
+#: Only these stretches are written: the whole grid would be millions of bins.
+CNV_SPANS = {
+    "chr2": (164_800_000, 165_700_000),
+    "chrX": (2_700_000, 2_900_000),
+    "chrY": (2_800_000, 2_900_000),
+}
+#: S3's WisecondorX loss (WCX_ROWS), and a stretch where the panel is unusable.
+CNV_LOSS = (165_114_001, 165_316_000)
+CNV_MASKED = (165_400_000, 165_410_000)
+PAR1_END = 2_781_479
+CNV_SEX = {"S1": "XY", "S2": "XX", "S3": "XY"}
+#: The reference-free CRAM decodes without it; the file only has to exist.
+CRAM_REFERENCE = "cram_reference/GRCh38.fasta"
+
+
+def _bigwig(path: Path, value_at) -> None:
+    import pybigtools
+
+    def entries():
+        for chrom, (lo, hi) in CNV_SPANS.items():
+            for start in range(lo, hi, CNV_BIN):
+                value = value_at(chrom, start)
+                if value is not None:
+                    yield chrom, start, start + CNV_BIN, float(value)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pybigtools.open(str(path), "w").write(CNV_CHROMS, entries())
+
+
+def _sample_value(sid: str):
+    sex = CNV_SEX[sid]
+
+    def value(chrom: str, start: int):
+        if chrom == "chr2":
+            in_loss = sid == "S3" and CNV_LOSS[0] <= start < CNV_LOSS[1]
+            return 1.0 if in_loss else 2.0
+        if chrom == "chrX":
+            return 2.0 if sex == "XX" or start < PAR1_END else 1.0
+        return 1.0 if sex == "XY" else 0.0
+
+    return value
+
+
+def _panel_value(group: str, stat: str):
+    def value(chrom: str, start: int):
+        if group == "autosomes" and chrom != "chr2":
+            return None
+        if group != "autosomes" and chrom == "chr2":
+            return None
+        if group == "XX" and chrom != "chrX":
+            return None
+        if stat == "mad":
+            return 0.1
+        if chrom == "chr2":
+            return 0.4 if CNV_MASKED[0] <= start < CNV_MASKED[1] else 2.0
+        if chrom == "chrX":
+            return 2.0 if group == "XX" or start < PAR1_END else 1.0
+        return 1.0
+
+    return value
+
+
+def cram_reference(root: Path) -> Path:
+    return root / CRAM_REFERENCE
+
+
+def build_cnv_results(data: Path, demo: Path) -> None:
+    for sid in CNV_SEX:
+        cov = sample_dir(data, sid) / "coverage"
+        _bigwig(cov / f"{sid}.{CNV_TAG}.bw", _sample_value(sid))
+        (cov / f"{sid}.{CNV_TAG}.json").write_text(
+            json.dumps({"sample": sid, "tag": CNV_TAG, "bin": CNV_BIN, "mapq": 1})
+        )
+
+    panel = demo / "cnv_panel" / "v1"
+    for group in ("autosomes", "XX", "XY"):
+        for stat in ("median", "mad"):
+            _bigwig(
+                panel / f"panel.{CNV_TAG}.{group}.{stat}.bw", _panel_value(group, stat)
+            )
+    par = {
+        "build": "GRCh38",
+        "coordinates": "1-based inclusive",
+        "chrX": {"PAR1": [10001, PAR1_END], "PAR2": [155701383, 156030895]},
+        "chrY": {"PAR1": [10001, PAR1_END], "PAR2": [56887903, 57217415]},
+    }
+    (panel / "panel.json").write_text(
+        json.dumps(
+            {
+                "panel_version": "1",
+                "tag": CNV_TAG,
+                "bin": CNV_BIN,
+                "mapq": 1,
+                "reference": "GRCh38.fasta",
+                "source_cohort": "DEMO",
+                "n_controls": {"autosomes": 6, "XX": 3, "XY": 3},
+                "mad_scale": 1.0,
+                "max_fit_mad": 0.3,
+                "par": par,
+                "expected_ploidy": {
+                    "autosomes": 2,
+                    "XX": {"chrX": 2},
+                    "XY": {"chrX": {"non_par": 1, "par": 2}, "chrY": {"non_par": 1}},
+                },
+            }
+        )
+    )
+    write_tsv(
+        demo / "coverage" / f"DEMO.{CNV_TAG}.panel_v1.fit.tsv",
+        ["family_id", "sample", "pedigree_sex", "coverage_sex", "fit_mad",
+         "chrX_ratio", "chrY_ratio"],
+        [["1001", "S1", "male", "XY", 0.12, 0.5, 0.5],
+         ["1001", "S2", "female", "XX", 0.13, 1.0, 0.0],
+         ["1001", "S3", "male", "XY", 0.41, 0.5, 0.5]],
+    )  # fmt: skip
+
+    ref = cram_reference(data.parent)
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_text(">chr2\nACGT\n")
+    # Lengths as in the CRAM header, so htslib does not warn about them.
+    ref.with_suffix(".fasta.fai").write_text(
+        "".join(f"{c}\t{n}\t6\t4\t5\n" for c, n in CNV_CHROMS.items())
+    )
+    build_cram(sample_dir(data, "S3") / "sequences" / "S3.GRCh38_GIABv3.cram")
+
+
+#: Signatures written at S3's loss: (name, kind, left start, right start).
+CRAM_SIGNATURES = (
+    [(f"del{i}", "deletion", CNV_LOSS[0] - 400 + 20 * i, CNV_LOSS[1] + 200 + 20 * i)
+     for i in range(6)]
+    + [(f"inv{i}", "inversion_pp", CNV_LOSS[0] - 600 + 30 * i, CNV_LOSS[1] - 300)
+       for i in range(2)]
+    + [("dup0", "duplication", CNV_LOSS[0] - 300, CNV_LOSS[0] + 100)]
+)  # fmt: skip
+CRAM_SPLITS = 2
+CRAM_CONCORDANT_PER_SIDE = 60
+
+
+def build_cram(path: Path) -> None:
+    """A reference-free CRAM: pairs of every class at both breakpoints."""
+    import pysam
+
+    read_len = 100
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [{"SN": c, "LN": n} for c, n in CNV_CHROMS.items()]
+        + [{"SN": "chr5", "LN": 181538259}],
+    }
+    chrom_id = {c: i for i, c in enumerate([*CNV_CHROMS, "chr5"])}
+    reads: List = []
+
+    def add(name, flag, chrom, pos, mate_chrom, mate_pos, tlen, cigar="100M", tags=()):
+        reads.append((chrom_id[chrom], pos, name, flag, mate_chrom, mate_pos, tlen,
+                      cigar, tags))  # fmt: skip
+
+    def pair(name, pos, mate_pos, left_flag, right_flag):
+        tlen = mate_pos + read_len - pos
+        add(name, left_flag, "chr2", pos, "chr2", mate_pos, tlen)
+        add(name, right_flag, "chr2", mate_pos, "chr2", pos, -tlen)
+
+    for side, centre in enumerate(CNV_LOSS):
+        for i in range(CRAM_CONCORDANT_PER_SIDE):
+            pos = centre - 1400 + 45 * i
+            pair(f"c{side}_{i}", pos, pos + 250 + (i % 5) * 10, 99, 147)
+    for name, kind, left, right in CRAM_SIGNATURES:
+        flags = {
+            "deletion": (97, 145),  # +-, not proper
+            "inversion_pp": (65, 129),  # ++
+            "duplication": (81, 161),  # -+
+        }[kind]
+        pair(name, left, right, *flags)
+    add("trans0", 97, "chr2", CNV_LOSS[0] - 200, "chr5", 1_000_000, 0)
+    for i in range(CRAM_SPLITS):
+        add(f"split{i}", 0, "chr2", CNV_LOSS[0] - 60 + 5 * i, "chr2",
+            CNV_LOSS[0] - 300, 0, cigar="60M40S",
+            tags=(("SA", f"chr2,{CNV_LOSS[1] + 1},+,60S40M,60,0;"),))  # fmt: skip
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pysam.AlignmentFile(
+        str(path), "wc", header=header, format_options=[b"no_ref=1"]
+    ) as out:
+        for rid, pos, name, flag, mate_chrom, mate_pos, tlen, cigar, tags in sorted(
+            reads, key=lambda r: (r[0], r[1])
+        ):
+            seg = pysam.AlignedSegment(out.header)
+            seg.query_name = name
+            seg.query_sequence = "A" * read_len
+            seg.query_qualities = pysam.qualitystring_to_array("I" * read_len)
+            seg.flag = flag
+            seg.reference_id = rid
+            seg.reference_start = pos
+            seg.mapping_quality = 60
+            seg.cigarstring = cigar
+            seg.next_reference_id = chrom_id[mate_chrom]
+            seg.next_reference_start = mate_pos
+            seg.template_length = tlen
+            for tag, value in tags:
+                seg.set_tag(tag, value)
+            out.write(seg)
+    pysam.index(str(path))

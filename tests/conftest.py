@@ -17,6 +17,7 @@ from genetics_viz import config_model
 from genetics_viz.utils import (
     ancestry,
     change_monitor,
+    cnv_coverage,
     cohort_state,
     data,
     gene_scoring,
@@ -44,6 +45,7 @@ def _reset_globals() -> None:
     ancestry.clear_reference_cache()
     roh.clear_reference_cache()
     str_eh.clear_eh_cache()
+    cnv_coverage.clear_cnv_cache()
     sample_counts.clear_sample_count_cache()
     cohort_state.clear_state_cache()
     cohort_state.clear_sha_cache()
@@ -131,6 +133,7 @@ def config_file(
                 "storage_secret": "test-storage-secret",
                 "poll_interval": 3600,
                 "ancestry_reference_dir": str(reference_root),
+                "reference_fasta": str(datagen.cram_reference(data_dir.parent)),
                 # Never reached: the network is refused in tests, so the app
                 # runs on the cache, as it would offline.
                 "genetrek_url": "http://genetrek.test/",

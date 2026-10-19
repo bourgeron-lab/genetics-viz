@@ -83,7 +83,23 @@ def show_sample_dialog(sample_id: str) -> None:
             sample_url = f"{get_static_prefix()}/{get_sample_url(store.data_dir, sample_id)}/sequences"
             tracks = []
 
-            if avail["bedgraph"]:
+            if avail.get("coverage_bigwig"):
+                # 2 x depth / the sample's autosomal median: about 2 on a
+                # normal autosome, whatever the sequencing depth.
+                tracks.append(
+                    {
+                        "name": f"{sample_id} Coverage (normalised)",
+                        "type": "wig",
+                        "format": "bigwig",
+                        "url": f"{get_static_prefix()}/{get_sample_url(store.data_dir, sample_id)}/coverage/{avail['coverage_bigwig']}",
+                        "height": 150,
+                        "color": "rgb(0, 0, 150)",
+                        "autoscale": False,
+                        "min": 0,
+                        "max": 5,
+                    }
+                )
+            elif avail["bedgraph"]:
                 tracks.append(
                     {
                         "name": f"{sample_id} Coverage",

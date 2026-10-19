@@ -8,6 +8,7 @@ standalone family page.
 from pathlib import Path
 from typing import Any
 
+from genetics_viz.utils.cnv_coverage import find_sample_coverage
 from genetics_viz.utils.sharding import get_family_path, get_sample_path
 
 
@@ -19,6 +20,7 @@ def check_sample_availability(data_dir: Path, sample_id: str) -> dict[str, Any]:
     """
     sample_path = get_sample_path(data_dir, sample_id)
     seq_dir = sample_path / "sequences"
+    coverages = find_sample_coverage(data_dir, sample_id)
 
     return {
         "exists": sample_path.is_dir(),
@@ -27,6 +29,8 @@ def check_sample_availability(data_dir: Path, sample_id: str) -> dict[str, Any]:
         "bedgraph": (seq_dir / f"{sample_id}.by1000.bedgraph.gz").exists(),
         "bedgraph_index": (seq_dir / f"{sample_id}.by1000.bedgraph.gz.tbi").exists(),
         "vaf_bedgraph": (seq_dir / f"{sample_id}.vaf.bedgraph.gz").exists(),
+        # File name of the normalised coverage bigWig (in ``coverage/``), or "".
+        "coverage_bigwig": coverages[0].bigwig.name if coverages else "",
         "deepvariant": (sample_path / "deepvariant").is_dir(),
         "svs": (sample_path / "svs").is_dir(),
         "str_expansionhunter": (sample_path / "str" / "expansionhunter").is_dir(),
