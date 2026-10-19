@@ -1,52 +1,31 @@
 """Statistics panel for the cohort page — box/bar plots of variant counts."""
 
-import re
 import statistics
-from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Tuple
 
 from nicegui import run, ui
 
 from genetics_viz.models import Cohort, DataStore
 from genetics_viz.utils.genesets import load_genesets
 from genetics_viz.utils.sample_counts import (
+    CohortWombatSource,
     MissingHeaderError,
+    cohort_wombat_sources,
     count_variants_per_sample,
+    family_header_sources,
 )
 
 
-def _discover_wombat_configs(store: DataStore, cohort: Cohort) -> List[str]:
-    """Scan the cohort wombat directory for available config names."""
-    wombat_dir = store.data_dir / "cohorts" / cohort.name / "wombat"
-    if not wombat_dir.exists():
-        return []
+def _wombat_sources(store: DataStore, cohort: Cohort) -> Dict[str, CohortWombatSource]:
+    """The cohort's Wombat table for each config, sorted by config.
 
-    pattern = re.compile(
-        rf"{re.escape(cohort.name)}\.rare\.([^.]+)\.(.+?)\.results\.tsv$"
-    )
-    configs: Set[str] = set()
-    for tsv in wombat_dir.glob("*.tsv"):
-        m = pattern.match(tsv.name)
-        if m:
-            configs.add(m.group(2))
-    return sorted(configs)
-
-
-def _find_wombat_file(
-    store: DataStore, cohort: Cohort, wombat_config: str
-) -> Path | None:
-    """Find the cohort-level wombat TSV for a given config."""
-    wombat_dir = store.data_dir / "cohorts" / cohort.name / "wombat"
-    if not wombat_dir.exists():
-        return None
-    pattern = re.compile(
-        rf"{re.escape(cohort.name)}\.rare\.[^.]+\."
-        rf"{re.escape(wombat_config)}\.results\.tsv$"
-    )
-    for f in wombat_dir.glob("*.tsv"):
-        if pattern.match(f.name):
-            return f
-    return None
+    A config written under several VEP configs keeps the first of them, as
+    ``cohort_wombat_sources`` sorts them.
+    """
+    sources: Dict[str, CohortWombatSource] = {}
+    for source in cohort_wombat_sources(store.data_dir, cohort.name):
+        sources.setdefault(source.wombat_config, source)
+    return sources
 
 
 def render_stats_panel(
@@ -56,7 +35,7 @@ def render_stats_panel(
     import plotly.graph_objects as go
 
     # Discover available wombat configs
-    wombat_configs = _discover_wombat_configs(store, cohort)
+    wombat_configs = list(_wombat_sources(store, cohort))
     if not wombat_configs:
         ui.label("No wombat files found").classes("text-gray-500 italic")
         return
@@ -117,8 +96,8 @@ def render_stats_panel(
                 return
 
             # Find the wombat file
-            tsv_path = _find_wombat_file(store, cohort, config)
-            if tsv_path is None:
+            source = _wombat_sources(store, cohort).get(config)
+            if source is None:
                 ui.notify(f"No wombat file found for config: {config}", type="negative")
                 return
 
@@ -164,8 +143,12 @@ def render_stats_panel(
             for gs_name in genesets:
                 genes = geneset_genes.get(gs_name)
                 try:
+                    # A fresh generator each time: a used one would lend nothing
+                    header_sources = family_header_sources(
+                        store.data_dir, cohort, source.vep_config, config
+                    )
                     counts = await run.io_bound(
-                        count_variants_per_sample, tsv_path, genes
+                        count_variants_per_sample, source.path, genes, header_sources
                     )
                 except MissingHeaderError as exc:
                     # Counting it anyway would plot every sample at 0

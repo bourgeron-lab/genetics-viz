@@ -209,21 +209,21 @@ def read_cohort_wombat(
 def count_variants_per_sample(
     tsv_path: Path,
     geneset_genes: Set[str] | None = None,
-    header_source: Optional[Path] = None,
+    header_sources: Iterable[Path] = (),
 ) -> Dict[str, int]:
     """Count unique variants per sample in a cohort Wombat file.
 
     If geneset_genes is provided, only count variants where VEP_SYMBOL
     overlaps the gene set. Returns {sample_id: variant_count}.
 
-    ``header_source`` (a family file of the same config) lends its header to
-    a cohort file that has none; see :func:`read_cohort_wombat`. Without one
-    that fits, ``MissingHeaderError`` is raised rather than counting every
-    sample as 0.
+    ``header_sources`` (family files of the same config, tried in turn) lend
+    their header to a cohort file that has none; see :func:`read_cohort_wombat`.
+    Without one that fits, ``MissingHeaderError`` is raised rather than
+    counting every sample as 0.
     """
     df = read_cohort_wombat(
         tsv_path,
-        [header_source] if header_source is not None else [],
+        header_sources,
         infer_schema_length=0,
         null_values=[".", ""],
     )
@@ -299,7 +299,8 @@ def cohort_sample_counts(
     if cached is not None:
         return cached
     if kind == "wombat":
-        counts = count_variants_per_sample(path, header_source=header_source)
+        sources = [header_source] if header_source is not None else []
+        counts = count_variants_per_sample(path, header_sources=sources)
     else:
         counts = count_aberrations_per_sample(path)
     _count_cache[key] = counts

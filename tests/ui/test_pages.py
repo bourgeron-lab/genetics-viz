@@ -521,3 +521,33 @@ async def test_wombat_stats_read_a_headerless_cohort_file(user, data_dir):
     )
     (line,) = non_founders["series"][0]["markLine"]["data"]
     assert line["label"]["formatter"] == "S3: 2"
+
+
+async def test_cohort_statistics_plot_a_headerless_cohort_wombat_table(user, data_dir):
+    """The Statistics panel borrows family 1001's header for DEMO's "strict" table."""
+    datagen.write_tsv(
+        data_dir / "params" / "genesets" / "strict_genes.tsv",
+        ["gene"],
+        [("SHANK3",), ("KIAA1109",)],
+    )
+    await login(user, "reader")
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    config = user.find(kind=ui.select, content="Wombat config").elements.pop()
+    # The older ".annotated." name is listed under its config, not "annotated.strict"
+    assert list(config.options) == ["default", "strict"]
+    genesets = user.find(kind=ui.select, content="Genesets").elements.pop()
+    with user.client:
+        config.set_value("strict")
+        genesets.set_value(["strict_genes"])
+    user.find(kind=ui.button, content="Plot").click()
+    await user.should_see(kind=ui.plotly, retries=30)
+    await user.should_not_see("Cannot plot")
+    (fig,) = [p.figure for p in user.find(ui.plotly).elements]
+    assert fig.layout.title.text == "% carriers per geneset"
+    # S3, one of the two affected samples, carries both of the table's variants
+    assert {t.name: list(t.x) for t in fig.data} == {
+        "-9.0": [0.0],
+        "1": [0.0],
+        "2": [50.0],
+    }
