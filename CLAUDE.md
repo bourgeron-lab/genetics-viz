@@ -48,6 +48,7 @@ src/genetics_viz/
     tanstack_table.py             # DataTable: TanStack table bridge (JS/CSS injection)
     column_selector.py            # Column visibility dialog with presets
     filters.py                    # Reusable filter menus (validation statuses, genesets)
+    sample_counts.py              # Stats dialogs: variants per member + cohort comparison
     gene_prefs_editor.py          # Profile card: GeneTrek tiers per geneset, live preview
     header.py                     # Shared page header with data dir dropdown + user menu
     validation_loader.py          # Validation TSV loading and badge logic
@@ -132,6 +133,7 @@ src/genetics_viz/
     sharding.py                   # Two-level sharded directory path resolution
     tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field
     wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
+    sample_counts.py              # Cohort Wombat/WisecondorX files, per-sample counts, outlier flags
     view_presets.py               # View preset loading with reload support
     column_names.py               # Column name/group/sorting/schema utilities
   static/
@@ -287,6 +289,13 @@ GeneTrek (`genetrek_url` in the app config, default the dev instance) is the lab
 - **Multi-line table tooltips** use `data-gene-tip`, shown by the floating tooltip in `data_table.js`; the CSS `data-tooltip` is one clipped line. `badge_list` cells switch automatically when a tooltip has a newline.
 - **Preferences live in `<config stem>.preferences.yaml`, not the config file.** `save_config` rewrites the config whole from memory and truncates before locking; profile saves there would race with admin saves. `user_preferences.py` locks a `.lock` file, re-reads, changes one entry and `os.replace`s. Saving checks the user itself; the default is admin-only.
 - **MOI flag** (`utils/inheritance.py`, `config/inheritance.yaml`): a gene's modes are pooled from every GeneTrek field in category `Inheritance`, because the combined `inheritance` holds one mode. Recessive second hits are looked for only among the rows of the same table (`annotate_moi`), and the tooltip says so. A male's chrX call outside PAR is hemizygous whatever the GT says. The DNM tab is not wired: `render_dnm_tab` has no caller.
+
+### Variants Per Sample (family Stats dialogs)
+The Wombat and WisecondorX Stats dialogs chart each selected member's count in the current table view, then place each member on the cohort's per-sample distribution (`utils/sample_counts.py`, drawn by `components/sample_counts.py`).
+- **The cohort comparison is unfiltered on both sides.** It counts the cohort-level file (`cohorts/<C>/wombat/<C>.rare.<vep>[.annotated].<config>.results.tsv`, or `<C>_aberrations[.annotated].bed`), never the table's filters. Older cohorts have only the `.annotated.` name, so the lookup tries both.
+- **Founders and non-founders are compared within their own group** (`Sample.is_founder`), with every pedigree sample zero-filled. A de novo config has rows only for children, and pooling them with the parents' zeros would flag any child with two calls.
+- An outlier is outside Q1-Q3 by more than 1.5 × IQR (`OUTLIER_IQR_FACTOR`) and on the far side of the median.
+- Counts load off-thread and are cached on `(path, mtime, size)`. The comparison sits outside the dialog's refreshable section, so the SNV/Indel toggle does not recount.
 
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.

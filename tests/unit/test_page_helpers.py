@@ -3,15 +3,12 @@
 import asyncio
 import os
 
-import polars as pl
-
 from genetics_viz.config_model import DataDirectoryConfig
 from genetics_viz.pages.cohort.components import (
     ancestry_tab,
     cohort_ancestry_tab,
     cohort_pgs_tab,
     roh_tab,
-    stats_panel,
 )
 from genetics_viz.utils import change_monitor, data
 from genetics_viz.utils.ancestry import find_ancestry_files, find_cohort_ancestry_files
@@ -45,22 +42,6 @@ def test_cohort_ancestry_and_pgs_survive_text_family_ids(data_dir):
 def test_roh_tab_loads_optional_tables(data_dir):
     tables = roh_tab._load(find_roh_files(data_dir, "1002"))
     assert tables["froh"].height == 1 and tables["kinship"] is None
-
-
-def test_stats_counts_unique_variants_per_sample(tmp_path):
-    path = tmp_path / "w.tsv"
-    pl.DataFrame(
-        {
-            "#CHROM": ["1", "1", "2"],
-            "POS": [1, 1, 2],
-            "REF": ["A", "A", "C"],
-            "ALT": ["T", "T", "G"],
-            "sample": ["S1", "S1", "S2"],
-            "VEP_SYMBOL": ["GENEA", "GENEA", "GENEB,GENEC"],
-        }
-    ).write_csv(path, separator="\t")
-    assert stats_panel._count_variants_per_sample(path, None) == {"S1": 1, "S2": 1}
-    assert stats_panel._count_variants_per_sample(path, {"GENEC"}) == {"S2": 1}
 
 
 def test_change_monitor_reports_and_survives_a_failing_subscriber(data_dir):
