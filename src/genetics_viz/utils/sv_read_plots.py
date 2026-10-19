@@ -21,7 +21,7 @@ Pure: tests assert on the returned dict.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from genetics_viz.utils.cnv_coverage import CN_CONFIG, CNTrack, Panel
 from genetics_viz.utils.sv_reads import READ_CONFIG, WindowReads
@@ -37,6 +37,8 @@ SERIES_NAMES = {
     "interchromosomal": "Interchromosomal mate",
     "insert_band": "Expected insert",
     "copy_number": "Copy number",
+    "read_depth": "Read depth (2×depth/median)",
+    "suggested": "Suggested breakpoint",
 }
 
 READ_HEIGHT = 210
@@ -47,7 +49,9 @@ LEFT_PCT = 6.0
 RIGHT_PCT = 5.0
 COL_GAP_PCT = 3.0
 INSERT_FLOOR = 50
-ARC_POINTS = 24
+ARC_POINTS = 32
+#: Evidence from reads under min_mapq, drawn when asked for.
+LOW_MAPQ_OPACITY = 0.22
 
 _POS_FORMATTER = "v => (v / 1e6).toFixed(4)"
 _SIZE_FORMATTER = (
@@ -77,23 +81,38 @@ def _fmt(n: float) -> str:
 
 
 def _arc(x1: float, x2: float, y: float, rise: float) -> List[List[float]]:
-    """A parabola from ``x1`` to ``x2`` in log-y space, peaking ``rise``x above ``y``."""
+    """Half an ellipse from ``x1`` to ``x2`` in log-y space, ``rise``x above ``y``.
+
+    Steep at both ends, so it leaves the read parts almost vertically. The
+    points crowd at the ends (cosine spacing), where the curve turns.
+    """
     points = []
     for i in range(ARC_POINTS + 1):
-        t = i / ARC_POINTS
-        points.append(
-            [round(x1 + (x2 - x1) * t), round(y * rise ** (4 * t * (1 - t)), 1)]
-        )
+        t = (1 - math.cos(math.pi * i / ARC_POINTS)) / 2
+        height = math.sqrt(max(0.0, 1 - (2 * t - 1) ** 2))
+        points.append([round(x1 + (x2 - x1) * t), round(y * rise**height, 1)])
     return points
 
 
-Cell = Tuple[Optional[WindowReads], Optional[CNTrack]]
+class Suggested(NamedTuple):
+    pos: int
+    approximate: bool
+    label: str
+
+
+class Cell(NamedTuple):
+    """One sample in one window."""
+
+    reads: Optional[WindowReads]
+    cn: Optional[CNTrack]
+    #: ``[pos, 2 x depth / autosomal median]`` from the reads, unpanelled.
+    depth: Optional[List[List[float]]] = None
 
 
 def _row_title(label: str, cells: Sequence[Cell], panel: Optional[Panel]) -> str:
     parts = [label]
-    reads = [r for r, _ in cells if r is not None]
-    cns = [c for _, c in cells if c is not None]
+    reads = [c.reads for c in cells if c.reads is not None]
+    cns = [c.cn for c in cells if c.cn is not None]
     if not reads:
         parts.append("no CRAM")
     else:
@@ -117,10 +136,19 @@ def read_option(
     *,
     windows: Sequence[Any],
     breakpoints: Sequence[int],
+    suggested: Sequence[Suggested] = (),
+    intervals: Sequence[Tuple[int, int]] = (),
     panel: Optional[Panel] = None,
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Grids, axes and series for every sample x window cell."""
+    """Grids, axes and series for every sample x window cell.
+
+    ``breakpoints`` are the SV's current bounds (curated when set), drawn
+    dotted red. ``suggested`` are the suggested breakpoints, drawn green:
+    solid when exact (reads), dashed when approximate (coverage step).
+    ``intervals`` are the ranges the discordant pairs allow, shaded green.
+    """
+    rows = [[Cell(*c) for c in cells] for cells in rows]
     cfg = cfg or READ_CONFIG
     colors = cfg.get("colors", {})
     rise = float(cfg.get("arc_rise", 1.8))
@@ -153,9 +181,9 @@ def read_option(
         top = TOP + row * (READ_HEIGHT + ROW_GAP)
         heights = [
             y
-            for r, _ in cells
-            if r is not None
-            for y in [p.y for p in r.pairs] + [s.y * rise for s in r.splits]
+            for c in cells
+            if c.reads is not None
+            for y in [p.y for p in c.reads.pairs] + [s.y * rise for s in c.reads.splits]
         ]
         y_top = max(heights + [2000]) * 1.5
         titles.append(
@@ -167,7 +195,7 @@ def read_option(
             }
         )
         last_row = row == len(rows) - 1
-        for col, ((reads, cn), w) in enumerate(zip(cells, windows)):
+        for col, (cell, w) in enumerate(zip(cells, windows)):
             idx = len(grids)
             ins_axis, cn_axis = len(y_axes), len(y_axes) + 1
             last_col = col == n_windows - 1
@@ -241,10 +269,11 @@ def read_option(
                 }
             )
             series += _cell_series(
-                reads,
-                cn,
+                cell,
                 w,
                 breakpoints,
+                suggested,
+                intervals,
                 ins_axis=ins_axis,
                 cn_axis=cn_axis,
                 x_axis=idx,
@@ -294,10 +323,11 @@ def read_option(
 
 
 def _cell_series(
-    reads: Optional[WindowReads],
-    cn: Optional[CNTrack],
+    cell: Cell,
     window,
     breakpoints: Sequence[int],
+    suggested: Sequence[Suggested],
+    intervals: Sequence[Tuple[int, int]],
     *,
     ins_axis: int,
     cn_axis: int,
@@ -306,6 +336,7 @@ def _cell_series(
     rise: float,
     colors: Dict[str, str],
 ) -> List[Dict[str, Any]]:
+    reads, cn = cell.reads, cell.cn
     out: List[Dict[str, Any]] = []
     on_ins = {"xAxisIndex": x_axis, "yAxisIndex": ins_axis}
     on_cn = {"xAxisIndex": x_axis, "yAxisIndex": cn_axis}
@@ -323,14 +354,51 @@ def _cell_series(
             "lineStyle": {"color": "#ef4444", "type": "dotted", "width": 1},
             "data": [
                 {"xAxis": b} for b in breakpoints if window.start <= b <= window.end
+            ]
+            + [
+                {
+                    "xAxis": sug.pos,
+                    "lineStyle": {
+                        "color": colors.get("suggested_breakpoint", "#16a34a"),
+                        "type": "dashed" if sug.approximate else "solid",
+                        "width": 1.5,
+                    },
+                    "label": {
+                        "show": True,
+                        "position": "insideEndTop",
+                        "formatter": sug.label,
+                        "fontSize": 10,
+                        "color": colors.get("suggested_breakpoint", "#16a34a"),
+                    },
+                }
+                for sug in suggested
+                if window.start <= sug.pos <= window.end
             ],
         },
     }
+    areas: List[Any] = []
     if reads is not None and reads.insert_lo and reads.insert_hi:
+        areas.append([{"yAxis": reads.insert_lo}, {"yAxis": reads.insert_hi}])
+    for lo, hi in intervals:
+        if hi >= window.start and lo <= window.end:
+            areas.append(
+                [
+                    {
+                        "xAxis": max(lo, window.start),
+                        "itemStyle": {
+                            "color": colors.get(
+                                "breakpoint_interval", "rgba(22,163,74,0.1)"
+                            )
+                        },
+                    },
+                    {"xAxis": min(hi, window.end)},
+                ]
+            )
+    if areas:
         band["markArea"] = {
             "silent": True,
             "itemStyle": {"color": colors.get("insert_band", "rgba(0,0,0,0.08)")},
-            "data": [[{"yAxis": reads.insert_lo}, {"yAxis": reads.insert_hi}]],
+            "data": areas,
         }
     out.append(band)
 
@@ -379,21 +447,45 @@ def _cell_series(
                 }
             )
 
+    if cell.depth:
+        cn_max = float(CN_CONFIG.get("y_max", 5))
+        out.append(
+            {
+                "type": "line",
+                "name": SERIES_NAMES["read_depth"],
+                **on_cn,
+                "showSymbol": False,
+                "z": 2,
+                "lineStyle": {
+                    "width": 1,
+                    "color": colors.get("read_depth", "#0f766e"),
+                    "opacity": 0.8,
+                },
+                "itemStyle": {"color": colors.get("read_depth", "#0f766e")},
+                "data": [[p, min(v, cn_max)] for p, v in cell.depth],
+            }
+        )
+
     if reads is None:
         return out
 
     lines = {"type": "lines", "coordinateSystem": "cartesian2d", **on_ins, "z": 3}
-    for cls in ("deletion", "duplication", "inversion_pp", "inversion_mm"):
-        pairs = [p for p in reads.pairs if p.cls == cls]
+    for cls, low in (
+        (c, low)
+        for c in ("deletion", "duplication", "inversion_pp", "inversion_mm")
+        for low in (False, True)
+    ):
+        pairs = [p for p in reads.pairs if p.cls == cls and p.low == low]
         if not pairs:
             continue
         color = colors.get(cls, "#000")
         name = SERIES_NAMES[cls]
+        fade = LOW_MAPQ_OPACITY if low else 1.0
         out.append(
             {
                 **lines,
                 "name": name,
-                "lineStyle": {"color": color, "width": 1, "opacity": 0.8},
+                "lineStyle": {"color": color, "width": 1, "opacity": 0.8 * fade},
                 "data": [
                     {
                         "coords": [[p.x1, p.y], [p.x2, p.y]],
@@ -407,7 +499,7 @@ def _cell_series(
             {
                 **lines,
                 "name": name,
-                "lineStyle": {"color": color, "width": 3.5, "opacity": 0.95},
+                "lineStyle": {"color": color, "width": 3.5, "opacity": 0.95 * fade},
                 "data": [
                     {
                         "coords": [[a, p.y], [b, p.y]],
@@ -419,18 +511,19 @@ def _cell_series(
             }
         )
 
-    for cls in ("split", "split_inv"):
-        splits = [s for s in reads.splits if s.cls == cls]
+    for cls, low in ((c, low) for c in ("split", "split_inv") for low in (False, True)):
+        splits = [s for s in reads.splits if s.cls == cls and s.low == low]
         if not splits:
             continue
         color = colors.get(cls, "#000")
         name = SERIES_NAMES[cls]
+        fade = LOW_MAPQ_OPACITY if low else 1.0
         out.append(
             {
                 **lines,
                 "name": name,
                 "z": 4,
-                "lineStyle": {"color": color, "width": 3.5, "opacity": 0.9},
+                "lineStyle": {"color": color, "width": 3.5, "opacity": 0.9 * fade},
                 "data": [
                     {
                         "coords": [[a, s.y], [b, s.y]],
@@ -448,7 +541,7 @@ def _cell_series(
                 "name": name,
                 "z": 2,
                 "polyline": True,
-                "lineStyle": {"color": color, "width": 1, "opacity": 0.6},
+                "lineStyle": {"color": color, "width": 1, "opacity": 0.7 * fade},
                 "data": [
                     {
                         "coords": _arc(s.a2, s.b1, s.y, rise),
@@ -472,10 +565,12 @@ def _cell_series(
                 "data": [
                     {
                         "value": [c.pos, INSERT_FLOOR * 1.25],
+                        "itemStyle": {"opacity": LOW_MAPQ_OPACITY if c.low else 1.0},
                         "symbolSize": [3, round(6 + 18 * c.count / biggest)],
                         "tip": (
                             f"{c.count} reads soft-clipped at {_fmt(c.pos)}"
                             f" ({'before' if c.side == 'left' else 'after'} it)"
+                            + (", MAPQ < min" if c.low else "")
                         ),
                     }
                     for c in reads.clips

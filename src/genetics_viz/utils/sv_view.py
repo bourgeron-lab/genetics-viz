@@ -61,17 +61,24 @@ def read_view_windows(
     *,
     mode: str = "auto",
     mate: Optional[Tuple[str, int]] = None,
+    precise: bool = True,
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Window]]:
     """The mode actually used and its windows, left to right.
 
     ``mate`` is the second breakpoint of a translocation, on another
     chromosome; without it the second window is at ``end`` on ``chrom``.
+    ``precise`` is False for a caller whose breakpoints are approximate
+    (WisecondorX bins): each breakpoint window is then wider.
     """
     cfg = cfg or READ_VIEW_CONFIG
     start, end = int(start), int(end)
     used = auto_mode(sv_type, start, end, cfg) if mode == "auto" else mode
-    flank = int(cfg.get("flank_bp", 1500))
+    flank = int(
+        cfg.get("flank_bp", 1500)
+        if precise
+        else cfg.get("flank_bp_imprecise", cfg.get("flank_bp", 1500))
+    )
 
     if used == "single":
         expansion = float(cfg.get("expansion", 1.6))

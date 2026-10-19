@@ -37,8 +37,11 @@ read_view:
   visibility_window_bp: 30000
   # The single window is the SV span times this, centred on it.
   expansion: 1.6
-  # Half-width of each breakpoint window in the split view.
+  # Half-width of each breakpoint window in the split view, for a caller that
+  # gives exact breakpoints, and for one that does not (WisecondorX calls sit
+  # on 1 kb bins and can be off by more than that).
   flank_bp: 1500
+  flank_bp_imprecise: 5000
 
 read_evidence:
   # A pair is discordant by size beyond median + this many MADs of the
@@ -53,9 +56,29 @@ read_evidence:
   # when at least this many reads are clipped there (one is usually noise).
   min_clip_bp: 20
   min_clip_reads: 2
+  # Suggested breakpoints: clips and split-read junctions within this many bp
+  # count together, and a side needs clips + 2 x split reads >= the score.
+  breakpoint_tolerance_bp: 3
+  min_breakpoint_score: 3
+  # Clips and split reads whose orientation does not fit the SV type (a
+  # deletion's start clipped before it, an inverted split on a deletion)
+  # count for this fraction.
+  mismatch_weight: 0.25
+  # Discordant pairs needed before their breakpoint interval is drawn.
+  min_interval_pairs: 2
+  # Copy-number check of a suggested position (deletions and duplications
+  # only): mean coverage this far on each side must differ by min_cn_step,
+  # the right way. The same step, over at least min_step_bins bins on each
+  # side, makes the approximate coverage position when the reads give none.
+  cn_check_bp: 1000
+  min_cn_step: 0.5
+  min_step_bins: 6
+  # Read depth bins for the fine copy-number line (2 x depth / the sample's
+  # autosomal median), drawn over the panel-corrected CN.
+  coverage_bin_bp: 25
   # How far above its read parts a split read's arc rises (factor on the
-  # log insert axis at its middle).
-  arc_rise: 1.8
+  # log insert axis at its top). The arc is half an ellipse: steep ends.
+  arc_rise: 4
   # Colours follow igv.js's "pair orientation & insert size" scheme, so the
   # read panel and the IGV read view agree.
   colors:
@@ -70,3 +93,6 @@ read_evidence:
     insert_band: "rgba(156,163,175,0.22)"
     copy_number: "#2563eb"
     copy_number_masked: "#d1d5db"
+    read_depth: "#0f766e"
+    suggested_breakpoint: "#16a34a"
+    breakpoint_interval: "rgba(22,163,74,0.10)"

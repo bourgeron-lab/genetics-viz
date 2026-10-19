@@ -123,6 +123,7 @@ src/genetics_viz/
     cnv_plots.py                  # ECharts builder for the copy-number panel
     sv_view.py                    # One read window or one per breakpoint, by SV type and size
     sv_reads.py                   # pysam: read pairs/split reads classed by orientation
+    sv_breakpoints.py             # Suggested breakpoints: clips/splits, pair interval, CN check
     sv_read_plots.py              # ECharts builder for the read-evidence panel
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
@@ -254,6 +255,17 @@ Config files (YAML) are loaded once at module level.
   - A split read is its two aligned parts joined by an arc above them, so the link never hides a pair's line.
   - Each sample × window cell is one grid with two y-axes: insert size (log) on the left and, on the right, the CN from the coverage bigWig divided by the panel, the same computation as the Copy Number View.
   - A sample with coverage but no CRAM still gets its CN row. A window wider than the visibility window draws CN only.
+  - A thin read-depth line at 25 bp (`2 × depth / autosomal_median_depth` from the coverage JSON) shows the exact drop point. It is not divided by the panel.
+  - "Show MAPQ 0 reads" keeps the reads under `min_mapq` and draws their evidence faded. They never count toward the insert band, the depth or the suggestions.
+  - **Suggested breakpoints** (`utils/sv_breakpoints.py`), from the carrier, per side: evidence left of the SV's middle speaks for its start, right of it for its end.
+    - **Exact position**: clip clusters and split-read junctions, scored clips + 2 × splits. A split read's junction is the clipped end of each part, from its own CIGAR and the SA CIGAR. That is right for every type: a deletion joins `a2`→`b1`, a tandem duplication `b2`→`a1`.
+    - **Orientation**: evidence that doesn't fit the type counts for `mismatch_weight`. A deletion's start is clipped after it; a duplication is the reverse. Inversions and others accept either side.
+    - **Interval**: from the type's discordant pairs. A `+` read lies before the breakpoint within `insert_hi`, a `-` read after it.
+    - **Copy number is used only for types that change it (`del`, `dup`)**, never for inversions or other balanced events. It checks the exact position, and when the reads give none it supplies an approximate coverage step (dashed, "≈", "Use approximate position"). The coverage is the 25 bp depth without panel-masked bins, so repeats losing depth in everyone don't read as steps.
+    - **Confidence**: strong, moderate or weak. A coverage contradiction, or an exact position outside the pairs' interval, makes it weak.
+    - "Use as curated position" fills the curated inputs.
+  - **The read views follow the curated bounds.** `read_bounds` and `_update_roi`'s `roi_coords` are the same dict, so every curated change (suggestion chips, IGV pickers, the refresh button, the reads' suggestion) re-centres IGV, Read Evidence and the Copy Number View.
+  - WisecondorX calls get ±5 kb breakpoint windows (`flank_bp_imprecise`, `precise=False`), since their breakpoints sit on 1 kb bins. A split read's far part can suggest an end outside the window; taking it re-centres the windows there.
 - Tests: `datagen` writes the bigWigs with pybigtools and a **reference-free CRAM** (`no_ref=1`) with a hand-written `.fai`, since a real chr2 reference would be 240 MB.
 
 ### Cohort Discovery

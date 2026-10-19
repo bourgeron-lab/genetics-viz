@@ -715,6 +715,8 @@ CNV_LOSS = (165_114_001, 165_316_000)
 CNV_MASKED = (165_400_000, 165_410_000)
 PAR1_END = 2_781_479
 CNV_SEX = {"S1": "XY", "S2": "XX", "S3": "XY"}
+#: About the fixture CRAM's depth outside the loss, so its read depth reads 2.
+CNV_MEDIAN_DEPTH = 9.0
 #: The reference-free CRAM decodes without it; the file only has to exist.
 CRAM_REFERENCE = "cram_reference/GRCh38.fasta"
 
@@ -775,7 +777,15 @@ def build_cnv_results(data: Path, demo: Path) -> None:
         cov = sample_dir(data, sid) / "coverage"
         _bigwig(cov / f"{sid}.{CNV_TAG}.bw", _sample_value(sid))
         (cov / f"{sid}.{CNV_TAG}.json").write_text(
-            json.dumps({"sample": sid, "tag": CNV_TAG, "bin": CNV_BIN, "mapq": 1})
+            json.dumps(
+                {
+                    "sample": sid,
+                    "tag": CNV_TAG,
+                    "bin": CNV_BIN,
+                    "mapq": 1,
+                    "autosomal_median_depth": CNV_MEDIAN_DEPTH,
+                }
+            )
         )
 
     panel = demo / "cnv_panel" / "v1"
@@ -832,7 +842,8 @@ def build_cnv_results(data: Path, demo: Path) -> None:
 
 #: Signatures written at S3's loss: (name, kind, left start, right start).
 CRAM_SIGNATURES = (
-    [(f"del{i}", "deletion", CNV_LOSS[0] - 400 + 20 * i, CNV_LOSS[1] + 200 + 20 * i)
+    # Fragments that fit the insert size across the junction (about 330 bp).
+    [(f"del{i}", "deletion", CNV_LOSS[0] - 230 + 20 * i, CNV_LOSS[1] + 10 * i)
      for i in range(6)]
     + [(f"inv{i}", "inversion_pp", CNV_LOSS[0] - 600 + 30 * i, CNV_LOSS[1] - 300)
        for i in range(2)]
@@ -840,6 +851,23 @@ CRAM_SIGNATURES = (
 )  # fmt: skip
 CRAM_SPLITS = 2
 CRAM_CLIPPED = 3
+#: Concordant pairs every 22 bp over +-1.7 kb of each breakpoint, every other
+#: one dropped inside the (heterozygous) loss: depth about 9x, halved inside.
+CRAM_CONCORDANT_STEP = 22
+
+
+def concordant_starts(side: int) -> List[int]:
+    centre = CNV_LOSS[side]
+    starts = []
+    for i, pos in enumerate(range(centre - 1700, centre + 1700, CRAM_CONCORDANT_STEP)):
+        inside = pos >= centre if side == 0 else pos + 350 <= centre
+        if inside and i % 2:
+            continue
+        starts.append(pos)
+    return starts
+
+
+CRAM_CONCORDANT_LEFT = len(concordant_starts(0))
 CRAM_CONCORDANT_PER_SIDE = 60
 
 
@@ -856,18 +884,20 @@ def build_cram(path: Path) -> None:
     chrom_id = {c: i for i, c in enumerate([*CNV_CHROMS, "chr5"])}
     reads: List = []
 
-    def add(name, flag, chrom, pos, mate_chrom, mate_pos, tlen, cigar="100M", tags=()):
+    def add(name, flag, chrom, pos, mate_chrom, mate_pos, tlen, cigar="100M",
+            tags=(), mapq=60):  # fmt: skip
         reads.append((chrom_id[chrom], pos, name, flag, mate_chrom, mate_pos, tlen,
-                      cigar, tags))  # fmt: skip
+                      cigar, tags, mapq))  # fmt: skip
 
-    def pair(name, pos, mate_pos, left_flag, right_flag):
+    def pair(name, pos, mate_pos, left_flag, right_flag, mapq=60):
         tlen = mate_pos + read_len - pos
-        add(name, left_flag, "chr2", pos, "chr2", mate_pos, tlen)
-        add(name, right_flag, "chr2", mate_pos, "chr2", pos, -tlen)
+        mq = (("MQ", mapq),)
+        add(name, left_flag, "chr2", pos, "chr2", mate_pos, tlen, tags=mq, mapq=mapq)
+        add(name, right_flag, "chr2", mate_pos, "chr2", pos, -tlen, tags=mq,
+            mapq=mapq)  # fmt: skip
 
     for side, centre in enumerate(CNV_LOSS):
-        for i in range(CRAM_CONCORDANT_PER_SIDE):
-            pos = centre - 1400 + 45 * i
+        for i, pos in enumerate(concordant_starts(side)):
             pair(f"c{side}_{i}", pos, pos + 250 + (i % 5) * 10, 99, 147)
     for name, kind, left, right in CRAM_SIGNATURES:
         flags = {
@@ -876,6 +906,8 @@ def build_cram(path: Path) -> None:
             "duplication": (81, 161),  # -+
         }[kind]
         pair(name, left, right, *flags)
+    # A deletion pair in a repeat: MAPQ 0, shown only when asked for.
+    pair("lowdel0", CNV_LOSS[0] - 500, CNV_LOSS[1] + 300, 97, 145, mapq=0)
     add("trans0", 97, "chr2", CNV_LOSS[0] - 200, "chr5", 1_000_000, 0)
     # Split and clipped reads all end at the left breakpoint: one clip cluster.
     for i in range(CRAM_CLIPPED):
@@ -890,9 +922,18 @@ def build_cram(path: Path) -> None:
     with pysam.AlignmentFile(
         str(path), "wc", header=header, format_options=[b"no_ref=1"]
     ) as out:
-        for rid, pos, name, flag, mate_chrom, mate_pos, tlen, cigar, tags in sorted(
-            reads, key=lambda r: (r[0], r[1])
-        ):
+        for (
+            rid,
+            pos,
+            name,
+            flag,
+            mate_chrom,
+            mate_pos,
+            tlen,
+            cigar,
+            tags,
+            mapq,
+        ) in sorted(reads, key=lambda r: (r[0], r[1])):
             seg = pysam.AlignedSegment(out.header)
             seg.query_name = name
             seg.query_sequence = "A" * read_len
@@ -900,7 +941,7 @@ def build_cram(path: Path) -> None:
             seg.flag = flag
             seg.reference_id = rid
             seg.reference_start = pos
-            seg.mapping_quality = 60
+            seg.mapping_quality = mapq
             seg.cigarstring = cigar
             seg.next_reference_id = chrom_id[mate_chrom]
             seg.next_reference_start = mate_pos
