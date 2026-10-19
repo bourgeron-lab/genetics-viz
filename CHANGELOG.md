@@ -5,6 +5,22 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] - 2026-10-20
+
+### Added
+- **Suggested breakpoints in Read Evidence.** Each side of the SV gets:
+  - **An exact position** from the carrier's soft-clipped and split reads, with a confidence: strong, moderate or weak. Reads whose orientation doesn't fit the SV type count less.
+  - **The interval** the discordant pairs allow, shaded green.
+  - **For deletions and duplications, a check against the coverage**: it must step the right way at that position. When the reads give no position (repeat-mediated events), the coverage step is offered as an approximate one, dashed and marked "≈". Inversions and other balanced events are judged on reads alone.
+- **"Use as curated position"** fills the curated start and end from the suggestion ("Use approximate position" for a coverage step).
+- **The read views follow the curated position.** Any change to it re-centres IGV, Read Evidence and the Copy Number View.
+- **A 25 bp read-depth line** over the copy number in Read Evidence (2 × depth / the sample's median depth, not corrected by the panel) shows the exact point where coverage drops or rises.
+- **"Show MAPQ 0 reads"** in Read Evidence draws evidence from reads with mapping quality 0 (repeats, such as the 22q11.2 low-copy repeats), faded. They never count toward the suggestions.
+
+### Changed
+- **WisecondorX calls get ±5 kb windows at each breakpoint** (was ±1.5 kb), since their breakpoints can be off by more than 1 kb.
+- Split-read links rise higher, as half-ellipses with steep ends.
+
 ## [0.19.1] - 2026-10-20
 
 ### Changed
