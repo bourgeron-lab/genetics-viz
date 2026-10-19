@@ -179,7 +179,15 @@ def cn_option(
         "xAxis": x_axes,
         "yAxis": y_axes,
         "dataZoom": [
-            {"type": "inside", "xAxisIndex": all_axes, "filterMode": "none"},
+            # Pan by dragging, no wheel zoom: the wheel scrolls the dialog.
+            {
+                "type": "inside",
+                "xAxisIndex": all_axes,
+                "filterMode": "none",
+                "zoomOnMouseWheel": False,
+                "moveOnMouseWheel": False,
+                "moveOnMouseMove": True,
+            },
             {
                 "type": "slider",
                 "xAxisIndex": all_axes,

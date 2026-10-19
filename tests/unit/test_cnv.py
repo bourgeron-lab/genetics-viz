@@ -16,6 +16,7 @@ from datagen import (
     CNV_MASKED,
     CNV_PANEL_CLUSTER_PATH,
     CNV_TAG,
+    CRAM_CLIPPED,
     CRAM_SPLITS,
     PAR1_END,
     cram_reference,
@@ -64,6 +65,15 @@ def test_panel_dir_resolves_the_cluster_path_tail(data_dir, tmp_path):
     assert cnv.panel_dir_from_params("/nowhere/cnv_panel/v1", [data_dir]) is None
     assert cnv.panel_dir_from_params("", [data_dir]) is None
     assert cnv.panel_dir_from_params(None, [data_dir]) is None
+
+
+def test_a_controls_cohort_uses_the_panel_it_built(data_dir):
+    demo = data_dir / "cohorts" / "DEMO"
+    # Its params name no cnv_panel_dir, only the version it builds.
+    for params in ({"cnv_panel_version": "1"}, {}):
+        panel = cnv.resolve_cohort_panel(params, [data_dir], demo)
+        assert panel is not None and panel.version == "1"
+    assert cnv.resolve_cohort_panel({}, [data_dir]) is None  # no cohort dir given
 
 
 def test_panel_json_is_read(data_dir):
@@ -234,51 +244,93 @@ def test_the_mode_can_be_forced_and_a_mate_placed():
 # ---------------------------------------------------------------------------
 
 
-def test_read_signatures_are_classed(data_dir):
+def _s3_reads(data_dir, cfg=None):
     _, windows = read_view_windows("del", "chr2", *CNV_LOSS)
     cram = sample_dir(data_dir, "S3") / "sequences" / "S3.GRCh38_GIABv3.cram"
-    (left, right), missing = load_read_evidence(
-        [cram, None], windows, cram_reference(data_dir.parent)
+    (cells, missing) = load_read_evidence(
+        [cram, None], windows, cram_reference(data_dir.parent), cfg=cfg
     )
     assert missing is None
-
-    def classes(cell):
-        out = {}
-        for seg in (*cell.pairs, *cell.splits):
-            out[seg.cls] = out.get(seg.cls, 0) + 1
-        return out
-
-    got = classes(left)
-    assert got["deletion"] == 6
-    assert got["inversion_pp"] == 2
-    assert got["duplication"] == 1
-    assert got["split"] == CRAM_SPLITS
-    assert got["concordant"] == left.n_concordant == 60
-    assert [m.mate for m in left.interchrom] == ["chr5:1000001"]
-    assert left.insert_median is not None and left.insert_max < 1000
-    # The deletion pairs reach across to the right breakpoint.
-    assert all(s.x2 > CNV_LOSS[1] for s in left.pairs if s.cls == "deletion")
-    assert classes(right)["deletion"] == 6
-    assert max(d for _, d in left.coverage) > 0
-
-    option = read_option([[left, right]], ["S3 (carrier)"], breakpoints=list(CNV_LOSS))
-    assert len(option["grid"]) == 4  # reads + coverage, per window
-    names = {s["name"] for s in option["series"]}
-    assert SERIES_NAMES["deletion"] in names and SERIES_NAMES["split"] in names
-    assert len(option["dataZoom"]) == 2
+    return windows, cells
 
 
-def test_concordant_pairs_are_capped(data_dir):
-    _, windows = read_view_windows("del", "chr2", *CNV_LOSS)
-    cram = sample_dir(data_dir, "S3") / "sequences" / "S3.GRCh38_GIABv3.cram"
-    ((left, _),) = load_read_evidence(
-        [cram],
-        windows,
-        cram_reference(data_dir.parent),
-        cfg={"max_concordant_per_window": 10},
-    )
-    assert sum(s.cls == "concordant" for s in left.pairs) == 10
+def test_read_signatures_are_classed(data_dir):
+    _, (left, right) = _s3_reads(data_dir)
+    got = {}
+    for p in left.pairs:
+        got[p.cls] = got.get(p.cls, 0) + 1
+    # Concordant pairs are only counted, for the expected insert band.
+    assert got == {"deletion": 6, "inversion_pp": 2, "duplication": 1}
     assert left.n_concordant == 60
+    assert left.insert_lo < left.insert_median < left.insert_hi < left.insert_max
+    assert [m.mate for m in left.interchrom] == ["chr5:1000001"]
+    # The deletion pairs reach across to the right breakpoint, read bodies at both ends.
+    for p in left.pairs:
+        if p.cls == "deletion":
+            assert p.x2 > CNV_LOSS[1] and p.x1 < p.left_end <= p.right_start < p.x2
+    assert sum(p.cls == "deletion" for p in right.pairs) == 6
+
+
+def test_split_reads_keep_both_parts(data_dir):
+    _, (left, _) = _s3_reads(data_dir)
+    assert len(left.splits) == CRAM_SPLITS
+    split = left.splits[0]
+    assert (split.a1, split.a2) == (CNV_LOSS[0] - 60, CNV_LOSS[0])
+    assert (split.b1, split.b2) == (CNV_LOSS[1], CNV_LOSS[1] + 40)
+    assert split.y == CNV_LOSS[1] - CNV_LOSS[0] and split.cls == "split"
+
+
+def test_soft_clips_cluster_at_the_breakpoint(data_dir):
+    _, (left, _) = _s3_reads(data_dir)
+    # Three clipped reads and the two split reads end at the breakpoint.
+    assert [(c.pos, c.side, c.count) for c in left.clips] == [
+        (CNV_LOSS[0], "right", CRAM_CLIPPED + CRAM_SPLITS)
+    ]
+    _, (strict, _) = _s3_reads(data_dir, cfg={"min_clip_reads": 10})
+    assert strict.clips == []
+
+
+def test_read_option_draws_one_grid_per_cell_with_two_axes(data_dir):
+    windows, (left, right) = _s3_reads(data_dir)
+    panel = _panel(data_dir)
+    cov = cnv.pick_coverage(cnv.find_sample_coverage(data_dir, "S3"), panel.tag)
+    cns = [cnv.copy_number(cov, panel, "XY", w.chrom, w.start, w.end) for w in windows]
+    option = read_option(
+        [[(left, cns[0]), (right, cns[1])], [(None, cns[0]), (None, None)]],
+        ["S3 (carrier)", "S1 (father)"],
+        windows=windows,
+        breakpoints=list(CNV_LOSS),
+        panel=panel,
+    )
+    assert len(option["grid"]) == 4  # 2 samples x 2 windows
+    assert [a["type"] for a in option["yAxis"][:2]] == ["log", "value"]
+    assert option["yAxis"][1]["position"] == "right"
+    # Two rulers and two drag-only zooms, one per window; no wheel zoom.
+    kinds = [z["type"] for z in option["dataZoom"]]
+    assert kinds.count("slider") == 2 and kinds.count("inside") == 2
+    assert all(
+        not z["zoomOnMouseWheel"] for z in option["dataZoom"] if z["type"] == "inside"
+    )
+    by_name = {}
+    for s in option["series"]:
+        by_name.setdefault(s["name"], []).append(s)
+    assert SERIES_NAMES["copy_number"] in by_name
+    # The carrier's CN on the right axis reads 1 inside the loss at the right window.
+    right_cn = [
+        s
+        for s in by_name[SERIES_NAMES["copy_number"]]
+        if s["xAxisIndex"] == 1 and s["yAxisIndex"] == 3
+    ][0]
+    inside = [v for x, v in right_cn["data"] if v is not None and x < CNV_LOSS[1] - 300]
+    assert inside and all(abs(v - 1.0) < 0.01 for v in inside)
+    # Split reads: parts plus an arc rising above them.
+    arc = next(s for s in by_name[SERIES_NAMES["split"]] if s.get("polyline"))
+    coords = arc["data"][0]["coords"]
+    assert max(y for _, y in coords) > coords[0][1]
+    assert SERIES_NAMES["soft_clip"] in by_name
+    band = by_name[SERIES_NAMES["insert_band"]][0]["markArea"]["data"][0]
+    assert band[0]["yAxis"] == left.insert_lo
+    assert "no CRAM" in option["title"][3]["text"]  # 2 window titles, then rows
 
 
 def test_coverage_json_is_written_per_sample(data_dir):

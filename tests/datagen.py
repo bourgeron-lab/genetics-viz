@@ -23,7 +23,7 @@ exercise the traps found so far:
   WisecondorX loss, a control panel (inside DEMO itself) with a masked stretch
   and PAR-aware sex groups, reached through a compute-cluster
   ``cnv_panel_dir``; and a reference-free CRAM for S3 with one of each read
-  signature at the loss's breakpoints.
+  signature, split reads and a soft-clip cluster at the loss's breakpoints.
 """
 
 import gzip
@@ -839,6 +839,7 @@ CRAM_SIGNATURES = (
     + [("dup0", "duplication", CNV_LOSS[0] - 300, CNV_LOSS[0] + 100)]
 )  # fmt: skip
 CRAM_SPLITS = 2
+CRAM_CLIPPED = 3
 CRAM_CONCORDANT_PER_SIDE = 60
 
 
@@ -876,8 +877,12 @@ def build_cram(path: Path) -> None:
         }[kind]
         pair(name, left, right, *flags)
     add("trans0", 97, "chr2", CNV_LOSS[0] - 200, "chr5", 1_000_000, 0)
+    # Split and clipped reads all end at the left breakpoint: one clip cluster.
+    for i in range(CRAM_CLIPPED):
+        add(f"clip{i}", 0, "chr2", CNV_LOSS[0] - 70, "chr2", CNV_LOSS[0] - 70, 0,
+            cigar="70M30S")  # fmt: skip
     for i in range(CRAM_SPLITS):
-        add(f"split{i}", 0, "chr2", CNV_LOSS[0] - 60 + 5 * i, "chr2",
+        add(f"split{i}", 0, "chr2", CNV_LOSS[0] - 60, "chr2",
             CNV_LOSS[0] - 300, 0, cigar="60M40S",
             tags=(("SA", f"chr2,{CNV_LOSS[1] + 1},+,60S40M,60,0;"),))  # fmt: skip
 

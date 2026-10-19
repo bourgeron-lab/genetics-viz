@@ -1,54 +1,82 @@
-"""Read-pair and split-read evidence around an SV, samplot style.
+"""Read evidence around an SV, samplot style: discordant pairs, split reads, clips.
 
-Each read pair becomes a horizontal segment from its leftmost to its rightmost
-aligned base, at a height equal to its insert size, and is classed by the
+Each discordant read pair is drawn from its leftmost to its rightmost aligned
+base, at a height equal to its insert size. Its class comes from the
 orientation of its two reads (the left read's strand, then the right one's):
 
-- ``+-`` is the normal orientation, a *deletion* signature when the insert is
-  larger than the window's own proper pairs allow;
-- ``-+`` (pair pointing outward) is a *duplication* signature;
-- ``++`` and ``--`` are the two *inversion* signatures;
-- a mate on another chromosome is *interchromosomal*.
+- ``+-`` is the normal orientation. It is a *deletion* signature when the
+  insert is larger than the window's own proper pairs allow.
+- ``-+`` (pair pointing outward) is a *duplication* signature.
+- ``++`` and ``--`` are the two *inversion* signatures.
+- A mate on another chromosome is *interchromosomal*.
 
-Split reads (the ``SA`` tag of a primary alignment) join their two aligned
-parts. Concordant pairs are downsampled; everything else is kept whole.
+Concordant pairs are not kept. Their insert sizes only give the expected
+band (``insert_lo``-``insert_hi``) that the panel shades.
+
+A split read (the ``SA`` tag of a primary alignment) keeps its two aligned
+parts. Its height is the gap between them. Soft clips are counted per clipped
+position; only positions where several reads are clipped are kept, since that
+is what marks a breakpoint.
 
 Blocking (CRAM decoding over the network mount): call it off-thread. The
 CRAMs need the exact reference they were aligned to (``reference_fasta`` in
-the app config); without it nothing is opened, since htslib would otherwise try
-to download the reference sequences by MD5.
+the app config). Without it nothing is opened, since htslib would otherwise
+download the reference sequences by MD5.
 """
 
 from __future__ import annotations
 
-import random
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import median
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from genetics_viz.utils.cnv_coverage import CNV_CONFIG
 from genetics_viz.utils.sv_view import Window
 
 READ_CONFIG: Dict[str, Any] = CNV_CONFIG.get("read_evidence", {})
 
-#: Classes in drawing order (concordant underneath).
-PAIR_CLASSES = (
-    "concordant",
-    "deletion",
-    "duplication",
-    "inversion_pp",
-    "inversion_mm",
-)
+PAIR_CLASSES = ("deletion", "duplication", "inversion_pp", "inversion_mm")
 SPLIT_CLASSES = ("split", "split_inv")
+
+_CIGAR_RE = re.compile(r"(\d+)([MIDNSHP=X])")
+_SOFT_CLIP = 4
 
 
 @dataclass(frozen=True)
-class Segment:
+class Pair:
+    """A discordant pair: its span, its two read bodies and its insert."""
+
     x1: int
     x2: int
     y: int
     cls: str
+    left_end: int  # end of the left read's body
+    right_start: int  # start of the right read's body
+
+
+@dataclass(frozen=True)
+class SplitRead:
+    """The two aligned parts of a split read, left to right, and their gap."""
+
+    a1: int
+    a2: int
+    b1: int
+    b2: int
+    y: int
+    cls: str
+
+
+@dataclass(frozen=True)
+class SoftClip:
+    pos: int
+    #: ``"left"``: the bases before ``pos`` are clipped; ``"right"``: after.
+    side: str
+    count: int
 
 
 @dataclass(frozen=True)
@@ -60,12 +88,14 @@ class Interchrom:
 @dataclass
 class WindowReads:
     window: Window
-    pairs: List[Segment] = field(default_factory=list)
-    splits: List[Segment] = field(default_factory=list)
+    pairs: List[Pair] = field(default_factory=list)
+    splits: List[SplitRead] = field(default_factory=list)
+    clips: List[SoftClip] = field(default_factory=list)
     interchrom: List[Interchrom] = field(default_factory=list)
-    #: ``(bin start, mean depth)`` at ``coverage_bin_bp``.
-    coverage: List[List[float]] = field(default_factory=list)
     insert_median: Optional[float] = None
+    #: The expected insert range of concordant pairs (``insert_band`` percentiles).
+    insert_lo: Optional[float] = None
+    insert_hi: Optional[float] = None
     insert_max: float = 0.0
     n_concordant: int = 0
 
@@ -82,17 +112,22 @@ def _orientation(read) -> str:
     return ("-" if left_rev else "+") + ("-" if right_rev else "+")
 
 
-def _first_sa(read) -> Optional[tuple[str, int, str]]:
-    """``(chrom, 0-based pos, strand)`` of the first supplementary part."""
+def _ref_length(cigar: str) -> int:
+    """Reference bases a CIGAR string covers."""
+    return sum(int(n) for n, op in _CIGAR_RE.findall(cigar) if op in "MDN=X")
+
+
+def _first_sa(read) -> Optional[Tuple[str, int, str, int]]:
+    """``(chrom, 0-based pos, strand, reference length)`` of the first SA part."""
     try:
         sa = read.get_tag("SA")
     except KeyError:
         return None
     first = str(sa).split(";")[0].split(",")
-    if len(first) < 3:
+    if len(first) < 4:
         return None
     try:
-        return first[0], int(first[1]) - 1, first[2]
+        return first[0], int(first[1]) - 1, first[2], _ref_length(first[3])
     except ValueError:
         return None
 
@@ -102,24 +137,21 @@ def collect_window(
     window: Window,
     *,
     cfg: Optional[Dict[str, Any]] = None,
-    seed: int = 0,
 ) -> WindowReads:
-    """Classify the read pairs and split reads of one window."""
+    """Classify the discordant pairs, split reads and soft clips of one window."""
     cfg = cfg or READ_CONFIG
     min_mapq = int(cfg.get("min_mapq", 1))
-    bin_bp = max(1, int(cfg.get("coverage_bin_bp", 25)))
-    n_bins = max(1, -(-window.width // bin_bp))
-    depth = [0.0] * n_bins
+    min_clip = int(cfg.get("min_clip_bp", 20))
     out = WindowReads(window=window)
 
-    same_chrom: Dict[str, tuple[int, int, int, str]] = {}  # name -> x1, x2, ins, orient
+    same_chrom: Dict[str, Tuple[int, int, int, str, int, int]] = {}
     proper_inserts: List[int] = []
+    clips: Counter = Counter()
     seen_split: set[str] = set()
     seen_inter: set[str] = set()
 
-    chrom = window.chrom
     try:
-        reads = alignment_file.fetch(chrom, window.start, window.end)
+        reads = alignment_file.fetch(window.chrom, window.start, window.end)
     except ValueError:
         return out  # contig not in this file
     for read in reads:
@@ -132,30 +164,33 @@ def collect_window(
             or read.mapping_quality < min_mapq
         ):
             continue
-        r_start, r_end = (
-            read.reference_start,
-            read.reference_end or read.reference_start,
-        )
-        lo = max(r_start, window.start) - window.start
-        hi = min(r_end, window.end) - window.start
-        for b in range(lo // bin_bp, min(n_bins, -(-hi // bin_bp))):
-            b_lo, b_hi = window.start + b * bin_bp, window.start + (b + 1) * bin_bp
-            depth[b] += (min(r_end, b_hi) - max(r_start, b_lo)) / bin_bp
+        r_start = read.reference_start
+        r_end = read.reference_end or r_start
+        cigar = read.cigartuples or []
+        if cigar and cigar[0][0] == _SOFT_CLIP and cigar[0][1] >= min_clip:
+            if window.start <= r_start < window.end:
+                clips[(r_start, "left")] += 1
+        if cigar and cigar[-1][0] == _SOFT_CLIP and cigar[-1][1] >= min_clip:
+            if window.start <= r_end < window.end:
+                clips[(r_end, "right")] += 1
 
         name = read.query_name
         sa = _first_sa(read)
         if sa is not None and name not in seen_split:
             seen_split.add(name)
-            sa_chrom, sa_pos, sa_strand = sa
+            sa_chrom, sa_pos, sa_strand, sa_len = sa
             if sa_chrom == read.reference_name:
+                own = (r_start, r_end)
+                other = (sa_pos, sa_pos + max(1, sa_len))
+                (a1, a2), (b1, b2) = sorted((own, other))
                 own_strand = "-" if read.is_reverse else "+"
-                x1, x2 = sorted((r_start, sa_pos))
-                x2 = max(x2, r_end)
                 out.splits.append(
-                    Segment(
-                        x1,
-                        x2,
-                        max(1, x2 - x1),
+                    SplitRead(
+                        a1,
+                        a2,
+                        b1,
+                        b2,
+                        max(1, abs(b1 - a2)),
                         "split" if sa_strand == own_strand else "split_inv",
                     )
                 )
@@ -180,45 +215,52 @@ def collect_window(
             continue
         mate_start = read.next_reference_start
         read_len = read.infer_read_length() or (r_end - r_start)
-        x1 = min(r_start, mate_start)
-        x2 = max(r_end, mate_start + read_len)
+        if r_start <= mate_start:
+            x1, left_end = r_start, r_end
+            right_start, x2 = mate_start, mate_start + read_len
+        else:
+            x1, left_end = mate_start, mate_start + read_len
+            right_start, x2 = r_start, r_end
+        x2 = max(x2, left_end)
         insert = abs(read.template_length) or (x2 - x1)
         orient = _orientation(read)
-        same_chrom[name] = (x1, x2, insert, orient)
+        same_chrom[name] = (x1, x2, insert, orient, left_end, right_start)
         if read.is_proper_pair and orient == "+-" and insert <= 5000:
             proper_inserts.append(insert)
 
     if len(proper_inserts) >= 20:
         centre = float(median(proper_inserts))
         spread = _mad(proper_inserts, centre)
+        lo_pct, hi_pct = cfg.get("insert_band", [2.5, 97.5])
         out.insert_median = centre
+        out.insert_lo, out.insert_hi = (
+            float(v) for v in np.percentile(proper_inserts, [lo_pct, hi_pct])
+        )
         out.insert_max = centre + float(cfg.get("discordant_insert_mads", 6)) * max(
             spread, 10.0
         )
     else:
         out.insert_max = float(cfg.get("default_insert_max", 1000))
 
-    concordant: List[Segment] = []
-    for x1, x2, insert, orient in same_chrom.values():
+    for x1, x2, insert, orient, left_end, right_start in same_chrom.values():
         if orient == "+-":
-            cls = "deletion" if insert > out.insert_max else "concordant"
+            if insert <= out.insert_max:
+                out.n_concordant += 1
+                continue
+            cls = "deletion"
         elif orient == "-+":
             cls = "duplication"
         elif orient == "++":
             cls = "inversion_pp"
         else:
             cls = "inversion_mm"
-        seg = Segment(x1, x2, max(1, insert), cls)
-        (concordant if cls == "concordant" else out.pairs).append(seg)
+        out.pairs.append(Pair(x1, x2, max(1, insert), cls, left_end, right_start))
 
-    out.n_concordant = len(concordant)
-    cap = int(cfg.get("max_concordant_per_window", 1500))
-    if len(concordant) > cap:
-        concordant = random.Random(seed).sample(concordant, cap)
-    out.pairs = sorted(concordant, key=lambda s: s.x1) + out.pairs
-    out.coverage = [
-        [window.start + (i + 0.5) * bin_bp, round(d, 2)] for i, d in enumerate(depth)
-    ]
+    min_reads = int(cfg.get("min_clip_reads", 2))
+    out.clips = sorted(
+        (SoftClip(pos, side, n) for (pos, side), n in clips.items() if n >= min_reads),
+        key=lambda c: c.pos,
+    )
     return out
 
 

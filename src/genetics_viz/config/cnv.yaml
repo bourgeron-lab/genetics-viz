@@ -41,24 +41,32 @@ read_view:
   flank_bp: 1500
 
 read_evidence:
-  # Concordant pairs kept per window (random, seeded). Discordant pairs and
-  # split reads are always all kept.
-  max_concordant_per_window: 1500
   # A pair is discordant by size beyond median + this many MADs of the
   # window's proper-pair insert sizes.
   discordant_insert_mads: 6
   # Fallback when a window has too few proper pairs to estimate the median.
   default_insert_max: 1000
+  # Percentiles of the proper-pair inserts shaded as the expected band.
+  insert_band: [2.5, 97.5]
   min_mapq: 1
-  coverage_bin_bp: 25
+  # A soft clip counts from this length, and a clipped position is drawn only
+  # when at least this many reads are clipped there (one is usually noise).
+  min_clip_bp: 20
+  min_clip_reads: 2
+  # How far above its read parts a split read's arc rises (factor on the
+  # log insert axis at its middle).
+  arc_rise: 1.8
   # Colours follow igv.js's "pair orientation & insert size" scheme, so the
   # read panel and the IGV read view agree.
   colors:
-    concordant: "#bdbdbd"
     deletion: "#c80000" # +- with a larger insert than expected
     duplication: "#009600" # -+ (pair pointing outward)
     inversion_pp: "#009696" # ++
     inversion_mm: "#1432c8" # --
     interchromosomal: "#9c27b0"
     split: "#000000"
-    coverage: "#9ca3af"
+    split_inv: "#7c3aed"
+    soft_clip: "#f59e0b"
+    insert_band: "rgba(156,163,175,0.22)"
+    copy_number: "#2563eb"
+    copy_number_masked: "#d1d5db"

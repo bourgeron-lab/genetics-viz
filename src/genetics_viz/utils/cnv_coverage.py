@@ -222,11 +222,35 @@ def load_panel(panel_dir: Path) -> Optional[Panel]:
     return panel
 
 
+def _own_panel_dir(cohort_dir: Path, params: Dict[str, Any]) -> Optional[Path]:
+    """The panel a controls cohort built itself: its ``cnv_panel_version``, else
+    the newest complete version under ``cnv_panel/``."""
+    root = Path(cohort_dir) / "cnv_panel"
+    version = params.get("cnv_panel_version")
+    if version:
+        candidate = root / f"v{version}"
+        if (candidate / "panel.json").is_file():
+            return candidate
+    if not root.is_dir():
+        return None
+    versions = [d for d in root.iterdir() if (d / "panel.json").is_file()]
+    return max(versions, key=lambda d: d.stat().st_mtime) if versions else None
+
+
 def resolve_cohort_panel(
-    params: Dict[str, Any], data_dirs: Sequence[Path]
+    params: Dict[str, Any],
+    data_dirs: Sequence[Path],
+    cohort_dir: Optional[Path] = None,
 ) -> Optional[Panel]:
-    """The panel a cohort was fitted against, from its params' ``cnv_panel_dir``."""
+    """The panel a cohort is divided by.
+
+    The one its params' ``cnv_panel_dir`` names. Failing that, a controls
+    cohort uses the panel it built itself, whose params name no
+    ``cnv_panel_dir``.
+    """
     panel_dir = panel_dir_from_params(params.get("cnv_panel_dir"), data_dirs)
+    if panel_dir is None and cohort_dir is not None:
+        panel_dir = _own_panel_dir(cohort_dir, params)
     return load_panel(panel_dir) if panel_dir else None
 
 
@@ -596,7 +620,7 @@ def load_cn_view(
     Blocking: call it off-thread. A sample with no coverage file gets
     ``None``. The panel is that of the cohort's params, read once.
     """
-    panel = resolve_cohort_panel(params, data_dirs)
+    panel = resolve_cohort_panel(params, data_dirs, cohort_dir)
     fits = read_cohort_fit(cohort_dir, cohort_name, panel) if cohort_dir else {}
     by_sample = {k[1]: v for k, v in fits.items()}
     memo: ReadMemo = {}
