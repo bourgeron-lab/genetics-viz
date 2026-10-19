@@ -36,10 +36,24 @@ async def _chart(user, marker: str):
 
 async def test_copy_number_and_read_evidence(user, monkeypatch):
     await _open_sv(user, monkeypatch, "chr2:165000000-165500000", "S3")
-    await user.should_see("Copy Number View", retries=30)
+    await user.should_see("Read Evidence", retries=30)
 
+    reads = await _chart(user, "read-chart")
+    # The carrier, then both parents (coverage, no CRAM), one grid per window.
+    assert len(reads.options["grid"]) == 6
+    titles = [t["text"] for t in reads.options["title"]]
+    assert titles[2].startswith("S3 (carrier)")
+    assert "no CRAM" in titles[3] and "no CRAM" in titles[4]
+    names = {s["name"] for s in reads.options["series"]}
+    assert {"Deletion (+- large insert)", "Split read", "Soft clips"} <= names
+    assert "Copy number" in names
+
+    # The Copy Number View is folded, and drawn when first opened.
+    expansion = next(iter(user.find(marker="cn-expansion").elements))
+    assert expansion.value is False
+    with user.client:
+        expansion.set_value(True)
     cn = await _chart(user, "cn-chart")
-    # The carrier, then both parents, added because they have coverage.
     assert len(cn.options["grid"]) == 3
     assert cn.options["title"][0]["text"].startswith("S3 (carrier) · XY")
     carrier = cn.options["series"][0]["data"]
@@ -49,17 +63,11 @@ async def test_copy_number_and_read_evidence(user, monkeypatch):
     father = cn.options["series"][2]["data"]
     assert all(abs(v - 2.0) < 0.01 for _, v in father)
 
-    reads = await _chart(user, "read-chart")
-    await user.should_see("No CRAM for: S1, S2", retries=30)
-    assert len(reads.options["grid"]) == 4  # split: reads + coverage per breakpoint
-    names = {s["name"] for s in reads.options["series"]}
-    assert "Deletion (+- large insert)" in names
-
-    # A 200 kb loss forced into one window is too wide for reads.
+    # A 200 kb loss forced into one window is too wide for reads: CN only.
     toggle = next(iter(user.find(marker="read-mode").elements))
     with user.client:
         toggle.set_value("single")
-    await user.should_see("switch to Split", retries=30)
+    await user.should_see("only the copy number is drawn", retries=30)
 
 
 async def test_without_coverage_the_igv_view_stays(user, monkeypatch):

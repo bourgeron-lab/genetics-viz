@@ -22,6 +22,12 @@ from genetics_viz.utils.cnv_plots import cn_chart_height, cn_option
 from genetics_viz.utils.data import get_all_data_stores
 
 
+def panel_search_dirs(data_dir: Path) -> List[Path]:
+    """Where a panel path is looked for: the cohort's data directory, then the rest."""
+    others = [Path(p) for p in get_all_data_stores() if Path(p) != data_dir]
+    return [data_dir, *others]
+
+
 class CopyNumberPanel:
     """A refreshable copy-number chart for one SV and a list of samples."""
 
@@ -49,9 +55,7 @@ class CopyNumberPanel:
         self._panel = OffThreadPanel("cn-panel")
 
     def _data_dirs(self) -> List[Path]:
-        """The cohort's own data directory first, then every other one."""
-        others = [Path(p) for p in get_all_data_stores() if Path(p) != self.data_dir]
-        return [self.data_dir, *others]
+        return panel_search_dirs(self.data_dir)
 
     def refresh(self, requests: Sequence[CNRequest]) -> None:
         requests = list(requests)

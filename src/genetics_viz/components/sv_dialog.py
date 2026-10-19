@@ -1050,18 +1050,28 @@ def show_sv_dialog(
                             tooltip_text
                         )
 
+            cohort_params = (
+                load_params(cohort.params_file) if cohort and cohort.params_file else {}
+            )
+            # Read Evidence comes first. It is built further down, once the read
+            # windows are defined, into this slot.
+            read_slot = ui.column().classes("w-full gap-0")
+
             # IGV.js viewer container for bedgraph (CNV view)
             # The carrier's normalised coverage bigWig, divided by the cohort's
             # control panel, replaces the by1000 bedgraph in IGV when present.
+            # Folded then: Read Evidence already draws the copy number.
             use_cn = bool(find_sample_coverage(store.data_dir, sample))
+            cn_state = {"loaded": False}
             cnv_expansion = (
                 ui.expansion(
                     "Copy Number View" if use_cn else "CNV Coverage View",
                     icon="analytics",
-                    value=True,
+                    value=not use_cn,
                 )
                 .classes("w-full mt-4 border border-gray-400 rounded-lg")
                 .props("header-class='text-lg font-bold bg-gray-100'")
+                .mark("cn-expansion")
             )
 
             with cnv_expansion:
@@ -1070,11 +1080,7 @@ def show_sv_dialog(
                         data_dir=store.data_dir,
                         cohort_dir=cohort.path if cohort else None,
                         cohort_name=cohort_name,
-                        params=(
-                            load_params(cohort.params_file)
-                            if cohort and cohort.params_file
-                            else {}
-                        ),
+                        params=cohort_params,
                         chrom=chrom,
                         roi=(int(roi_start_coord), int(roi_end_coord)),
                         call=str(sv_data.get("call", "")),
@@ -1082,7 +1088,14 @@ def show_sv_dialog(
                     )
 
                     def refresh_igv():
-                        """Redraw the copy-number panel for the current samples."""
+                        """Redraw the copy-number panel for the current samples.
+
+                        Folded, it is drawn on first opening instead: a chart
+                        built in a hidden panel has no width.
+                        """
+                        cn_state["loaded"] = bool(cnv_expansion.value)
+                        if not cn_state["loaded"]:
+                            return
                         cn_panel.refresh(
                             [
                                 cn_request(sid)
@@ -1171,7 +1184,9 @@ def show_sv_dialog(
 
             # Handle expansion panel opening to resize IGV
             def on_cnv_expansion_change(e):
-                if e.value:  # Panel was opened
+                if e.value and use_cn and not cn_state["loaded"]:
+                    refresh_igv()
+                elif e.value:  # Panel was opened
                     ui.run_javascript("""
                         setTimeout(() => {
                             if (window.igvBrowser && window.igvBrowser.visibilityChange) {
@@ -1304,14 +1319,19 @@ def show_sv_dialog(
                 refresh_igv_cram()
                 refresh_read_evidence()
 
+            def describe_read_mode(used_mode: str) -> str:
+                return (
+                    f"{'auto: ' if read_mode['value'] == 'auto' else ''}"
+                    + (
+                        "one window"
+                        if used_mode == "single"
+                        else "one window per breakpoint"
+                    )
+                    + f" (single up to {visibility_window_bp() // 1000} kb shown)"
+                )
+
             with cram_expansion:
-                with ui.row().classes("items-center gap-3 px-2 pb-2"):
-                    ui.toggle(
-                        {"auto": "Auto", "single": "Single window", "split": "Split"},
-                        value="auto",
-                        on_change=on_read_mode_change,
-                    ).props("dense no-caps size=sm").mark("read-mode")
-                    read_mode_label = ui.label().classes("text-sm text-gray-500")
+                read_mode_label = ui.label().classes("text-sm text-gray-500 px-2 pb-2")
                 igv_cram_container = (
                     ui.element("div")
                     .props('id="igv-cram-div"')
@@ -1337,15 +1357,7 @@ def show_sv_dialog(
                     # locus list is igv.js's multi-locus (split) view.
                     used_mode, windows = current_read_windows()
                     split_locus = " ".join(w.locus for w in windows)
-                    read_mode_label.text = (
-                        f"{'auto: ' if read_mode['value'] == 'auto' else ''}"
-                        + (
-                            "one window"
-                            if used_mode == "single"
-                            else "one window per breakpoint"
-                        )
-                        + f" (single up to {visibility_window_bp() // 1000} kb shown)"
-                    )
+                    read_mode_label.text = describe_read_mode(used_mode)
 
                     # Determine ROI color based on call type (same as CNV view)
                     call_value = sv_data.get("call", "")
@@ -1559,23 +1571,45 @@ def show_sv_dialog(
 
             cram_expansion.on_value_change(on_cram_expansion_change)
 
-            # Samplot-like view of the same windows: pairs at their insert
-            # size, coloured by orientation, with split reads and coverage.
-            reads_expansion = (
-                ui.expansion("Read Evidence", icon="insights", value=True)
-                .classes("w-full mt-4 border border-gray-400 rounded-lg")
-                .props("header-class='text-lg font-bold bg-gray-100'")
-            )
-            with reads_expansion:
-                read_panel = ReadEvidencePanel(
-                    data_dir=store.data_dir,
-                    breakpoints=[int(roi_start_coord), int(roi_end_coord)],
-                    label_for=get_relationship_label,
+            # Samplot-like view of the same windows: discordant pairs at their
+            # insert size, split reads, soft clips and the copy number. Shown
+            # first, above the Copy Number View (read_slot).
+            with read_slot:
+                reads_expansion = (
+                    ui.expansion("Read Evidence", icon="insights", value=True)
+                    .classes("w-full mt-4 border border-gray-400 rounded-lg")
+                    .props("header-class='text-lg font-bold bg-gray-100'")
                 )
+                with reads_expansion:
+                    with ui.row().classes("items-center gap-3 px-2 pb-2"):
+                        ui.toggle(
+                            {
+                                "auto": "Auto",
+                                "single": "Single window",
+                                "split": "Split",
+                            },
+                            value="auto",
+                            on_change=on_read_mode_change,
+                        ).props("dense no-caps size=sm").mark("read-mode")
+                        read_evidence_label = ui.label().classes(
+                            "text-sm text-gray-500"
+                        )
+                    read_panel = ReadEvidencePanel(
+                        data_dir=store.data_dir,
+                        cohort_dir=cohort.path if cohort else None,
+                        cohort_name=cohort_name,
+                        params=cohort_params,
+                        breakpoints=[int(roi_start_coord), int(roi_end_coord)],
+                        label_for=get_relationship_label,
+                    )
 
             def refresh_read_evidence():
-                _, windows = current_read_windows()
-                read_panel.refresh([sample, *additional_samples["value"]], windows)
+                used_mode, windows = current_read_windows()
+                read_evidence_label.text = describe_read_mode(used_mode)
+                read_panel.refresh(
+                    [cn_request(sid) for sid in [sample, *additional_samples["value"]]],
+                    windows,
+                )
 
             refresh_read_evidence()
 
