@@ -5,7 +5,6 @@ import csv
 import io
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -74,8 +73,13 @@ from genetics_viz.utils.clinvar import (
     format_clinvar_display,
     get_clinvar_color,
 )
-from genetics_viz.utils.sample_counts import cohort_wcx_file
-from genetics_viz.utils.tsv import read_tsv_or_none
+from genetics_viz.utils.sample_counts import (
+    MissingHeaderError,
+    cohort_wcx_file,
+    cohort_wombat_sources,
+    family_header_sources,
+    read_cohort_wombat,
+)
 from genetics_viz.utils.wombat import aggregate_by_variant
 from genetics_viz.utils.vep import (
     VEP_CONSEQUENCES,
@@ -254,7 +258,6 @@ def search_cohort_page(cohort_name: str) -> None:
         store = get_data_store()
 
         # Scan for source files (wombat + SVS)
-        wombat_dir = store.data_dir / "cohorts" / cohort_name / "wombat"
         svs_dir = store.data_dir / "cohorts" / cohort_name / "svs"
 
         with ui.column().classes("w-full px-6 py-6"):
@@ -263,28 +266,18 @@ def search_cohort_page(cohort_name: str) -> None:
                 "text-3xl font-bold text-blue-900 mb-6"
             )
 
-            # Scan for wombat files matching pattern
-            source_files: List[Dict[str, Any]] = []
-
-            if wombat_dir.exists():
-                wombat_pattern = re.compile(
-                    rf"{re.escape(cohort_name)}\.rare\.([^.]+)\.(.+?)\.results\.tsv$"
-                )
-                for tsv_file in wombat_dir.glob("*.tsv"):
-                    match = wombat_pattern.match(tsv_file.name)
-                    if match:
-                        vep_config = match.group(1)
-                        wombat_config = match.group(2)
-                        source_files.append(
-                            {
-                                "file_path": tsv_file,
-                                "vep_config": vep_config,
-                                "wombat_config": wombat_config,
-                                "display_name": wombat_config,
-                                "source_type": "wombat",
-                                "parent_dir": "wombat",
-                            }
-                        )
+            # Wombat results, sorted so the first (the default) is stable
+            source_files: List[Dict[str, Any]] = [
+                {
+                    "file_path": src.path,
+                    "vep_config": src.vep_config,
+                    "wombat_config": src.wombat_config,
+                    "display_name": src.wombat_config,
+                    "source_type": "wombat",
+                    "parent_dir": "wombat",
+                }
+                for src in cohort_wombat_sources(store.data_dir, cohort_name)
+            ]
 
             # Scan for SVS subdirectories
             if svs_dir.exists():
@@ -1148,9 +1141,21 @@ def search_cohort_page(cohort_name: str) -> None:
 
                 try:
                     # --- Helper: load a single wombat file ---
-                    def _load_wombat_file(file_path: Path) -> Optional[pl.DataFrame]:
-                        _df = read_tsv_or_none(
-                            file_path,
+                    def _load_wombat_file(
+                        sf: Dict[str, Any],
+                    ) -> Optional[pl.DataFrame]:
+                        # A headerless cohort table borrows a family's header
+                        cohort = store.get_cohort(cohort_name)
+                        _df = read_cohort_wombat(
+                            sf["file_path"],
+                            family_header_sources(
+                                store.data_dir,
+                                cohort,
+                                sf["vep_config"],
+                                sf["wombat_config"],
+                            )
+                            if cohort is not None
+                            else (),
                             infer_schema_length=10000,
                             schema_overrides=get_schema_overrides(),
                             null_values=[".", ""],
@@ -1202,9 +1207,19 @@ def search_cohort_page(cohort_name: str) -> None:
                             query_params = parse_locus_query(locus_val)
 
                         if comp["type"] == "wombat":
-                            df = await asyncio.to_thread(
-                                _load_wombat_file, sf["file_path"]
-                            )
+                            try:
+                                df = await asyncio.to_thread(_load_wombat_file, sf)
+                            except MissingHeaderError as exc:
+                                # Read anyway, its first row would be the columns
+                                results_container.clear()
+                                with results_container:
+                                    ui.label(
+                                        f"Cannot search Wombat source "
+                                        f"{sf['display_name']}: {exc}"
+                                    ).classes("text-red-600").mark(
+                                        "search-source-error"
+                                    )
+                                return
                             if df is None or len(df) == 0:
                                 continue
                             # Locus filter

@@ -17,14 +17,16 @@ would flag any child with two calls as an outlier.
 from __future__ import annotations
 
 import bisect
+import re
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Set, Tuple
 
 import polars as pl
 
 from genetics_viz.models import Cohort
+from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.utils.tsv import read_tsv_or_none
 
 #: Tukey's fence: a count beyond Q3 + k·IQR (or below Q1 - k·IQR) is flagged.
@@ -57,6 +59,66 @@ def cohort_wombat_file(
         if path.is_file():
             return path
     return None
+
+
+@dataclass(frozen=True)
+class CohortWombatSource:
+    """One cohort Wombat results table, as the Search page offers it."""
+
+    path: Path
+    vep_config: str
+    wombat_config: str
+
+
+def cohort_wombat_sources(data_dir: Path, cohort_name: str) -> List[CohortWombatSource]:
+    """Every Wombat results table of a cohort, sorted by config, then VEP config.
+
+    Sorted so the first, the Search page's default, does not depend on the
+    order the directory lists in. A table under both names (with and without
+    ``annotated``) is listed once, under the name ``cohort_wombat_file`` picks.
+    """
+    wombat_dir = data_dir / "cohorts" / cohort_name / "wombat"
+    if not wombat_dir.is_dir():
+        return []
+    pattern = re.compile(
+        rf"{re.escape(cohort_name)}\.rare\.([^.]+)\.(?:annotated\.)?(.+?)\.results\.tsv$"
+    )
+    configs = {
+        (m.group(2), m.group(1))
+        for f in wombat_dir.glob("*.results.tsv")
+        if (m := pattern.match(f.name))
+    }
+    sources: List[CohortWombatSource] = []
+    for wombat_config, vep_config in sorted(configs):
+        path = cohort_wombat_file(data_dir, cohort_name, vep_config, wombat_config)
+        if path is not None:
+            sources.append(CohortWombatSource(path, vep_config, wombat_config))
+    return sources
+
+
+def family_wombat_file(
+    data_dir: Path, family_id: str, vep_config: str, wombat_config: str
+) -> Path:
+    """Where a family's Wombat table for one VEP and Wombat config would be."""
+    return (
+        get_family_path(data_dir, family_id)
+        / "wombat"
+        / f"{family_id}.rare.{vep_config}.annotated.{wombat_config}.tsv"
+    )
+
+
+def family_header_sources(
+    data_dir: Path, cohort: Cohort, vep_config: str, wombat_config: str
+) -> Iterator[Path]:
+    """The cohort's family files of one config, to lend a headerless table theirs.
+
+    Lazy, in family order: a header that fits is usually found in the first
+    family, and each existence check is a round trip on the data mount.
+    """
+    for family_id in sorted(cohort.families):
+        path = family_wombat_file(data_dir, family_id, vep_config, wombat_config)
+        if path.is_file():
+            yield path
 
 
 def cohort_wcx_file(data_dir: Path, cohort_name: str) -> Optional[Path]:
@@ -92,6 +154,58 @@ def _first_lines(path: Path) -> Tuple[int, Optional[str]]:
     return blanks, None
 
 
+def _wombat_read_kwargs(
+    tsv_path: Path, header_sources: Iterable[Path]
+) -> Optional[Dict[str, Any]]:
+    """``read_csv`` arguments for a cohort Wombat file, or None when it is blank.
+
+    Some cohort de novo files have no header: a blank line, then the rows. The
+    first of ``header_sources`` (family files of the same config) whose header
+    has as many columns as the rows lends it; with none, ``MissingHeaderError``.
+    """
+    blanks, first = _first_lines(tsv_path)
+    if first is None:
+        return None
+    read_kwargs: Dict[str, Any] = {"skip_rows": blanks}
+    if first.startswith("#CHROM"):
+        return read_kwargs
+    width = len(first.split("\t"))
+    tried: List[Tuple[Path, int]] = []
+    for source in header_sources:
+        with open(source, "r") as f:
+            borrowed = f.readline().rstrip("\n").split("\t")
+        if len(borrowed) == width and borrowed[0] == "#CHROM":
+            read_kwargs.update(has_header=False, new_columns=borrowed)
+            return read_kwargs
+        # A zero-byte family file (nothing to report) reads as one column
+        tried.append((source, len(borrowed)))
+    detail = ""
+    if tried:
+        source, columns = tried[0]
+        detail = f", and {source.name} has {columns} columns against its {width}"
+        others = len(tried) - 1
+        if others:
+            detail += f"; {others} other family file{'s' * (others > 1)} did not fit"
+    raise MissingHeaderError(f"{tsv_path.name} has no header line{detail}")
+
+
+def read_cohort_wombat(
+    tsv_path: Path, header_sources: Iterable[Path] = (), **kwargs: Any
+) -> Optional[pl.DataFrame]:
+    """Read a cohort Wombat table, borrowing a family's header if it has none.
+
+    ``header_sources`` are family files of the same config, tried in turn
+    (see :func:`family_header_sources`); they are read only when the cohort
+    file has no header. Raises ``MissingHeaderError`` when none fits, rather
+    than reading the first row as column names. Other keyword arguments go to
+    :func:`read_tsv_or_none`. None for a file with no rows.
+    """
+    read_kwargs = _wombat_read_kwargs(tsv_path, header_sources)
+    if read_kwargs is None:
+        return None
+    return read_tsv_or_none(tsv_path, **kwargs, **read_kwargs)
+
+
 def count_variants_per_sample(
     tsv_path: Path,
     geneset_genes: Set[str] | None = None,
@@ -102,38 +216,16 @@ def count_variants_per_sample(
     If geneset_genes is provided, only count variants where VEP_SYMBOL
     overlaps the gene set. Returns {sample_id: variant_count}.
 
-    Some cohort de novo files have no header: a blank line, then the rows.
-    ``header_source`` (a family file of the same config) lends its header
-    when it has as many columns as the rows; otherwise ``MissingHeaderError``
-    is raised, rather than counting every sample as 0.
+    ``header_source`` (a family file of the same config) lends its header to
+    a cohort file that has none; see :func:`read_cohort_wombat`. Without one
+    that fits, ``MissingHeaderError`` is raised rather than counting every
+    sample as 0.
     """
-    blanks, first = _first_lines(tsv_path)
-    if first is None:
-        return {}
-    read_kwargs: Dict[str, Any] = {"skip_rows": blanks}
-    if not first.startswith("#CHROM"):
-        width = len(first.split("\t"))
-        borrowed: List[str] = []
-        if header_source is not None:
-            with open(header_source, "r") as f:
-                borrowed = f.readline().rstrip("\n").split("\t")
-        if len(borrowed) != width or borrowed[0] != "#CHROM":
-            raise MissingHeaderError(
-                f"{tsv_path.name} has no header line"
-                + (
-                    f", and {header_source.name} has {len(borrowed)} columns "
-                    f"against its {width}"
-                    if header_source is not None
-                    else ""
-                )
-            )
-        read_kwargs.update(has_header=False, new_columns=borrowed)
-
-    df = read_tsv_or_none(
+    df = read_cohort_wombat(
         tsv_path,
+        [header_source] if header_source is not None else [],
         infer_schema_length=0,
         null_values=[".", ""],
-        **read_kwargs,
     )
     if df is None:
         return {}

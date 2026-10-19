@@ -644,7 +644,7 @@ WOMBAT_ROWS = [
 
 
 def build_wombat_results(data: Path) -> None:
-    """Family 1001's Wombat tables (two configs) and the DEMO cohort's."""
+    """Family 1001's Wombat tables (two configs) and the DEMO cohort's two."""
     wombat = family_dir(data, "1001") / "wombat"
     write_tsv(
         wombat / "1001.rare.vep1.annotated.default.tsv", WOMBAT_COLUMNS, WOMBAT_ROWS
@@ -665,13 +665,15 @@ def build_wombat_results(data: Path) -> None:
         ["gene"],
         [("ARONLY",), ("PLAIN",)],
     )
+    build_headerless_cohort_wombat(data)
 
 
 def build_headerless_cohort_wombat(data: Path) -> Path:
     """DEMO's "strict" cohort table as several real cohorts' de novo tables are.
 
     The older ".annotated." name, and no header: a blank line, then the rows.
-    Not in the default data: the Search page cannot read it yet.
+    Family 1001's "strict" table lends it its header. Part of the default data;
+    returns the path for tests that rewrite it or its family file.
     """
     path = (
         data
