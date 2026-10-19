@@ -74,6 +74,7 @@ from genetics_viz.utils.clinvar import (
     format_clinvar_display,
     get_clinvar_color,
 )
+from genetics_viz.utils.sample_counts import cohort_wcx_file
 from genetics_viz.utils.tsv import read_tsv_or_none
 from genetics_viz.utils.wombat import aggregate_by_variant
 from genetics_viz.utils.vep import (
@@ -292,12 +293,8 @@ def search_cohort_page(cohort_name: str) -> None:
                         continue
                     subdir_name = subdir.name
                     if subdir_name == "wisecondorx":
-                        bed_file = subdir / f"{cohort_name}_aberrations.bed"
-                        if not bed_file.exists():
-                            bed_file = (
-                                subdir / f"{cohort_name}_aberrations.annotated.bed"
-                            )
-                        if bed_file.exists():
+                        bed_file = cohort_wcx_file(store.data_dir, cohort_name)
+                        if bed_file is not None:
                             source_files.append(
                                 {
                                     "file_path": bed_file,

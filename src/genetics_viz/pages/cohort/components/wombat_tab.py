@@ -11,6 +11,10 @@ import polars as pl
 from nicegui import ui
 
 from genetics_viz.components.column_selector import build_column_selector
+from genetics_viz.components.sample_counts import (
+    render_cohort_comparison,
+    render_sample_count_bars,
+)
 from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.utils.tsv import read_tsv_or_none
 from genetics_viz.components.filters import (
@@ -74,6 +78,10 @@ from genetics_viz.utils.cytobands import (
     VALIDATION_COLORS,
     norm_chrom,
 )
+from genetics_viz.utils.sample_counts import cohort_wombat_file
+
+#: Stack colours of the Stats dialog's variants-per-sample chart
+_TYPE_COLORS = {"SNV": "#3b82f6", "Indel": "#f59e0b"}
 
 
 def probe_wombat_data(data_dir: Path, family_id: str) -> bool:
@@ -1055,7 +1063,40 @@ def render_wombat_tab(
                                     _containers: Dict[str, Any] = {
                                         "charts": None,
                                         "ideo": None,
+                                        "cohort": None,
                                     }
+
+                                    def _member_type_counts() -> Dict[
+                                        str, Dict[str, int]
+                                    ]:
+                                        """Unique variants per selected member, by type."""
+                                        per_member: Dict[str, Dict[str, int]] = {
+                                            m: {} for m in selected_members["value"]
+                                        }
+                                        seen_ms = set()
+                                        for r in current_rows:
+                                            sid = r.get("sample", "")
+                                            ref = str(r.get("REF", ""))
+                                            alt = str(r.get("ALT", ""))
+                                            is_snv = len(ref) == 1 and len(alt) == 1
+                                            if not type_filter[
+                                                "snv" if is_snv else "indel"
+                                            ]:
+                                                continue
+                                            key = (
+                                                sid,
+                                                r.get("#CHROM", ""),
+                                                r.get("POS", ""),
+                                                ref,
+                                                alt,
+                                            )
+                                            if key in seen_ms:
+                                                continue
+                                            seen_ms.add(key)
+                                            kind = "SNV" if is_snv else "Indel"
+                                            counts = per_member.setdefault(sid, {})
+                                            counts[kind] = counts.get(kind, 0) + 1
+                                        return per_member
 
                                     with (
                                         ui.dialog().props("full-width") as stats_dialog,
@@ -1246,6 +1287,13 @@ def render_wombat_tab(
                                                             "series": stacked_series,
                                                         }
                                                     ).classes("w-full h-64")
+
+                                                    render_sample_count_bars(
+                                                        _member_type_counts(),
+                                                        ["SNV", "Indel"],
+                                                        _TYPE_COLORS,
+                                                        "Variants per Sample (current view)",
+                                                    )
 
                                                     with ui.row().classes(
                                                         "w-full gap-4 flex-wrap mt-4"
@@ -1501,17 +1549,37 @@ def render_wombat_tab(
 
                                             render_stats_content()
 
+                                            # Unfiltered, so outside the
+                                            # refreshable: the SNV/Indel toggle
+                                            # does not reload the cohort file
+                                            _containers["cohort"] = ui.column().classes(
+                                                "w-full"
+                                            )
+                                            with _containers["cohort"]:
+                                                render_cohort_comparison(
+                                                    cohort_wombat_file(
+                                                        store.data_dir,
+                                                        cohort_name,
+                                                        wf["vep_config"],
+                                                        config_name,
+                                                    ),
+                                                    "wombat",
+                                                    store.cohorts.get(cohort_name),
+                                                    list(selected_members["value"]),
+                                                )
+
                                             # Toggle ideogram/charts view
                                             def toggle_ideogram(_e=None):
                                                 show_ideogram[
                                                     "value"
                                                 ] = not show_ideogram["value"]
-                                                if _containers["charts"]:
-                                                    _containers[
-                                                        "charts"
-                                                    ].set_visibility(
-                                                        not show_ideogram["value"]
-                                                    )
+                                                for name in ("charts", "cohort"):
+                                                    if _containers[name]:
+                                                        _containers[
+                                                            name
+                                                        ].set_visibility(
+                                                            not show_ideogram["value"]
+                                                        )
                                                 if _containers["ideo"]:
                                                     _containers["ideo"].set_visibility(
                                                         show_ideogram["value"]

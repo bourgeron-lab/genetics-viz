@@ -2,7 +2,9 @@
 
 import asyncio
 
+import datagen
 from nicegui import ui
+from nicegui.testing.user_interaction import UserInteraction
 from ui_helpers import capture_tables, login, open_tab, roh_threshold_labels
 
 
@@ -398,3 +400,56 @@ async def test_sv_diagnostic_saved_from_search_is_read_back(
         await asyncio.sleep(0.05)
     [row] = tables[-1]["rows"]
     assert row["Diagnostic"] == "uncertain"
+
+
+def _sample_charts(user, marker):
+    return [c.options for c in user.find(marker=marker).elements]
+
+
+async def test_wombat_stats_count_variants_per_sample(user):
+    """The Stats dialog counts each member's variants and places them in the cohort."""
+    await login(user, "reader")
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Wombat Configuration: default", retries=30)
+    user.find(kind=ui.button, content="Stats").click()
+    await user.should_see("Variants per Sample (current view)", retries=10)
+
+    (bars,) = _sample_charts(user, "sample-count-bars")
+    assert bars["xAxis"]["data"] == ["S1", "S2", "S3"]
+    totals = [sum(vals) for vals in zip(*(s["data"] for s in bars["series"]))]
+    assert totals == [0, 0, 6]
+
+    await user.should_see("Compared with the cohort (unfiltered)")
+    await user.should_see("DEMO.rare.vep1.default.results.tsv", retries=10)
+    await user.should_see(marker="sample-count-histogram", retries=30)
+    histograms = _sample_charts(user, "sample-count-histogram")
+    titles = sorted(h["title"]["text"] for h in histograms)
+    assert titles == ["Cohort founders (n=4)", "Cohort non-founders (n=2)"]
+
+
+async def test_sv_stats_count_calls_per_sample(user, data_dir):
+    """The WisecondorX Stats dialog does the same against the cohort BED."""
+    family_wcx = (
+        datagen.family_dir(data_dir, "1001")
+        / "svs"
+        / "wisecondorx"
+        / "1001_aberrations.annotated.bed"
+    )
+    datagen.write_tsv(family_wcx, datagen.WCX_COLUMNS, datagen.WCX_ROWS[:1])
+
+    await login(user, "reader")
+    await user.open("/cohort/DEMO/family/1001")
+    open_tab(user, "family-tabs", "SVs")
+    await user.should_see("WisecondorX Aberrations", retries=30)
+    # The Wombat tab's Stats button is built first; the SV one is the newest
+    stats_buttons = user.find(kind=ui.button, content="Stats").elements
+    UserInteraction(user, {max(stats_buttons, key=lambda b: b.id)}, "Stats").click()
+    await user.should_see("SVs per Sample (current view)", retries=10)
+
+    bars = [b for b in _sample_charts(user, "sample-count-bars") if b["series"]]
+    assert any(
+        b["xAxis"]["data"] == ["S1", "S2", "S3"]
+        and [sum(v) for v in zip(*(s["data"] for s in b["series"]))] == [0, 0, 1]
+        for b in bars
+    )
+    await user.should_see("DEMO_aberrations.bed", retries=10)

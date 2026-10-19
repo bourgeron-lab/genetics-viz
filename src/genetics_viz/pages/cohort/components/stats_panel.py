@@ -5,12 +5,11 @@ import statistics
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-import polars as pl
 from nicegui import run, ui
 
 from genetics_viz.models import Cohort, DataStore
 from genetics_viz.utils.genesets import load_genesets
-from genetics_viz.utils.tsv import read_tsv_or_none
+from genetics_viz.utils.sample_counts import count_variants_per_sample
 
 
 def _discover_wombat_configs(store: DataStore, cohort: Cohort) -> List[str]:
@@ -45,52 +44,6 @@ def _find_wombat_file(
         if pattern.match(f.name):
             return f
     return None
-
-
-def _count_variants_per_sample(
-    tsv_path: Path,
-    geneset_genes: Set[str] | None,
-) -> Dict[str, int]:
-    """Count unique variants per sample in a cohort wombat file.
-
-    If geneset_genes is provided, only count variants where VEP_SYMBOL
-    overlaps the gene set. Returns {sample_id: variant_count}.
-    """
-    df = read_tsv_or_none(
-        tsv_path,
-        infer_schema_length=0,
-        null_values=[".", ""],
-    )
-    if df is None:
-        return {}
-
-    # Ensure required columns exist
-    required = {"#CHROM", "POS", "REF", "ALT", "sample"}
-    if not required.issubset(set(df.columns)):
-        return {}
-
-    # Filter by geneset genes if provided
-    if geneset_genes and "VEP_SYMBOL" in df.columns:
-        df = df.filter(
-            pl.col("VEP_SYMBOL")
-            .cast(pl.Utf8)
-            .fill_null("")
-            .str.split(",")
-            .list.eval(pl.element().str.to_uppercase().is_in(list(geneset_genes)))
-            .list.any()
-        )
-
-    # Count unique variants per sample
-    variant_counts = (
-        df.select(["#CHROM", "POS", "REF", "ALT", "sample"])
-        .unique()
-        .group_by("sample")
-        .agg(pl.len().alias("count"))
-    )
-
-    return {
-        str(row["sample"]): row["count"] for row in variant_counts.iter_rows(named=True)
-    }
 
 
 def render_stats_panel(
@@ -207,7 +160,7 @@ def render_stats_panel(
 
             for gs_name in genesets:
                 genes = geneset_genes.get(gs_name)
-                counts = await run.io_bound(_count_variants_per_sample, tsv_path, genes)
+                counts = await run.io_bound(count_variants_per_sample, tsv_path, genes)
 
                 # Compute per-phenotype lists
                 pheno_counts: Dict[str, List[int]] = {}

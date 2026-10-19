@@ -11,6 +11,10 @@ from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
     load_diagnostic_map,
 )
+from genetics_viz.components.sample_counts import (
+    render_cohort_comparison,
+    render_sample_count_bars,
+)
 from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
@@ -27,6 +31,7 @@ from genetics_viz.utils.column_names import (
 )
 from genetics_viz.utils.cytobands import CHROM_ORDER, VALIDATION_COLORS
 from genetics_viz.utils.genetrek import search_url
+from genetics_viz.utils.sample_counts import cohort_wcx_file
 from genetics_viz.utils.gene_scoring import (
     build_gene_badges,
     get_gene_scorer,
@@ -657,6 +662,34 @@ def render_wisecondorx_subtab(
                                     }
                                 ).classes("w-full h-64")
 
+                                # --- Calls per member, then against the cohort ---
+                                call_colors_map = build_call_colors()
+                                per_member: Dict[str, Dict[str, int]] = {
+                                    m: {} for m in selected_members["value"]
+                                }
+                                for r in current_rows:
+                                    member = per_member.setdefault(
+                                        r.get("sample", ""), {}
+                                    )
+                                    call = r.get("call", "N/A")
+                                    member[call] = member.get(call, 0) + 1
+                                member_calls = sorted(
+                                    {c for m in per_member.values() for c in m}
+                                )
+                                render_sample_count_bars(
+                                    per_member,
+                                    member_calls,
+                                    call_colors_map,
+                                    "SVs per Sample (current view)",
+                                )
+                                render_cohort_comparison(
+                                    cohort_wcx_file(store.data_dir, cohort_name),
+                                    "wcx",
+                                    store.cohorts.get(cohort_name),
+                                    list(selected_members["value"]),
+                                    unit="SVs",
+                                )
+
                                 # --- Pie charts row ---
                                 with ui.row().classes("w-full gap-4 flex-wrap mt-4"):
                                     # Call type pie chart
@@ -667,7 +700,6 @@ def render_wisecondorx_subtab(
                                         call_counts = Counter(
                                             r.get("call", "N/A") for r in current_rows
                                         )
-                                        call_colors_map = build_call_colors()
                                         call_data = [
                                             {
                                                 "name": call,

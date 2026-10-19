@@ -24,6 +24,7 @@ from genetics_viz.utils import (
     ghfc_ngs_docs,
     pipeline_params,
     roh,
+    sample_counts,
     user_preferences,
     str_eh,
     sharding,
@@ -43,6 +44,7 @@ def _reset_globals() -> None:
     ancestry.clear_reference_cache()
     roh.clear_reference_cache()
     str_eh.clear_eh_cache()
+    sample_counts.clear_sample_count_cache()
     cohort_state.clear_state_cache()
     cohort_state.clear_sha_cache()
     pipeline_params.clear_params_cache()
