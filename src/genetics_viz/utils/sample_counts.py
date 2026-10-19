@@ -17,6 +17,7 @@ would flag any child with two calls as an outlier.
 from __future__ import annotations
 
 import bisect
+import io
 import re
 import statistics
 from dataclasses import dataclass
@@ -156,8 +157,10 @@ def _first_lines(path: Path) -> Tuple[int, Optional[str]]:
 
 def _wombat_read_kwargs(
     tsv_path: Path, header_sources: Iterable[Path]
-) -> Optional[Dict[str, Any]]:
-    """``read_csv`` arguments for a cohort Wombat file, or None when it is blank.
+) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """Leading blank lines and ``read_csv`` arguments for a cohort Wombat file.
+
+    None when the file is blank.
 
     Some cohort de novo files have no header: a blank line, then the rows. The
     first of ``header_sources`` (family files of the same config) whose header
@@ -166,9 +169,9 @@ def _wombat_read_kwargs(
     blanks, first = _first_lines(tsv_path)
     if first is None:
         return None
-    read_kwargs: Dict[str, Any] = {"skip_rows": blanks}
+    read_kwargs: Dict[str, Any] = {}
     if first.startswith("#CHROM"):
-        return read_kwargs
+        return blanks, read_kwargs
     width = len(first.split("\t"))
     tried: List[Tuple[Path, int]] = []
     for source in header_sources:
@@ -176,7 +179,7 @@ def _wombat_read_kwargs(
             borrowed = f.readline().rstrip("\n").split("\t")
         if len(borrowed) == width and borrowed[0] == "#CHROM":
             read_kwargs.update(has_header=False, new_columns=borrowed)
-            return read_kwargs
+            return blanks, read_kwargs
         # A zero-byte family file (nothing to report) reads as one column
         tried.append((source, len(borrowed)))
     detail = ""
@@ -200,10 +203,19 @@ def read_cohort_wombat(
     than reading the first row as column names. Other keyword arguments go to
     :func:`read_tsv_or_none`. None for a file with no rows.
     """
-    read_kwargs = _wombat_read_kwargs(tsv_path, header_sources)
-    if read_kwargs is None:
+    sniffed = _wombat_read_kwargs(tsv_path, header_sources)
+    if sniffed is None:
         return None
-    return read_tsv_or_none(tsv_path, **kwargs, **read_kwargs)
+    blanks, read_kwargs = sniffed
+    if not blanks:
+        return read_tsv_or_none(tsv_path, **kwargs, **read_kwargs)
+    # The leading blank lines are cut off here rather than through skip_rows:
+    # polars 1.17 skips the blank line by itself and then the first row too.
+    with open(tsv_path, "rb") as f:
+        for _ in range(blanks):
+            f.readline()
+        rest = f.read()
+    return read_tsv_or_none(io.BytesIO(rest), **kwargs, **read_kwargs)
 
 
 def count_variants_per_sample(
