@@ -53,7 +53,10 @@ src/genetics_viz/
     header.py                     # Shared page header with data dir dropdown + user menu
     validation_loader.py          # Validation TSV loading and badge logic
     variant_dialog.py             # IGV variant inspection dialog
-    sv_dialog.py                  # IGV SV inspection dialog
+    sv_dialog.py                  # SV inspection dialog (copy number, IGV, read evidence)
+    sv_cn_panel.py                # SV dialog: copy-number panel (sample ÷ control panel)
+    sv_read_panel.py              # SV dialog: samplot-like read-evidence panel
+    offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     diagnostic_dialog.py          # Diagnostic review dialog
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
@@ -62,6 +65,7 @@ src/genetics_viz/
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
     str.yaml                      # STR class/status colours, support codes, REViewer filename
     clinvar_colors.yaml           # ClinVar significance term -> color
+    cnv.yaml                      # CN mask/display, single-vs-split read view, read-evidence caps/colours
     column_names.yaml             # Column display names, groups, sorting, drop flags
     cytobands_hg38.tsv            # Cytoband data for ideogram rendering
     continuous_scores.yaml        # Continuous score color ranges
@@ -115,6 +119,11 @@ src/genetics_viz/
     validation_files.py           # The validation kinds (SNV/SV/STR) and their files
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR) and their files
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
+    cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
+    cnv_plots.py                  # ECharts builder for the copy-number panel
+    sv_view.py                    # One read window or one per breakpoint, by SV type and size
+    sv_reads.py                   # pysam: read pairs/split reads classed by orientation
+    sv_read_plots.py              # ECharts builder for the read-evidence panel
     auth.py                       # Auth helpers: check_auth, can_write, get_current_user
     clinvar.py                    # ClinVar color/display utilities (from YAML)
     cohort_state.py               # .ghfc-ngs.state.json parsing, drift, step rows
@@ -230,6 +239,17 @@ Config files (YAML) are loaded once at module level.
   - Images are named by the catalog's **LocusId**, while the table names VariantIds: `FXN_A` is drawn as `FXN`. The catalog is not in the data directory, so `reviewer_path` falls back to the longest drawn locus the variant extends with `_`.
   - The older `str/reviewer/` directory comes from a separate STRchive run with other locus IDs, and is deliberately not shown.
   - Images are shown with `loading="lazy"`, because each one runs to a megabyte.
+
+### CNV Coverage and SV Read Evidence
+- The ghfc-ngs `cnv_coverage` step writes `samples/.../<ID>/coverage/<ID>.cov_b<bin>q<mapq>.{bw,json}`: every bin holds `2 × depth / autosomal median` (about 2 on a normal autosome). The `cnv_panel` step of a controls cohort writes a versioned, self-contained `cohorts/<controls>/cnv_panel/v<version>/` (per-bin median and unscaled MAD for `autosomes`, `XX`, `XY`, plus `panel.json` with PARs and expected ploidy). A cohort fitted against it gets `cohorts/<NAME>/coverage/<NAME>.<tag>.panel_v<version>.fit.tsv`. The contract is documented in ghfc-ngs `documentation/params.md`.
+- **The division happens here, at view time**: CN = expected ploidy × sample / panel median, PAR-aware, in `utils/cnv_coverage.py`. Per-sample files never depend on a panel, so a new panel version rewrites nothing.
+- **The panel is found through the cohort's params `cnv_panel_dir`, a compute-cluster path.** Its tail from the last `cohorts/` component is resolved under the cohort's data directory, then every other one. The cluster path itself is never opened (same trap as the run record and the ancestry `.qc.json`).
+- **Degraded, never an error**: no panel, a panel of another tag (`cov_b<bin>q<mapq>`, refused, as in the pipeline), or a karyotype with no panel group (`X0`, `XXY`, unknown) → the sample's own normalised value, unmasked, with the reason shown. Karyotype is the fit table's `coverage_sex`, else the pedigree sex.
+- Bins are masked (drawn grey) where the panel median is under half the expected ploidy or its MAD/median is high (`config/cnv.yaml`). Regions over `max_exact_bins` are read through the bigWig zoom levels.
+- **The SV dialog** shows the copy-number panel instead of the IGV by1000 bedgraph view when the carrier has a coverage bigWig; the bedgraph view stays as the fallback.
+- **Read windows** (`utils/sv_view.py`): one window when span × 1.6 fits igv.js's alignment `visibilityWindow` (also set on the CRAM tracks from the same config value), one per breakpoint otherwise; INS is always one, BND always two. An Auto / Single / Split toggle overrides it, for the IGV reads and the read-evidence panel alike.
+- **Read evidence** (`utils/sv_reads.py`) decodes the CRAMs with pysam and needs `reference_fasta` in the app config (the exact alignment FASTA). Without it nothing is opened: htslib would otherwise try to download the reference by MD5. Pairs are classed by orientation (`+-` with a large insert = deletion, `-+` duplication, `++`/`--` inversion, other chromosome) against the window's own proper-pair insert sizes; concordant pairs are downsampled.
+- Tests: `datagen` writes the bigWigs with pybigtools and a **reference-free CRAM** (`no_ref=1`) with a hand-written `.fai`, since a real chr2 reference would be 240 MB.
 
 ### Cohort Discovery
 - **A cohort is a directory under `cohorts/`.** The directory name is the cohort name.
