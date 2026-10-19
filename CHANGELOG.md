@@ -5,6 +5,20 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-10-20
+
+### Changed
+- **Read Evidence draws only the evidence**: discordant pairs (with both read bodies), split reads, soft-clip clusters and mates on another chromosome. Concordant pairs are no longer drawn; the range their insert sizes normally fall in (2.5-97.5 percentile) is shaded instead.
+- **Copy number on the Read Evidence plot.** Each sample and window is one plot. Insert size is on the left axis, and copy number on the right, from the normalised coverage divided by the control panel, as in the Copy Number View. A sample with coverage but no CRAM keeps its copy-number row.
+- **Split reads** join their two aligned parts with an arc rising above them, so the link no longer hides the deletion and duplication lines.
+- **Soft-clip clusters** (several reads clipped at the same position, as at a breakpoint) are drawn as bars at the foot of the plot.
+- **Read Evidence comes first in the SV dialog**, with the Auto / Single / Split toggle. The Copy Number View is folded and drawn when opened.
+- **Navigation rulers** under each Read Evidence window. The mouse wheel no longer zooms Read Evidence or the Copy Number View: it scrolls the dialog, and dragging pans.
+
+### Fixed
+- The cohort that built a CNV control panel (GHFC-NT) now uses that panel itself, instead of showing "no control panel".
+- The Read Evidence legend no longer wraps into the first plot, and the insert-size axis ends on a round value.
+
 ## [0.19.0] - 2026-10-19
 
 ### Added
