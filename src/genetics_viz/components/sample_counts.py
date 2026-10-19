@@ -18,6 +18,7 @@ from genetics_viz.utils.sample_counts import (
     CountKind,
     GroupStats,
     MemberComparison,
+    MissingHeaderError,
     cohort_sample_counts,
     compare_to_cohort,
     histogram_bins,
@@ -200,11 +201,15 @@ def render_cohort_comparison(
     cohort: Optional[Cohort],
     member_ids: List[str],
     unit: str = "Variants",
+    header_source: Optional[Path] = None,
 ) -> None:
     """Compare members with their cohort group, loading the counts off-thread.
 
-    Degraded states (no cohort file, unknown cohort, unreadable file) are a
-    grey line, never an exception.
+    ``header_source`` is the family's own file of the same config, lending
+    its header to a cohort file written without one.
+
+    Degraded states (no cohort file, unknown cohort, unreadable or headerless
+    file) are a grey line, never an exception.
     """
     ui.label("Compared with the cohort (unfiltered)").classes(
         "text-lg font-semibold text-gray-800 mt-4"
@@ -239,7 +244,14 @@ def render_cohort_comparison(
 
     async def load() -> None:
         try:
-            counts = await run.io_bound(cohort_sample_counts, path, kind)
+            counts = await run.io_bound(cohort_sample_counts, path, kind, header_source)
+        except MissingHeaderError as exc:
+            body.clear()
+            with body:
+                ui.label(f"{exc}; no comparison available.").classes(
+                    "text-gray-500 italic"
+                )
+            return
         except Exception:
             logger.warning("Failed to count %s", path, exc_info=True)
             body.clear()

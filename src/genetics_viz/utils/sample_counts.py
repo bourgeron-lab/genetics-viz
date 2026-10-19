@@ -20,7 +20,7 @@ import bisect
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import polars as pl
 
@@ -77,19 +77,63 @@ def cohort_wcx_file(data_dir: Path, cohort_name: str) -> Optional[Path]:
 # --------------------------------------------------------------------------
 
 
+class MissingHeaderError(ValueError):
+    """A cohort Wombat file with no header line, and none that fits to borrow."""
+
+
+def _first_lines(path: Path) -> Tuple[int, Optional[str]]:
+    """The number of leading blank lines, and the first non-blank line."""
+    blanks = 0
+    with open(path, "r") as f:
+        for line in f:
+            if line.strip():
+                return blanks, line.rstrip("\n")
+            blanks += 1
+    return blanks, None
+
+
 def count_variants_per_sample(
     tsv_path: Path,
     geneset_genes: Set[str] | None = None,
+    header_source: Optional[Path] = None,
 ) -> Dict[str, int]:
     """Count unique variants per sample in a cohort Wombat file.
 
     If geneset_genes is provided, only count variants where VEP_SYMBOL
     overlaps the gene set. Returns {sample_id: variant_count}.
+
+    Some cohort de novo files have no header: a blank line, then the rows.
+    ``header_source`` (a family file of the same config) lends its header
+    when it has as many columns as the rows; otherwise ``MissingHeaderError``
+    is raised, rather than counting every sample as 0.
     """
+    blanks, first = _first_lines(tsv_path)
+    if first is None:
+        return {}
+    read_kwargs: Dict[str, Any] = {"skip_rows": blanks}
+    if not first.startswith("#CHROM"):
+        width = len(first.split("\t"))
+        borrowed: List[str] = []
+        if header_source is not None:
+            with open(header_source, "r") as f:
+                borrowed = f.readline().rstrip("\n").split("\t")
+        if len(borrowed) != width or borrowed[0] != "#CHROM":
+            raise MissingHeaderError(
+                f"{tsv_path.name} has no header line"
+                + (
+                    f", and {header_source.name} has {len(borrowed)} columns "
+                    f"against its {width}"
+                    if header_source is not None
+                    else ""
+                )
+            )
+        read_kwargs.update(has_header=False, new_columns=borrowed)
+
     df = read_tsv_or_none(
         tsv_path,
         infer_schema_length=0,
         null_values=[".", ""],
+        **read_kwargs,
     )
     if df is None:
         return {}
@@ -148,10 +192,14 @@ def count_aberrations_per_sample(bed_path: Path) -> Dict[str, int]:
 _count_cache: Dict[Tuple[str, str, float, int], Dict[str, int]] = {}
 
 
-def cohort_sample_counts(path: Path, kind: CountKind) -> Dict[str, int]:
+def cohort_sample_counts(
+    path: Path, kind: CountKind, header_source: Optional[Path] = None
+) -> Dict[str, int]:
     """Per-sample counts of a cohort file, cached on its (path, mtime, size).
 
-    Blocking: call it through ``run.io_bound`` from a page.
+    ``header_source`` is a family Wombat file of the same config, for a cohort
+    file written without a header. Its families share the columns, so the
+    cache key leaves it out. Blocking: call it through ``run.io_bound``.
     """
     stat = path.stat()
     key = (str(path), kind, stat.st_mtime, stat.st_size)
@@ -159,7 +207,7 @@ def cohort_sample_counts(path: Path, kind: CountKind) -> Dict[str, int]:
     if cached is not None:
         return cached
     if kind == "wombat":
-        counts = count_variants_per_sample(path)
+        counts = count_variants_per_sample(path, header_source=header_source)
     else:
         counts = count_aberrations_per_sample(path)
     _count_cache[key] = counts

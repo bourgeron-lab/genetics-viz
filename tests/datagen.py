@@ -665,3 +665,22 @@ def build_wombat_results(data: Path) -> None:
         ["gene"],
         [("ARONLY",), ("PLAIN",)],
     )
+
+
+def build_headerless_cohort_wombat(data: Path) -> Path:
+    """DEMO's "strict" cohort table as several real cohorts' de novo tables are.
+
+    The older ".annotated." name, and no header: a blank line, then the rows.
+    Not in the default data: the Search page cannot read it yet.
+    """
+    path = (
+        data
+        / "cohorts"
+        / "DEMO"
+        / "wombat"
+        / "DEMO.rare.vep1.annotated.strict.results.tsv"
+    )
+    path.write_text(
+        "\n" + "".join("\t".join(map(str, r)) + "\n" for r in WOMBAT_ROWS[:2])
+    )
+    return path

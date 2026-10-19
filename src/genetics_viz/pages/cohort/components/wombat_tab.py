@@ -1566,6 +1566,7 @@ def render_wombat_tab(
                                                     "wombat",
                                                     store.cohorts.get(cohort_name),
                                                     list(selected_members["value"]),
+                                                    header_source=wf["file_path"],
                                                 )
 
                                             # Toggle ideogram/charts view
