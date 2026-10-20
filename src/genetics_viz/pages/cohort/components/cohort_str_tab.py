@@ -18,14 +18,22 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.export import (
+    export_filename,
+    frame_to_tsv,
+    people_from_individuals,
+)
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.str_eh import (
+    FLAGGED,
     add_locus_badges,
     CohortContext,
     cohort_flagged_rows,
     cohort_locus_rows,
     find_eh_labels,
+    genotypes_export,
     get_cohort_eh_dir,
     load_cohort_context,
     locus_distribution,
@@ -100,6 +108,30 @@ def render_cohort_str_tab(
             ui.label("ExpansionHunter").classes("text-lg font-semibold text-blue-700")
             if len(labels) == 1:
                 ui.label(f"catalog {labels[0]}").classes("text-xs text-gray-500")
+            ui.space()
+
+            def export() -> str:
+                context: Optional[CohortContext] = state["context"]
+                if context is None or context.genotypes is None:
+                    return ""
+                people = people_from_individuals(filtered_state.get("individuals", []))
+                return frame_to_tsv(
+                    genotypes_export(context.genotypes, people, statuses=FLAGGED)
+                )
+
+            download_button(
+                [
+                    Download(
+                        "flagged",
+                        "Flagged genotypes of the individuals shown",
+                        lambda: export_filename(
+                            cohort.name, "str", "flagged", tag=state["label"]
+                        ),
+                        export,
+                    )
+                ],
+                mark="download-str",
+            )
 
         if len(labels) > 1:
 

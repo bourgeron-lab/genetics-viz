@@ -21,7 +21,9 @@ from genetics_viz.components.filters import (
     create_geneset_filter_menu,
     create_validation_filter_menu,
 )
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.export import export_filename, is_export_column, rows_to_tsv
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
 from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
@@ -1696,6 +1698,32 @@ def render_wombat_tab(
                                     icon="bar_chart",
                                     on_click=show_stats_dialog,
                                 ).props("outline color=blue size=sm")
+
+                                def export(data=data, cfg=cfg) -> str:
+                                    """The rows as filtered and sorted, columns shown."""
+                                    table = data.get("_dt")
+                                    if table is None:
+                                        return ""
+                                    columns = [
+                                        c
+                                        for c in data["selected_cols"]["value"]
+                                        if is_export_column(c)
+                                    ]
+                                    return rows_to_tsv(table.rows, columns)
+
+                                download_button(
+                                    [
+                                        Download(
+                                            "variants",
+                                            "The variants shown, with the columns shown",
+                                            lambda cfg=cfg: export_filename(
+                                                family_id, "wombat", cfg
+                                            ),
+                                            export,
+                                        )
+                                    ],
+                                    mark="download-wombat",
+                                )
 
                             def _refresh_table_data() -> None:
                                 """Reload validation + diagnostic data for all rows and refresh table."""

@@ -10,7 +10,8 @@ exercise the traps found so far:
   per-family pedigrees are headerless, as the pipeline writes them;
 - a cohort directory without a pedigree and one whose pedigree is unreadable;
 - a sharded ``families/`` tree;
-- two filter-tag variants of one bundle, ``dp6gq15`` and ``dp10gq20``;
+- two filter-tag variants of one bundle, ``dp6gq15`` and ``dp10gq20``, each
+  with admixture proportions (``Q.tsv``);
 - a trio whose child has elevated ROH and whose parents are related, so the
   role-dependent ROH wording has something to hide;
 - ExpansionHunter tables with a child's expansion above both parents, an AR
@@ -192,6 +193,11 @@ def build_family_results(
             ["IID", *TRAITS],
             [[m[1], 0.5, "nan"] for m in members],
         )
+        write_tsv(
+            Path(f"{prefix}.Q.tsv"),
+            ["IID", "snp_coverage", *REGIONS],
+            [[m[1], 0.99, 0.8, 0.2] for m in members],
+        )
 
     rprefix = fdir / "roh" / f"{fid}.apgs_b{BUNDLE}_{TAGS[0]}"
     children = {m[1] for m in members if m[2] not in ("0", "-9", "")}
@@ -258,6 +264,11 @@ def build_cohort_results(
             Path(f"{prefix}.pgs_zscore.tsv"),
             ["IID", *TRAITS, "family_id"],
             [[m[1], 0.1 * i, "nan", m[0]] for i, m in enumerate(pedigree)],
+        )
+        write_tsv(
+            Path(f"{prefix}.Q.tsv"),
+            ["IID", "snp_coverage", *REGIONS, "family_id"],
+            [[m[1], 0.99, 0.8, 0.2, m[0]] for m in pedigree],
         )
     rprefix = cohort_dir / "roh" / f"{name}.apgs_b{BUNDLE}_{TAGS[0]}"
     children = {m[1] for m in pedigree if m[2] not in ("0", "-9", "")}
@@ -538,6 +549,15 @@ def build_data_dir(root: Path) -> Path:
         if fid != "1002":
             str_rows += build_str_results(data, fid, members)
     build_cohort_str_results(demo, "DEMO", str_rows)
+    # The family's own WisecondorX calls, for its SVs tab.
+    write_tsv(
+        family_dir(data, "1001")
+        / "svs"
+        / "wisecondorx"
+        / "1001_aberrations.annotated.bed",
+        WCX_COLUMNS,
+        [r for r in WCX_ROWS if r[-1] == "1001"],
+    )
     build_cohort_qc_results(
         demo,
         "DEMO",

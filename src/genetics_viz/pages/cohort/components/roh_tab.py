@@ -22,7 +22,14 @@ from typing import Any, Callable, Dict, List, Optional
 import polars as pl
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.export import (
+    export_filename,
+    frame_to_tsv,
+    people_from_family,
+    rows_to_tsv,
+)
 from genetics_viz.utils.gene_scoring import build_gene_badges, get_gene_scorer
 from genetics_viz.utils.ancestry import Variant, get_region_color
 from genetics_viz.utils.auth import can_write
@@ -34,10 +41,12 @@ from genetics_viz.utils.roh import (
     class_color,
     find_roh_files,
     flag_badges,
+    froh_export,
     get_reference_roh_dir,
     get_roh_dir,
     grade_badge,
     grade_for,
+    kinship_export,
     kinship_rows,
     load_reference_froh,
     load_reference_hotspots,
@@ -49,6 +58,7 @@ from genetics_viz.utils.roh import (
     quantile,
     read_roh_table,
     reference_values,
+    segments_export,
     to_float,
 )
 from genetics_viz.utils.roh_plots import (
@@ -466,6 +476,82 @@ def _render_kinship(
 
 
 # ---------------------------------------------------------------------------
+# Downloads
+# ---------------------------------------------------------------------------
+
+
+def _download_menu(
+    store: Any,
+    family_id: str,
+    cohort_name: str,
+    selected_members: Dict[str, List[str]],
+    state: Dict[str, Any],
+    controls: Dict[str, Any],
+    show_relationship: bool,
+) -> None:
+    """Summary, segments, genes in ROH and kinship of the selected members."""
+
+    def members() -> List[str]:
+        return list(selected_members["value"])
+
+    def build_summary() -> str:
+        froh: pl.DataFrame = state["tables"]["froh"]
+        people = {
+            p["IID"]: p
+            for p in people_from_family(store, cohort_name, family_id, members())
+        }
+        paired = [
+            (r, people[r["IID"]]) for r in froh.to_dicts() if r.get("IID") in people
+        ]
+        rows, columns = froh_export(paired, show_relationship)
+        return rows_to_tsv(rows, columns)
+
+    def build_segments() -> str:
+        frame = segments_export(state["tables"].get("roh"), family_id, members())
+        return frame_to_tsv(frame) if frame is not None else ""
+
+    def build_genes() -> str:
+        genes = state["tables"].get("roh_genes")
+        if (
+            genes is not None
+            and controls["hide_hotspot_genes"]
+            and "gene_hotspot_fraction" in genes.columns
+        ):
+            genes = genes.filter(
+                pl.col("gene_hotspot_fraction").fill_null(0.0) <= _HOTSPOT_GENE_CUTOFF
+            )
+        frame = segments_export(genes, family_id, members())
+        return frame_to_tsv(frame) if frame is not None else ""
+
+    def build_kinship() -> str:
+        rows, columns = kinship_export(
+            state["tables"].get("kinship"),
+            state["tables"]["froh"],
+            members(),
+            show_relationship,
+        )
+        return rows_to_tsv(rows, columns)
+
+    def filename(table: Optional[str], ext: str = "tsv") -> Any:
+        return lambda: export_filename(
+            family_id, "roh", table, tag=state["files"].file_tag, ext=ext
+        )
+
+    download_button(
+        [
+            Download(
+                "summary", "Summary (F_ROH, grade)", filename("summary"), build_summary
+            ),
+            Download("segments", "ROH segments", filename("segments"), build_segments),
+            Download("genes", "Genes in ROH", filename("genes"), build_genes),
+            Download("kinship", "Kinship", filename("kinship"), build_kinship),
+        ],
+        mark="download-roh",
+        zip_filename=filename(None, "zip"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tab
 # ---------------------------------------------------------------------------
 
@@ -526,9 +612,19 @@ def render_roh_tab(
         ui.label("No individuals in the ROH table").classes("text-gray-500 italic")
         return
 
-    with ui.row().classes("items-center gap-2 mb-2"):
+    with ui.row().classes("items-center gap-2 mb-2 w-full"):
         ui.label("Runs of homozygosity").classes("text-lg font-semibold text-blue-700")
         provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
+        ui.space()
+        _download_menu(
+            store,
+            family_id,
+            cohort_name,
+            selected_members,
+            state,
+            controls,
+            show_relationship,
+        )
 
     if len(files.all_variants) > 1:
 

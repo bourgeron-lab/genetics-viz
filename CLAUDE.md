@@ -57,6 +57,7 @@ src/genetics_viz/
     sv_cn_panel.py                # SV dialog: copy-number panel (sample ÷ control panel)
     sv_read_panel.py              # SV dialog: samplot-like read-evidence panel
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
+    download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
     diagnostic_dialog.py          # Diagnostic review dialog
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
@@ -121,6 +122,8 @@ src/genetics_viz/
     str_validation.py             # validations/strs.tsv writer (role-guarded) and reader
     sample_qc.py                  # sampleqc (somalier) discovery, reading, flag wording, shaping
     sample_qc_acks.py             # validations/sampleqc.tsv: curator flag acknowledgements (role-guarded)
+    sample_qc_export.py           # Sample QC exports: flags (with acks), samples, pairs; role-worded
+    export.py                     # TSV/zip helpers, export filenames, person columns (FID, IID, sex, phenotype)
     sample_qc_plots.py            # ECharts builders for the Sample QC views
     validation_files.py           # The validation kinds (SNV/SV/STR) and their files
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR) and their files
@@ -205,7 +208,7 @@ Config files (YAML) are loaded once at module level.
 - All functions in `utils/sharding.py`. Never construct `samples/{id}` or `families/{id}` paths manually.
 
 ### Ancestry / Polygenic Scores
-- Per-family results live in `<family>/ancestry/`, named `<family_id>.apgs_b<bundle>_<filters>.<kind>.tsv` (kinds: `pcs`, `ancestry`, `pgs_zscore`). The bundle version contains dots, so discovery regexes need a lazy `(.+?)` capture, not `([^.]+)`.
+- Per-family results live in `<family>/ancestry/`, named `<family_id>.apgs_b<bundle>_<filters>.<kind>.tsv` (kinds: `pcs`, `ancestry`, `pgs_zscore`, and `Q`, the admixture proportions: `IID`, `snp_coverage`, one column per reference component; only the export reads `Q`). The bundle version contains dots, so discovery regexes need a lazy `(.+?)` capture, not `([^.]+)`.
 - The PCs are projections onto a **versioned** reference panel, so the panel a family is plotted against is the one named in its own filename tag. Config supplies only the root (`ancestry_reference_dir`); the `v<bundle>/bundle/labels/reference_pcs.tsv.gz` path below it is derived per family. Never read the reference root from the `.qc.json` files — they record the compute-cluster path.
 - A missing reference panel is a degraded state, not an error: the Ancestry tab still plots the family's own samples.
 - `utils/ancestry.py` holds discovery, probes, the cached reference panel, region colours, and the shared `NULL_VALUES` — the PGS z-score file writes the literal string `nan`, which must be nulled or polars types the column as a string and sorting breaks.
@@ -359,6 +362,15 @@ The Wombat and WisecondorX Stats dialogs chart each selected member's count in t
 - **Founders and non-founders are compared within their own group** (`Sample.is_founder`), with every pedigree sample zero-filled. A de novo config has rows only for children, and pooling them with the parents' zeros would flag any child with two calls.
 - An outlier is outside Q1-Q3 by more than 1.5 × IQR (`OUTLIER_IQR_FACTOR`) and on the far side of the median.
 - Counts load off-thread and are cached on `(path, mtime, size)`. The comparison sits outside the dialog's refreshable section, so the SNV/Indel toggle does not recount.
+
+### Tab Downloads (TSV exports)
+Every cohort right-hand tab but Statistics, and every family tab, has a `Download` button (`components/download_button.py`, marked `download-<tab>`; menu entries `download-<tab>-<key>`, zip `download-<tab>-zip`).
+- **Scope is what is shown**: the cohort table's filtered individuals plus the tab's own selectors (PGS regions, ROH reference groups, bundle/tag, catalog), or the family's selected members. Columns are all of them, not just the plotted one.
+- **Built from explicit column lists, never by dumping row dicts.** Badge columns hold `""`, and the row dicts carry fields readers must not see. The builders sit next to their data (`ancestry_export`/`pgs_export`, `froh_export`/`kinship_export`/`segments_export`, `genotypes_export`, `sample_qc_export`) and serve both levels, so a family file and a cohort file of one kind have the same columns.
+- **Role-aware, as the tabs**: readers get `reader_label`, the neutral ROH grade, no evidence, no observed relationship, no `froh_category`/parents' kinship, an "Atypical" karyotype, declared pairs only, and an ack note only for `reader_note` categories.
+- Per-sample files start `FID, IID, sex, phenotype` (pedigree codes via `export.person`); the PGS export is samples × traits at both levels, not the family table's transpose. ROH percentiles are headed `_vs_ref_group`: they are against the reference group, not the cohort.
+- Builders run in `asyncio.to_thread` at click time: resolve `can_write()` at render and close over it. Content reaches `ui.download` as **bytes** — the test `UserDownload` fetches a `str` as a URL. A header-only result shows "Nothing to download".
+- Wombat and SV exports are the table's current `DataTable.rows` (filtered and sorted in Python) with the shown columns, through `is_export_column`, as the Search page's Download TSV.
 
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.

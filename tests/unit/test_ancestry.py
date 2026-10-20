@@ -28,7 +28,8 @@ from genetics_viz.utils.ancestry import (
         ("F10.apgs_b1.0.0_dp10gq20.pcs.tsv", None),  # another family's prefix
         ("F1.apgs_b1.0.0_dp10gq20.pcs.tsv.gz", None),
         ("F1.apgs_b1.0.0.pcs.tsv", None),  # no filter tag
-        ("F1.apgs_b1.0.0_dp10gq20.Q.tsv", None),  # kind not read
+        ("F1.apgs_b1.0.0_dp10gq20.Q.tsv", ("1.0.0", "dp10gq20", "Q")),
+        ("F1.apgs_b1.0.0_dp10gq20.pgs_raw.tsv", None),  # kind not read
     ],
 )
 def test_filename_pattern(name, expected):

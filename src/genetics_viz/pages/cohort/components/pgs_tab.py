@@ -10,8 +10,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
+    pgs_export,
     ID_COLUMNS,
     NULL_VALUES,
     Variant,
@@ -20,6 +22,7 @@ from genetics_viz.utils.ancestry import (
     get_pgs_zscore_thresholds,
     probe_pgs_data,
 )
+from genetics_viz.utils.export import export_filename, frame_to_tsv, people_from_family
 from genetics_viz.utils.tsv import read_tsv_or_none
 
 logger = logging.getLogger(__name__)
@@ -112,11 +115,33 @@ def render_pgs_tab(
 
     thresholds = get_pgs_zscore_thresholds()
 
-    with ui.row().classes("items-center gap-2 mb-2"):
+    with ui.row().classes("items-center gap-2 mb-2 w-full"):
         count_label = ui.label(f"{len(state['scores'])} polygenic scores").classes(
             "text-lg font-semibold text-blue-700"
         )
         provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
+        ui.space()
+        # One row per member, as the cohort export: the table's transpose.
+        download_button(
+            [
+                Download(
+                    "pgs",
+                    "Every z-score of the selected members",
+                    lambda: export_filename(
+                        family_id, "pgs", tag=state["files"].file_tag
+                    ),
+                    lambda: frame_to_tsv(
+                        pgs_export(
+                            state["files"],
+                            people_from_family(
+                                store, cohort_name, family_id, selected_members["value"]
+                            ),
+                        )
+                    ),
+                )
+            ],
+            mark="download-pgs",
+        )
 
     if len(files.all_variants) > 1:
 

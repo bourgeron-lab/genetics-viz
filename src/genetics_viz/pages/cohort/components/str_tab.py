@@ -23,6 +23,7 @@ from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
     load_diagnostic_map,
 )
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
@@ -31,6 +32,7 @@ from genetics_viz.components.validation_loader import (
 from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.data import get_static_prefix
 from genetics_viz.utils.diagnostic_files import diagnostic_path
+from genetics_viz.utils.export import export_filename, frame_to_tsv, people_from_family
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.str_eh import (
@@ -45,6 +47,7 @@ from genetics_viz.utils.str_eh import (
     family_locus_rows,
     family_members,
     find_eh_labels,
+    genotypes_export,
     get_family_eh_dir,
     load_cohort_context,
     locus_distribution,
@@ -227,6 +230,46 @@ def render_eh_subtab(
                 content.refresh(),
             ),
         ).props("dense")
+
+        def export() -> str:
+            fam: pl.DataFrame = state["fam"]
+            members: List[Member] = state["members"]
+            selected = [
+                m.sample for m in members if m.sample in selected_members["value"]
+            ]
+            if fam is None or not selected:
+                return ""
+            validations = _validation_statuses(store.data_dir, family_id, fam)
+            diagnostics = _diagnostic_statuses(store.data_dir, family_id, fam)
+            loci = None
+            if state["hide_normal"]:
+                rows = family_locus_rows(fam, members, selected)
+                loci = {r["locus"] for r in rows if r["worst_rank"] >= 1}
+            people = people_from_family(store, cohort_name, family_id, selected)
+            return frame_to_tsv(
+                genotypes_export(
+                    fam,
+                    people,
+                    loci=loci,
+                    context=state["context"],
+                    validations=validations,
+                    diagnostics=diagnostics,
+                )
+            )
+
+        download_button(
+            [
+                Download(
+                    "genotypes",
+                    "Genotypes of the selected members, one row per locus and member",
+                    lambda: export_filename(
+                        family_id, "str", "genotypes", tag=state["label"]
+                    ),
+                    export,
+                )
+            ],
+            mark="download-str",
+        )
 
     @ui.refreshable
     def content() -> None:

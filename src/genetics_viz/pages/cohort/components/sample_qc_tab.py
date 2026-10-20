@@ -29,8 +29,10 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.auth import can_write, get_current_user
+from genetics_viz.utils.export import export_filename, people_from_family, rows_to_tsv
 from genetics_viz.utils.roh import to_float
 from genetics_viz.utils.sample_qc import (
     HUB_MINIMUM,
@@ -73,6 +75,11 @@ from genetics_viz.utils.sample_qc_acks import (
     ack_status_info,
     split_acknowledged,
     withdraw_flag_ack,
+)
+from genetics_viz.utils.sample_qc_export import (
+    flags_export,
+    pairs_export,
+    samples_export,
 )
 from genetics_viz.utils.sample_qc_plots import (
     kinship_matrix_option,
@@ -744,6 +751,100 @@ def _render_quality(
 
 
 # ---------------------------------------------------------------------------
+# Downloads
+# ---------------------------------------------------------------------------
+
+
+def _download_menu(
+    store: Any,
+    family_id: str,
+    cohort_name: str,
+    selected_members: Dict[str, List[str]],
+    state: Dict[str, Any],
+    show_detail: bool,
+) -> None:
+    """Flags, samples and pairs of the selected members, apart or zipped.
+
+    Cohort-level flags and cross-family pairs are in once the cohort's tables
+    are read, as on the tab.
+    """
+
+    def members() -> Set[str]:
+        return set(selected_members["value"])
+
+    def flags() -> List[FlagRow]:
+        shown = members()
+        return [
+            f
+            for f in family_flags_with_cohort(
+                state["qc"], state["cohort_qc"], family_id
+            )
+            if any(s in shown for s in f.samples)
+        ]
+
+    def build_flags() -> str:
+        rows, columns = flags_export(flags(), load_acks(store.data_dir), show_detail)
+        return rows_to_tsv(rows, columns)
+
+    def build_samples() -> str:
+        people = {
+            (p["FID"], p["IID"]): p
+            for p in people_from_family(store, cohort_name, family_id, members())
+        }
+        rows, columns = samples_export(
+            state["qc"].sample_rows(),
+            people,
+            flags(),
+            load_acks(store.data_dir),
+            show_detail,
+        )
+        return rows_to_tsv(rows, columns)
+
+    def build_pairs() -> str:
+        shown = members()
+        pairs = [
+            r
+            for r in state["qc"].pair_rows()
+            if r.get("sample_a") in shown and r.get("sample_b") in shown
+        ]
+        cohort_qc: Optional[QcData] = state["cohort_qc"]
+        if cohort_qc is not None:
+            for r in cohort_qc.pair_rows():
+                fa = r.get("family_id_a") or ""
+                fb = r.get("family_id_b") or fa
+                if fa != fb and (
+                    (fa == family_id and r.get("sample_a") in shown)
+                    or (fb == family_id and r.get("sample_b") in shown)
+                ):
+                    pairs.append(r)
+        rows, columns = pairs_export(
+            pairs,
+            flags(),
+            load_acks(store.data_dir),
+            show_detail,
+            first_family=family_id,
+        )
+        return rows_to_tsv(rows, columns)
+
+    def filename(table: Optional[str], ext: str = "tsv") -> Callable[[], str]:
+        return lambda: export_filename(
+            family_id, "sampleqc", table, tag=state["qc"].label, ext=ext
+        )
+
+    download_button(
+        [
+            Download("flags", "Flags", filename("flags"), build_flags),
+            Download(
+                "samples", "Sex and sample quality", filename("samples"), build_samples
+            ),
+            Download("pairs", "Pairs (relatedness)", filename("pairs"), build_pairs),
+        ],
+        mark="download-sampleqc",
+        zip_filename=filename(None, "zip"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tab
 # ---------------------------------------------------------------------------
 
@@ -812,6 +913,9 @@ def render_sample_qc_tab(
             "dense"
         ).tooltip("Flags a curator reviewed and acknowledged, greyed").mark(
             "qc-show-acked"
+        )
+        _download_menu(
+            store, family_id, cohort_name, selected_members, state, show_detail
         )
 
     if len(family_qc.labels) > 1:

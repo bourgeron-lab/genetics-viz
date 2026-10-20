@@ -16,7 +16,9 @@ from genetics_viz.components.sample_counts import (
     render_sample_count_bars,
 )
 from genetics_viz.components.sv_dialog import show_sv_dialog
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.utils.export import export_filename, is_export_column, rows_to_tsv
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -423,6 +425,9 @@ def render_wisecondorx_subtab(
 
             @ui.refreshable
             def render_data_table():
+                # The table the Download button reads, set below the toolbar.
+                table_ref: Dict[str, Any] = {"dt": None}
+
                 # Filter rows by selected members if 'sample' column exists
                 if "sample" in df.columns:
                     rows = [
@@ -773,6 +778,28 @@ def render_wisecondorx_subtab(
                         on_click=show_stats_dialog,
                     ).props("outline color=blue size=sm")
 
+                    def export() -> str:
+                        """The calls as filtered and sorted, columns shown."""
+                        table = table_ref.get("dt")
+                        if table is None:
+                            return ""
+                        columns = [
+                            c for c in selected_cols["value"] if is_export_column(c)
+                        ]
+                        return rows_to_tsv(table.rows, columns)
+
+                    download_button(
+                        [
+                            Download(
+                                "calls",
+                                "The calls shown, with the columns shown",
+                                lambda: export_filename(family_id, "wisecondorx"),
+                                export,
+                            )
+                        ],
+                        mark="download-svs",
+                    )
+
                 def _on_save_refresh():
                     """Refresh callback for validation/diagnostic saves."""
                     reload_validations()
@@ -869,7 +896,7 @@ def render_wisecondorx_subtab(
                             )
 
                 with ui.card().classes("w-full"):
-                    DataTable(
+                    table_ref["dt"] = DataTable(
                         columns=make_columns(selected_cols["value"]),
                         rows=rows,
                         pagination={"rowsPerPage": 10},

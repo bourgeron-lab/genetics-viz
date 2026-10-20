@@ -23,9 +23,15 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.data import get_static_prefix
+from genetics_viz.utils.export import (
+    export_filename,
+    people_from_individuals,
+    rows_to_tsv,
+)
 from genetics_viz.utils.roh import to_float
 from genetics_viz.utils.sample_qc import (
     HUB_MINIMUM,
@@ -57,6 +63,11 @@ from genetics_viz.utils.sample_qc_acks import (
     acknowledged_badges,
     load_acks,
     split_acknowledged,
+)
+from genetics_viz.utils.sample_qc_export import (
+    flags_export,
+    pairs_export,
+    samples_export,
 )
 from genetics_viz.utils.sample_qc_plots import (
     cross_family_graph_option,
@@ -401,6 +412,82 @@ def _render_plots(
 
 
 # ---------------------------------------------------------------------------
+# Downloads
+# ---------------------------------------------------------------------------
+
+
+def _download_menu(
+    store: Any,
+    cohort: Any,
+    state: Dict[str, Any],
+    filtered_state: Dict[str, Any],
+    show_detail: bool,
+) -> None:
+    """Flags, samples and pairs of the shown individuals, apart or zipped."""
+
+    def keys() -> Set[Key]:
+        return _keys(filtered_state)
+
+    def flags() -> List[FlagRow]:
+        qc: Optional[QcData] = state["qc"]
+        if qc is None:
+            return []
+        shown = keys()
+        return [f for f in qc.flags if any(k in shown for k in f.keys)]
+
+    def build_flags() -> str:
+        rows, columns = flags_export(flags(), load_acks(store.data_dir), show_detail)
+        return rows_to_tsv(rows, columns)
+
+    def build_samples() -> str:
+        qc: Optional[QcData] = state["qc"]
+        if qc is None:
+            return ""
+        people = {
+            (p["FID"], p["IID"]): p
+            for p in people_from_individuals(filtered_state.get("individuals", []))
+        }
+        rows, columns = samples_export(
+            qc.sample_rows(), people, flags(), load_acks(store.data_dir), show_detail
+        )
+        return rows_to_tsv(rows, columns)
+
+    def build_pairs() -> str:
+        qc: Optional[QcData] = state["qc"]
+        if qc is None:
+            return ""
+        shown = keys()
+        pairs = [
+            r
+            for r in qc.pair_rows()
+            if (r.get("family_id_a") or "", r.get("sample_a")) in shown
+            or (r.get("family_id_b") or r.get("family_id_a") or "", r.get("sample_b"))
+            in shown
+        ]
+        rows, columns = pairs_export(
+            pairs, flags(), load_acks(store.data_dir), show_detail
+        )
+        return rows_to_tsv(rows, columns)
+
+    def filename(table: Optional[str], ext: str = "tsv") -> Callable[[], str]:
+        return lambda: export_filename(
+            cohort.name, "sampleqc", table, tag=state["label"], ext=ext
+        )
+
+    download_button(
+        [
+            Download("flags", "Flags", filename("flags"), build_flags),
+            Download(
+                "samples", "Sex and sample quality", filename("samples"), build_samples
+            ),
+            Download("pairs", "Pairs (relatedness)", filename("pairs"), build_pairs),
+        ],
+        mark="download-sampleqc",
+        zip_filename=filename(None, "zip"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tab
 # ---------------------------------------------------------------------------
 
@@ -465,6 +552,7 @@ def render_cohort_sample_qc_tab(
             ).props("dense").classes("text-xs").tooltip(
                 "Count the flags a curator reviewed and acknowledged"
             ).mark("cohort-qc-include-acked")
+            _download_menu(store, cohort, state, filtered_state, show_detail)
             report = cohort_report_url(cohort, labels[0], get_static_prefix())
             if report:
                 ui.link("somalier report ↗", report, new_tab=True).classes(

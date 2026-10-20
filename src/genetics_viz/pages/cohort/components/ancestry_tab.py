@@ -13,8 +13,10 @@ from typing import Any, Callable, Dict, List, Optional
 import polars as pl
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
+    ancestry_export,
     ID_COLUMNS,
     NULL_VALUES,
     AncestryFiles,
@@ -33,6 +35,7 @@ from genetics_viz.utils.ancestry_plots import (
     tooltip_formatter,
     zoom_window,
 )
+from genetics_viz.utils.export import export_filename, frame_to_tsv, people_from_family
 from genetics_viz.utils.tsv import read_tsv_or_none
 
 logger = logging.getLogger(__name__)
@@ -290,8 +293,29 @@ def render_ancestry_tab(
         return
 
     # Provenance line, with a selector when several variants are present.
-    with ui.row().classes("items-center gap-2 mb-2"):
+    with ui.row().classes("items-center gap-2 mb-2 w-full"):
         provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
+        ui.space()
+        download_button(
+            [
+                Download(
+                    "ancestry",
+                    "PCs, regions and admixture of the selected members",
+                    lambda: export_filename(
+                        family_id, "ancestry", tag=state["files"].file_tag
+                    ),
+                    lambda: frame_to_tsv(
+                        ancestry_export(
+                            state["files"],
+                            people_from_family(
+                                store, cohort_name, family_id, selected_members["value"]
+                            ),
+                        )
+                    ),
+                )
+            ],
+            mark="download-ancestry",
+        )
 
     if len(files.all_variants) > 1:
 
