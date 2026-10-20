@@ -13,6 +13,7 @@ from .str_eh import status_info
 _THRESHOLDS = (
     ("normal_max", "normal ≤", "normal"),
     ("intermediate_min", "intermediate ≥", "intermediate"),
+    ("premutation_min", "premutation ≥", "premutation"),
     ("pathogenic_min", "pathogenic ≥", "pathogenic"),
 )
 
@@ -33,11 +34,14 @@ def allele_class(count: float, thresholds: Dict[str, Any]) -> str:
     """Class of a repeat count, in the pipeline's order (eh_family_table)."""
     normal = _num(thresholds.get("normal_max"))
     inter = _num(thresholds.get("intermediate_min"))
+    premut = _num(thresholds.get("premutation_min"))
     patho = _num(thresholds.get("pathogenic_min"))
-    if normal is None and inter is None and patho is None:
+    if normal is None and inter is None and premut is None and patho is None:
         return "unclassified"
     if patho is not None and count >= patho:
         return "pathogenic"
+    if premut is not None and count >= premut:
+        return "premutation"
     if inter is not None and count >= inter:
         return "intermediate"
     if normal is None or count <= normal:
@@ -56,7 +60,7 @@ def distribution_option(
     Args:
         counts: repeat count -> number of founders (``locus_distribution``).
         thresholds: a row holding ``normal_max``, ``intermediate_min``,
-            ``pathogenic_min``.
+            ``premutation_min``, ``pathogenic_min``.
         members: ``(label, alleles, status)`` for each member to mark.
         title: chart title.
 

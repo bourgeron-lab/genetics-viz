@@ -55,6 +55,7 @@ from genetics_viz.utils.sample_qc import (
     load_family_qc,
     mendelian_fence,
     pair_rows,
+    pair_severities,
     probe_cohort_qc_data,
     probe_qc_data,
     relationship_info,
@@ -82,6 +83,8 @@ from genetics_viz.utils.sample_qc_export import (
     samples_export,
 )
 from genetics_viz.utils.sample_qc_plots import (
+    PairSeverities,
+    charr_lines,
     kinship_matrix_option,
     metric_strip_option,
     relatedness_scatter_option,
@@ -380,6 +383,7 @@ def _render_relationships(
     cross: List[PairRow],
     show_detail: bool,
     relative_links: Optional[Dict[Tuple[str, str], int]] = None,
+    severities: Optional[PairSeverities] = None,
 ) -> None:
     within = [p for p in pairs if p.sample_a in members and p.sample_b in members]
     if not within and not cross:
@@ -412,12 +416,23 @@ def _render_relationships(
                     within + cross,
                     title="KING kinship against IBS0/IBS2",
                     show_detail=show_detail,
+                    severities=severities,
                 )
             ).classes("min-w-0 h-80").style("flex: 1")
 
     rows = []
     for p in within + cross:
         status = status_info(p.status)
+        # A mismatch whose flags are information only (twins, consanguinity,
+        # a relative the missing parents allow, a cross-family third degree).
+        info_only = (
+            p.status == "mismatch" and (severities or {}).get(p.flag_key) == "info"
+        )
+        if info_only:
+            status = {
+                "label": f"{status['label']} (info)",
+                "color": severity_info("info")["color"],
+            }
         rows.append(
             {
                 "key": p.key,
@@ -434,7 +449,9 @@ def _render_relationships(
                 "po_rate": p.po_rate,
                 "status": status["label"],
                 "status_color": status["color"],
-                "mismatch_rank": 1 if p.status == "mismatch" else 0,
+                "mismatch_rank": (
+                    (0.5 if info_only else 1) if p.status == "mismatch" else 0
+                ),
                 "relative_links": (
                     (relative_links or {}).get((p.family_b, p.sample_b))
                     if p.cross_family
@@ -505,8 +522,8 @@ def _render_relationships(
     )
     if hubs:
         note += (
-            " A relative linked to many families is a hub: contamination or"
-            " population structure is likelier than kinship with each of them."
+            " A relative linked to many families is a hub: shared ancestry or"
+            " admixture is likelier than kinship with each of them."
         )
     if hidden:
         note += f" {hidden} pair(s) not declared related in the pedigree are not shown."
@@ -656,6 +673,7 @@ def _render_quality(
                 "sites": to_float(r.get("n_sites_called")),
                 "het_hom": to_float(r.get("het_hom_alt_ratio")),
                 "charr": to_float(r.get("contamination_charr")),
+                "somalier_charr": to_float(r.get("somalier_charr")),
                 "middling": to_float(r.get("p_middling_ab")),
                 "trio_sites": to_float(r.get("trio_informative_sites")),
                 "mendel": to_float(r.get("trio_mendelian_error_rate")),
@@ -671,6 +689,7 @@ def _render_quality(
                 {"id": "sites", "header": "Sites called", **_NUM},
                 {"id": "het_hom", "header": "Het / hom alt", **_NUM},
                 {"id": "charr", "header": "CHARR", **_NUM},
+                {"id": "somalier_charr", "header": "somalier CHARR", **_NUM},
                 {"id": "middling", "header": "Middling AB", **_NUM},
                 {"id": "trio_sites", "header": "Trio sites", **_NUM},
                 {"id": "mendel", "header": "Mendelian error rate", **_NUM},
@@ -682,12 +701,12 @@ def _render_quality(
         )
 
     others = [r for r in cohort_rows if (r.get("sample") or "") not in member_set]
-    charr_max = THRESHOLDS.get("charr_max", 0.05)
+    charr_warn = THRESHOLDS.get("charr_warn", 0.02)
     charr_points = [
         {
             "name": t["sample"],
             "value": t["charr"],
-            "flagged": (t["charr"] or 0) > charr_max,
+            "flagged": (t["charr"] or 0) >= charr_warn,
         }
         for t in table
         if t["charr"] is not None
@@ -716,7 +735,7 @@ def _render_quality(
                     ],
                     title="Contamination (CHARR)",
                     axis_name="CHARR",
-                    lines=[(charr_max, f"flag > {charr_max:g}", "#c62828")],
+                    lines=charr_lines(),
                 )
             ).classes("min-w-0 h-56").style("flex: 1")
             if mendel_points:
@@ -742,8 +761,10 @@ def _render_quality(
                     )
                 ).classes("min-w-0 h-56").style("flex: 1")
     ui.label(
-        "CHARR: somalier's contamination estimate from reference reads at"
-        " homozygous-alternate sites. Mendelian error rate: impossible child"
+        "CHARR: the estimated fraction of reads from another person (Lu et al."
+        " 2023), from the reads at homozygous-looking sites; clean genomes sit"
+        " well below 0.01. somalier's own estimate reads several times higher and"
+        " mostly tracks low depth; it is kept for reference. Mendelian error rate: impossible child"
         " genotypes given the parents', in the family VCF (GQ ≥ 20, DP ≥ 10). The"
         " pipeline does not flag a high rate by itself; the line marks the cohort's"
         " outliers. Grey: the rest of the cohort."
@@ -1055,7 +1076,12 @@ def render_sample_qc_tab(
             else {}
         )
         _render_relationships(
-            pair_rows(qc.pairs), qc_members, cross, show_detail, links
+            pair_rows(qc.pairs),
+            qc_members,
+            cross,
+            show_detail,
+            links,
+            pair_severities(family_flags_with_cohort(qc, cohort_qc, family_id)),
         )
 
         cohort_rows = cohort_qc.sample_rows() if cohort_qc is not None else []

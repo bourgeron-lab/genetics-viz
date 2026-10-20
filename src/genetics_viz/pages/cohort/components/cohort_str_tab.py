@@ -2,9 +2,10 @@
 
 ExpansionHunter only, for now. Follows the filters of the individuals table:
 
-1. per locus, how many of the shown individuals are pathogenic, carrier or
-   intermediate, beside the founders' 99.9th percentile and maximum - those
-   come from ``loci.tsv`` and describe the whole cohort, not the filter;
+1. per locus, how many of the shown individuals are flagged (severity high or
+   medium) and reach each status, beside the founders' 99.9th percentile and
+   maximum - those come from ``loci.tsv`` and describe the whole cohort, not
+   the filter;
 2. the shown individuals' flagged genotypes, linked to their family.
 
 A locus row opens the founders' distribution with the flagged individuals
@@ -27,7 +28,6 @@ from genetics_viz.utils.export import (
 )
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.str_eh import (
-    FLAGGED,
     add_locus_badges,
     CohortContext,
     cohort_flagged_rows,
@@ -116,7 +116,7 @@ def render_cohort_str_tab(
                     return ""
                 people = people_from_individuals(filtered_state.get("individuals", []))
                 return frame_to_tsv(
-                    genotypes_export(context.genotypes, people, statuses=FLAGGED)
+                    genotypes_export(context.genotypes, people, flagged_only=True)
                 )
 
             download_button(
@@ -183,6 +183,7 @@ def render_cohort_str_tab(
                 if locus:
                     _show_locus_dialog(context, locus, flagged)
 
+            has_severity = "severity" in context.genotypes.columns
             ui.label("Loci").classes("text-base font-semibold text-blue-700 mt-2")
             with _table_box():
                 DataTable(
@@ -205,7 +206,16 @@ def render_cohort_str_tab(
                             "cellType": "gene_badge",
                             "badgesField": "LocusBadges",
                         },
+                        *(
+                            [
+                                {"id": "n_high", "header": "High", **num},
+                                {"id": "n_medium", "header": "Med.", **num},
+                            ]
+                            if has_severity
+                            else [{"id": "n_flagged", "header": "Flagged", **num}]
+                        ),
                         {"id": "n_pathogenic", "header": "Path.", **num},
+                        {"id": "n_premutation", "header": "Prem.", **num},
                         {"id": "n_carrier", "header": "Carr.", **num},
                         {"id": "n_intermediate", "header": "Int.", **num},
                         {"id": "founders_p999", "header": "p99.9", **num},
@@ -223,8 +233,11 @@ def render_cohort_str_tab(
                     on_row_action=on_locus,
                 )
             ui.label(
-                "Counts: the individuals shown. p99.9 and max: the founders' longest"
-                " allele, whole cohort. common: 5% or more of the cohort flagged."
+                "Counts: the individuals shown. High and Med.: the flagged severities;"
+                " a pathogenic or premutation call of low confidence counts one rank"
+                " lower, carriers, intermediates and risk alleles are info. p99.9 and"
+                " max: the founders' longest allele, whole cohort. common: 5% or more"
+                " of the cohort flagged."
             ).classes("text-xs text-gray-500")
 
             ui.label("Flagged genotypes").classes(
@@ -260,6 +273,13 @@ def render_cohort_str_tab(
                             "badgesField": "LocusBadges",
                         },
                         {
+                            "id": "severity",
+                            "header": "Severity",
+                            "cellType": "badge_list",
+                            "sortField": "severity_rank",
+                            **num,
+                        },
+                        {
                             "id": "status",
                             "header": "Status",
                             "cellType": "badge_list",
@@ -278,7 +298,7 @@ def render_cohort_str_tab(
                     rows=flagged,
                     row_key="id",
                     pagination={"rowsPerPage": 10},
-                    initial_sorting=[{"id": "status", "desc": True}],
+                    initial_sorting=[{"id": "severity", "desc": True}],
                 )
 
         render_body()

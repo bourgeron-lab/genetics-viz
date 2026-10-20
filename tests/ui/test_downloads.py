@@ -57,13 +57,19 @@ async def test_cohort_tabs_download_what_they_show(user):
     open_tab(user, "cohort-panel-tabs", "STR")
     await user.should_see("flagged genotypes", retries=30)
     columns, rows = _rows(await _download(user, "download-str"))
-    assert {(r["IID"], r["locus"]) for r in rows} == {("S3", "HTT"), ("S2", "FXN")}
+    assert {(r["IID"], r["locus"]) for r in rows} == {
+        ("S3", "HTT"),
+        ("S2", "FMR1"),
+        ("S6", "ARX_2"),
+    }
 
     open_tab(user, "cohort-panel-tabs", "Sample QC")
     await user.should_see("5 of 6 shown individuals checked", retries=30)
     columns, rows = _rows(await _download(user, "download-sampleqc", "flags"))
     assert "evidence" in columns and "ack_status" in columns
-    cross = next(r for r in rows if r["code"] == "CRYPTIC_RELATED")
+    cross = next(
+        r for r in rows if r["code"] == "CRYPTIC_RELATED" and r["sample_a"] == "S2"
+    )
     assert cross["ack_note"] == "Known first cousins: their mothers are sisters"
     archive = zipfile.ZipFile(
         io.BytesIO(await _download(user, "download-sampleqc", "zip"))
@@ -136,10 +142,13 @@ async def test_family_tabs_download_what_they_show(user):
     assert "evidence" not in columns
     assert {r["code"] for r in rows} == {
         "NOT_PARENT",
+        "CONSANGUINITY",
         "POSSIBLE_CONTAMINATION",
         "CRYPTIC_RELATED",
     }
-    cross = next(r for r in rows if r["code"] == "CRYPTIC_RELATED")
+    cross = next(
+        r for r in rows if r["code"] == "CRYPTIC_RELATED" and r["sample_a"] == "S2"
+    )
     assert cross["ack_status"] == "explained" and cross["ack_note"] == "(hidden)"
 
 

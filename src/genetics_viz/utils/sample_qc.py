@@ -24,7 +24,17 @@ flag, severity and relationship class; the app only words and draws them
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Collection, Dict, Iterable, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    Collection,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+)
 
 import polars as pl
 import yaml
@@ -47,8 +57,8 @@ SAMPLE_COLUMNS = [
     "family_id", "sample", "father", "mother", "pedigree_sex", "inferred_sex",
     "karyotype", "sex_evidence", "x_copies", "y_copies", "somalier_x_copies",
     "somalier_y_copies", "x_het_rate", "x_sites", "depth_mean", "n_sites_called",
-    "het_hom_alt_ratio", "contamination_charr", "p_middling_ab",
-    "trio_informative_sites", "trio_mendelian_error_rate", "flags",
+    "het_hom_alt_ratio", "contamination_charr", "charr_sites", "somalier_charr",
+    "p_middling_ab", "trio_informative_sites", "trio_mendelian_error_rate", "flags",
 ]  # fmt: skip
 PAIR_COLUMNS = [
     "family_id_a", "sample_a", "family_id_b", "sample_b", "n_sites", "ibs0",
@@ -658,6 +668,31 @@ class PairRow:
     def declared(self) -> bool:
         """The pedigree declares the two related (or they are the same family)."""
         return (self.expected or "unrelated") != "unrelated"
+
+    @property
+    def flag_key(self) -> FrozenSet[Tuple[str, str]]:
+        """The pair as :func:`pair_severities` keys it."""
+        return frozenset(
+            {(self.family_a, self.sample_a), (self.family_b, self.sample_b)}
+        )
+
+
+def pair_severities(flags: Iterable[FlagRow]) -> Dict[FrozenSet[Tuple[str, str]], str]:
+    """The worst severity of the flags naming each pair, keyed as
+    :attr:`PairRow.flag_key`.
+
+    The pipeline marks a pair ``mismatch`` whatever its flag's severity, so a
+    pair of MZ twins, of consanguineous parents or of third-degree relatives
+    across families is one; the severity tells them from a contradiction.
+    """
+    out: Dict[FrozenSet[Tuple[str, str]], FlagRow] = {}
+    for f in flags:
+        if not f.sample_b:
+            continue
+        key = frozenset(f.keys)
+        if key not in out or f.rank > out[key].rank:
+            out[key] = f
+    return {k: severity_info(f.severity)["key"] for k, f in out.items()}
 
 
 def pair_rows(df: Optional[pl.DataFrame]) -> List[PairRow]:

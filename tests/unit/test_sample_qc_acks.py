@@ -40,6 +40,7 @@ def test_last_row_wins_and_withdrawn_removes(data_dir):
     assert set(standing) == {
         ("SEX_MISMATCH", "AU-X-1", "S6", ""),
         ("CRYPTIC_RELATED", "1001,AU-X-1", "S2", "S5"),
+        ("CONSANGUINITY", "1001", "S1", "S2"),
     }
     cross = standing[("CRYPTIC_RELATED", "1001,AU-X-1", "S2", "S5")]
     assert cross.status == "explained" and cross.label == "Explained"
@@ -110,7 +111,11 @@ def test_cache_picks_up_an_append(tmp_path, curator):
 def test_split_keeps_the_order(data_dir):
     flags = qc.load_cohort_qc(Cohort(data_dir)).flags
     active, acked = acks.split_acknowledged(flags, acks.load_acks(data_dir))
-    assert [f.code for f in acked] == ["SEX_MISMATCH", "CRYPTIC_RELATED"]
+    assert [f.code for f in acked] == [
+        "SEX_MISMATCH",
+        "CRYPTIC_RELATED",
+        "CONSANGUINITY",
+    ]
     assert active == [f for f in flags if f not in acked]
     assert acks.active_flags(flags, {}) == flags
 
@@ -140,6 +145,7 @@ def test_acknowledged_badges_are_grey(data_dir):
     assert [b["label"] for b in badges] == [
         "Sex inconsistent with pedigree",
         "Related to another family",
+        "Pedigree relationship inconsistent",
     ]
     assert {b["color"] for b in badges} == {acks.muted_color()}
     assert all("Acknowledged — Explained" in b["tooltip"] for b in badges)
@@ -147,6 +153,7 @@ def test_acknowledged_badges_are_grey(data_dir):
     assert acks.acknowledged_titles(flags, standing, False) == [
         "Sex inconsistent with pedigree — explained",
         "Related to another family — explained",
+        "Pedigree relationship inconsistent — explained",
     ]
 
 

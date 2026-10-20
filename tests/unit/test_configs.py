@@ -57,11 +57,18 @@ def test_str_statuses_cover_the_pipeline_vocabulary():
     statuses = cfg["statuses"]
     # eh_family_table's classes and statuses, plus "." (no thresholds row)
     assert set(statuses) == {
-        "pathogenic", "carrier", "intermediate", "above_normal", "normal", "unclassified"
+        "pathogenic", "premutation", "carrier", "intermediate", "above_normal",
+        "normal", "unclassified",
     }  # fmt: skip
     assert all(HEX.match(v["color"]) for v in statuses.values())
     ranks = [v["rank"] for v in statuses.values()]
     assert len(set(ranks)) == len(ranks)
+    # eh_family_table's severities, most severe first
+    severities = cfg["severities"]
+    assert list(severities) == ["high", "medium", "info"]
+    assert [v["rank"] for v in severities.values()] == [3, 2, 1]
+    assert all(HEX.match(v["color"]) for v in severities.values())
+    assert cfg["low_confidence"]["code"]
     assert set(cfg["support"]) == {"SPANNING", "FLANKING", "INREPEAT"}
     assert 0 < cfg["common_in_cohort_fraction"] < 1
     assert {"{sample}", "{label}", "{locus}"} <= set(
@@ -79,7 +86,10 @@ def test_sample_qc_vocabulary_covers_the_pipeline():
         "HALF_SIB_NOT_FULL", "FULL_SIB_NOT_HALF", "UNEXPECTED_RELATED_IN_FAMILY",
         "EXPECTED_RELATED_UNRELATED", "RELATIONSHIP_MISMATCH",
         "MENDELIAN_INCONSISTENT", "CRYPTIC_RELATED", "SAMPLE_SWAP_CANDIDATE",
+        "RELATED_BEYOND_PEDIGREE", "CONSANGUINITY", "MZ_TWIN_CANDIDATE",
+        "UPD_CANDIDATE", "RELATEDNESS_UNRELIABLE",
     }  # fmt: skip
+    assert {"charr_warn", "charr_high"} <= set(cfg["thresholds"])
     categories = set(cfg["categories"])
     assert {f["category"] for f in cfg["flags"].values()} <= categories
     assert cfg["karyotype_flag"]["category"] in categories

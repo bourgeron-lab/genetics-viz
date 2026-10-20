@@ -82,8 +82,8 @@ def flags_export(
 _SAMPLE_METRICS = [
     "x_copies", "y_copies", "somalier_x_copies", "somalier_y_copies",
     "x_het_rate", "x_sites", "depth_mean", "n_sites_called", "het_hom_alt_ratio",
-    "contamination_charr", "p_middling_ab", "trio_informative_sites",
-    "trio_mendelian_error_rate",
+    "contamination_charr", "charr_sites", "somalier_charr", "p_middling_ab",
+    "trio_informative_sites", "trio_mendelian_error_rate",
 ]  # fmt: skip
 
 

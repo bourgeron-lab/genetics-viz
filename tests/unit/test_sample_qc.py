@@ -55,13 +55,18 @@ def test_family_tables(data_dir):
     data = qc.load_family_qc(data_dir, "1001")
     assert data.label == datagen.QC_LABEL
     assert [r["sample"] for r in data.sample_rows()] == ["S1", "S2", "S3"]
-    assert [f.code for f in data.flags] == ["NOT_PARENT", "POSSIBLE_CONTAMINATION"]
+    assert [f.code for f in data.flags] == [
+        "NOT_PARENT",
+        "POSSIBLE_CONTAMINATION",
+        "CONSANGUINITY",
+    ]
     not_parent = data.flags[0]
     assert not_parent.samples == ["S1", "S3"] and not not_parent.is_cross_family
     pairs = qc.pair_rows(data.pairs)
-    mismatch = next(p for p in pairs if p.status == "mismatch")
-    assert (mismatch.sample_a, mismatch.sample_b) == ("S1", "S3")
+    mismatch = next(p for p in pairs if p.sample_b == "S3" and p.status == "mismatch")
+    assert mismatch.sample_a == "S1"
     assert mismatch.declared and mismatch.po_rate == 0.03
+    assert {"charr_sites", "somalier_charr"} <= set(data.samples.columns)
 
 
 def test_flag_wording():
@@ -74,6 +79,16 @@ def test_flag_wording():
     assert (
         qc.flag_info("NOT_PARENT").reader_label == "Pedigree relationship inconsistent"
     )
+    # Readers are not told of consanguinity, nor of a relative the pedigree
+    # leaves out; UPD gets its own category.
+    for code in ("CONSANGUINITY", "RELATED_BEYOND_PEDIGREE"):
+        info = qc.flag_info(code)
+        assert info.category == "family_relatedness"
+        assert info.reader_label == "Pedigree relationship inconsistent"
+    assert qc.flag_info("MZ_TWIN_CANDIDATE").reader_label == "Possible identical twins"
+    upd = qc.flag_info("UPD_CANDIDATE")
+    assert upd.category == "upd" and upd.reader_label == "Uniparental disomy"
+    assert qc.flag_info("RELATEDNESS_UNRELIABLE").category == "cross_family"
 
 
 def test_reader_wording_hides_evidence():
@@ -99,6 +114,8 @@ def test_family_flags_gain_the_cohort_ones_once(data_dir):
     cohort = qc.load_cohort_qc(Cohort(data_dir))
     flags = qc.family_flags_with_cohort(family, cohort, "1001")
     assert sorted(f.code for f in flags) == [
+        "CONSANGUINITY",
+        "CRYPTIC_RELATED",
         "CRYPTIC_RELATED",
         "NOT_PARENT",
         "POSSIBLE_CONTAMINATION",
@@ -108,7 +125,8 @@ def test_family_flags_gain_the_cohort_ones_once(data_dir):
 
 def test_counts_restrict_to_and_by_individual(data_dir):
     cohort = qc.load_cohort_qc(Cohort(data_dir))
-    assert qc.count_by_severity(cohort.flags) == {"high": 4, "medium": 1, "info": 0}
+    # info: the parents' consanguinity, the third degree across families
+    assert qc.count_by_severity(cohort.flags) == {"high": 4, "medium": 1, "info": 2}
     only_au = {("AU-X-1", "S5"), ("AU-X-1", "S6")}
     assert qc.count_by_severity(cohort.flags, only_au)["high"] == 3
     # S1, S2, S3 (high via NOT_PARENT), S5, S6: S3's worst is high.
@@ -162,13 +180,37 @@ def test_mendelian_fence():
     assert qc.mendelian_fence(rows[:2]) is None
 
 
+def test_pair_severities_key_pairs_either_way(data_dir):
+    cohort = qc.load_cohort_qc(Cohort(data_dir))
+    severities = qc.pair_severities(cohort.flags)
+    pairs = {(p.sample_a, p.sample_b): p for p in qc.pair_rows(cohort.pairs)}
+    assert severities[pairs[("S1", "S3")].flag_key] == "high"
+    assert severities[pairs[("S1", "S2")].flag_key] == "info"
+    assert severities[pairs[("S2", "S5")].flag_key] == "high"
+    assert severities[pairs[("S1", "S5")].flag_key] == "info"
+    assert pairs[("S2", "S3")].flag_key not in severities  # unflagged
+
+
 def test_relatedness_scatter(data_dir):
-    pairs = qc.pair_rows(qc.load_family_qc(data_dir, "1001").pairs)
+    family = qc.load_family_qc(data_dir, "1001")
+    pairs = qc.pair_rows(family.pairs)
     curator = plots.relatedness_scatter_option(pairs, title="t", show_detail=True)
     names = [s["name"] for s in curator["series"]]
     assert "Parent–offspring" in names and "Mismatch" in names
     mismatch = next(s for s in curator["series"] if s["name"] == "Mismatch")
-    assert [d["name"] for d in mismatch["data"]] == ["S1 – S3"]
+    assert [d["name"] for d in mismatch["data"]] == ["S1 – S2", "S1 – S3"]
+    # With the flags' severities, the consanguineous parents are information.
+    graded = plots.relatedness_scatter_option(
+        pairs,
+        title="t",
+        show_detail=True,
+        severities=qc.pair_severities(family.flags),
+    )
+    by_name = {s["name"]: s for s in graded["series"]}
+    assert [d["name"] for d in by_name["Mismatch"]["data"]] == ["S1 – S3"]
+    info = by_name["Mismatch (information)"]
+    assert [d["name"] for d in info["data"]] == ["S1 – S2"]
+    assert "information" in info["data"][0]["tip"]
     lines = [
         m["name"]
         for s in curator["series"]
@@ -188,7 +230,7 @@ def test_kinship_matrix(data_dir):
     outlined = [
         d["value"][:2] for d in data if d["itemStyle"]["borderColor"] == "#c62828"
     ]
-    assert sorted(outlined) == [[0, 2], [2, 0]]
+    assert sorted(outlined) == [[0, 1], [0, 2], [1, 0], [2, 0]]
 
 
 def test_sex_and_quality_plots(data_dir):
@@ -208,9 +250,13 @@ def test_sex_and_quality_plots(data_dir):
         background=[0.02, 0.018],
         title="",
         axis_name="CHARR",
-        lines=[(0.05, "flag", "#c62828")],
+        lines=plots.charr_lines(),
     )
     assert strip["xAxis"]["max"] >= 0.071
+    assert [(v, label) for v, label, _ in plots.charr_lines()] == [
+        (0.02, "medium ≥ 0.02"),
+        (0.05, "high ≥ 0.05"),
+    ]
     json.dumps(option), json.dumps(strip)
 
 
@@ -227,3 +273,26 @@ def test_cross_family_graph_option_marks_hubs():
     hub = next(n for n in nodes if n["name"] == "a1")
     assert hub["label"]["show"] and hub["value"] == 5
     assert "third" not in json.dumps(option["series"][0]["links"])
+
+
+def test_cross_family_graph_dashes_information_edges():
+    pairs = [
+        qc.PairRow("A", "a1", "B", "b1", 0.05, 0.15, 1, 0, "unrelated",
+                   "third-degree", "mismatch", None),
+        qc.PairRow("A", "a1", "C", "c1", 0.12, 0.05, 1, 0, "unrelated",
+                   "second-degree", "mismatch", None),
+    ]  # fmt: skip
+    flags = [
+        qc.FlagRow("cohort", "A,B", "a1", "b1", "CRYPTIC_RELATED", "info", ""),
+        qc.FlagRow("cohort", "A,C", "a1", "c1", "CRYPTIC_RELATED", "high", ""),
+    ]
+    option = plots.cross_family_graph_option(
+        qc.cross_family_graph(pairs),
+        show_detail=True,
+        severities=qc.pair_severities(flags),
+    )
+    styles = {
+        link["target"]: link["lineStyle"]["type"]
+        for link in option["series"][0]["links"]
+    }
+    assert styles == {"B|b1": "dashed", "C|c1": "solid"}

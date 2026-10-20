@@ -37,7 +37,8 @@ from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.str_eh import (
     add_locus_badges,
-    FLAGGED,
+    LOW_CONFIDENCE,
+    SEVERITIES,
     STATUSES,
     SUPPORT,
     CohortContext,
@@ -47,8 +48,10 @@ from genetics_viz.utils.str_eh import (
     family_locus_rows,
     family_members,
     find_eh_labels,
+    flagged_expr,
     genotypes_export,
     get_family_eh_dir,
+    is_flagged,
     load_cohort_context,
     locus_distribution,
     locus_gene,
@@ -58,6 +61,7 @@ from genetics_viz.utils.str_eh import (
     read_eh_table,
     reviewer_path,
     reviewer_reviewed,
+    severity_info,
     status_info,
     thresholds_text,
 )
@@ -100,9 +104,7 @@ def render_str_tab(
         try:
             fam = read_eh_table(eh_path(eh_dir, family_id, labels[0], "genotypes"))
             n_flagged = (
-                0
-                if fam is None
-                else fam.filter(pl.col("status").is_in(FLAGGED))["locus"].n_unique()
+                0 if fam is None else fam.filter(flagged_expr(fam))["locus"].n_unique()
             )
         except Exception:
             logger.warning(
@@ -134,6 +136,13 @@ def render_str_tab(
 
 def _legend() -> None:
     with ui.row().classes("items-center gap-2 text-xs text-gray-600 mt-2 flex-wrap"):
+        ui.label("Severity:")
+        for key in SEVERITIES:
+            info = severity_info(key)
+            ui.label(info["label"]).classes("px-2 py-0.5 rounded text-white").style(
+                f"background-color: {info['color']}"
+            ).tooltip(info["help"])
+        ui.label("Class:")
         for key in STATUSES:
             info = status_info(key)
             ui.label(info["label"]).classes("px-2 py-0.5 rounded text-white").style(
@@ -142,10 +151,12 @@ def _legend() -> None:
         for support in SUPPORT.values():
             if support.get("code"):
                 ui.label(f"·{support['code']}: {support['help']}")
+        if LOW_CONFIDENCE.get("code"):
+            ui.label(f"{LOW_CONFIDENCE['code']}: {LOW_CONFIDENCE.get('help', '')}")
         ui.label(
             "Badges are the members' alleles in repeat units, coloured by class;"
             " hover one for its CI, reads and cohort percentile. ↑: longer than"
-            " both parents' alleles."
+            " both parents' alleles. Only high and medium severities are flagged."
         )
 
 
@@ -338,6 +349,8 @@ def render_eh_subtab(
              "maxWidth": 110},
             {"id": "thresholds", "header": "Thresholds", "group": "Locus",
              "sortable": False},
+            {"id": "severity", "header": "Severity", "cellType": "badge_list",
+             "sortField": "severity_rank", **num},
             {"id": "worst", "header": "Status", "cellType": "badge_list",
              "sortField": "worst_rank", **num},
         ]  # fmt: skip
@@ -403,7 +416,7 @@ def render_eh_subtab(
             pagination={"rowsPerPage": 60},
             on_row_action=on_row_action,
             on_filter=on_filter,
-            initial_sorting=[{"id": "worst", "desc": True}],
+            initial_sorting=[{"id": "severity", "desc": True}],
         )
         _legend()
 
@@ -502,7 +515,13 @@ def _render_validation(
         )
         return
 
-    worst = max(details, key=lambda r: status_info(r.get("status"))["rank"])
+    worst = max(
+        details,
+        key=lambda r: (
+            severity_info(r.get("severity"))["rank"],
+            status_info(r.get("status"))["rank"],
+        ),
+    )
     with ui.row().classes("items-end gap-3 w-full flex-wrap mt-2"):
         member = (
             ui.select(
@@ -634,12 +653,12 @@ def _render_diagnostics(
 def _no_reviewer_reason(store: Any, row: Dict[str, Any], label: str) -> str:
     """Why a member has no REViewer image at a locus.
 
-    The pipeline draws flagged genotypes only, so an unflagged member's
-    missing image is the expected case, not an anomaly.
+    The pipeline draws flagged genotypes only (severity high or medium), so
+    an unflagged member's missing image is the expected case, not an anomaly.
     """
     if not reviewer_reviewed(store.data_dir, row["sample"], label):
         return "REViewer not run yet"
-    if row.get("status") not in FLAGGED:
+    if not is_flagged(row):
         return "not flagged, not drawn"
     return "no REViewer image"
 
@@ -711,13 +730,17 @@ def show_eh_locus_dialog(
 
         columns = [
             {"name": "sample", "label": "Member", "field": "sample", "align": "left"},
+            {"name": "severity", "label": "Severity", "field": "severity", "align": "left"},
             {"name": "status", "label": "Status", "field": "status", "align": "left"},
             {"name": "genotype", "label": "Alleles", "field": "alleles", "align": "left"},
+            {"name": "confidence", "label": "Confidence", "field": "confidence",
+             "align": "left"},
             {"name": "ci", "label": "CI", "field": "ci", "align": "left"},
             {"name": "support", "label": "Support", "field": "support", "align": "left"},
             {"name": "reads", "label": "Spanning / flanking / in-repeat", "field": "reads",
              "align": "left"},
             {"name": "coverage", "label": "Coverage", "field": "coverage"},
+            {"name": "read_length", "label": "Read length", "field": "read_length"},
             {"name": "filter", "label": "Filter", "field": "filter"},
             {"name": "parents", "label": "Parents' max", "field": "parents"},
             {"name": "pct", "label": "Cohort pct", "field": "pct"},
@@ -726,6 +749,15 @@ def show_eh_locus_dialog(
         def pair(r: Dict[str, Any], suffix: str) -> str:
             values = [r.get(f"allele1{suffix}"), r.get(f"allele2{suffix}")]
             return " / ".join(str(v) for v in values if v is not None) or "–"
+
+        def confidence(r: Dict[str, Any]) -> str:
+            """Per allele; ``–`` for one within normal, which has none."""
+            values = [
+                r.get(f"allele{i}_confidence") or "–"
+                for i in (1, 2)
+                if r.get(f"allele{i}") is not None
+            ]
+            return "–" if set(values) <= {"–"} else " / ".join(values)
 
         def reads(r: Dict[str, Any]) -> str:
             parts = []
@@ -744,8 +776,10 @@ def show_eh_locus_dialog(
             rows=[
                 {
                     "sample": r["sample"],
+                    "severity": severity_info(r.get("severity"))["label"] or "–",
                     "status": status_info(r.get("status"))["label"],
                     "alleles": pair(r, ""),
+                    "confidence": confidence(r),
                     "ci": pair(r, "_ci"),
                     "support": pair(r, "_support"),
                     "reads": reads(r),
@@ -753,6 +787,9 @@ def show_eh_locus_dialog(
                         f"{r['locus_coverage']:.1f}x"
                         if r.get("locus_coverage") is not None
                         else "–"
+                    ),
+                    "read_length": (
+                        f"{r['read_length']} bp" if r.get("read_length") else "–"
                     ),
                     "filter": r.get("filter") or "–",
                     "parents": r.get("parents_max_allele") or "–",
