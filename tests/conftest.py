@@ -26,6 +26,7 @@ from genetics_viz.utils import (
     pipeline_params,
     roh,
     sample_counts,
+    sample_qc,
     user_preferences,
     str_eh,
     sharding,
@@ -47,6 +48,7 @@ def _reset_globals() -> None:
     str_eh.clear_eh_cache()
     cnv_coverage.clear_cnv_cache()
     sample_counts.clear_sample_count_cache()
+    sample_qc.clear_qc_cache()
     cohort_state.clear_state_cache()
     cohort_state.clear_sha_cache()
     pipeline_params.clear_params_cache()

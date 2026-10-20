@@ -21,7 +21,6 @@ assigns them, the app only draws them.
 """
 
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,7 +29,7 @@ import polars as pl
 import yaml
 
 from .sharding import get_family_path, get_sample_path
-from .tsv import read_tsv_or_none
+from .tsv import find_labels, read_tsv_or_none
 from .diagnostic_badges import STATUS_CFG as DIAGNOSTIC_CFG
 from .gene_scoring import gene_badge
 from .validation_badges import STATUS_CFG
@@ -139,22 +138,9 @@ def eh_path(directory: Path, prefix: str, label: str, kind: str) -> Path:
 def find_eh_labels(directory: Path, prefix: str) -> List[str]:
     """Catalog labels with a genotype table in ``directory``, newest first.
 
-    The label is the part between the prefix and ``.genotypes.tsv``; a lazy
-    capture would cut a dotted label short, so the whole middle is taken.
+    The label is the part between the prefix and ``.genotypes.tsv``.
     """
-    if not directory.is_dir():
-        return []
-    pattern = re.compile(rf"^{re.escape(prefix)}\.(.+)\.genotypes\.tsv$")
-    found: List[Tuple[float, str]] = []
-    try:
-        for entry in directory.iterdir():
-            m = pattern.match(entry.name)
-            if m:
-                found.append((entry.stat().st_mtime, m.group(1)))
-    except OSError:
-        logger.warning("Cannot list %s", directory, exc_info=True)
-        return []
-    return [label for _, label in sorted(found, key=lambda t: (-t[0], t[1]))]
+    return find_labels(directory, prefix, "genotypes")
 
 
 def probe_eh_data(data_dir: Path, family_id: str) -> bool:

@@ -1,8 +1,10 @@
 """Family member selection table - shared by the cohort and standalone family pages."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
+
+from genetics_viz.utils.sample_qc import FlagRow, flag_title, severity_info
 
 # A single CSS grid holds the header and every data cell as direct children, so
 # all columns resolve against one shared set of tracks. Applying the grid style
@@ -39,6 +41,8 @@ def render_member_selector(
     members_data: List[Dict[str, Any]],
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
+    qc_flags: Optional[Dict[str, List[FlagRow]]] = None,
+    show_qc_detail: bool = False,
 ) -> None:
     """Render the family pedigree table with per-member display checkboxes.
 
@@ -49,6 +53,8 @@ def render_member_selector(
     :param members_data: member dicts as returned by ``Cohort.get_family_members``
     :param selected_members: mutable ``{"value": [sample_id, ...]}`` selection state
     :param data_table_refreshers: refresh callbacks to run on every selection change
+    :param qc_flags: sample QC flags by sample ID; a flagged member gets a
+        warning icon beside its ID, worded for the role (``show_qc_detail``)
     """
     member_checkboxes: Dict[str, ui.checkbox] = {}
 
@@ -129,8 +135,29 @@ def render_member_selector(
                         ui.button("only", on_click=make_only_handler(sample_id)).props(
                             "size=xs flat dense color=blue"
                         ).classes("text-xs")
-                    ui.label(sample_id).classes(f"{cell} font-medium")
+                    flags = (qc_flags or {}).get(sample_id)
+                    if flags:
+                        _sample_cell_with_qc(sample_id, flags, cell, show_qc_detail)
+                    else:
+                        ui.label(sample_id).classes(f"{cell} font-medium")
                     for field in _PEDIGREE_FIELDS:
                         ui.label(member.get(field, "-")).classes(
                             f"{cell} text-gray-600"
                         )
+
+
+def _sample_cell_with_qc(
+    sample_id: str, flags: List[FlagRow], cell: str, show_detail: bool
+) -> None:
+    """The Sample ID cell with a warning icon listing the member's QC flags."""
+    worst = max(flags, key=lambda f: f.rank)
+    titles = list(dict.fromkeys(flag_title(f, show_detail) for f in flags))
+    with (
+        ui.element("div")
+        .classes(f"{cell} font-medium")
+        .style("display: flex; align-items: center; gap: 0.25rem")
+    ):
+        ui.label(sample_id)
+        ui.icon("warning", size="xs").style(
+            f"color: {severity_info(worst.severity)['color']}"
+        ).tooltip("Sample QC: " + "; ".join(titles))

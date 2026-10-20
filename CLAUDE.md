@@ -63,6 +63,7 @@ src/genetics_viz/
     genetrek.yaml                 # GeneTrek refresh period, tier colours, default profile
     inheritance.yaml              # MOI flag: GeneTrek mode strings -> codes, verdict colours, PAR
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
+    sample_qc.yaml                # Sample QC flag wording (curator/reader), categories, plot lines
     str.yaml                      # STR class/status colours, support codes, REViewer filename
     clinvar_colors.yaml           # ClinVar significance term -> color
     cnv.yaml                      # CN mask/display, single-vs-split read view, read-evidence caps/colours
@@ -92,6 +93,8 @@ src/genetics_viz/
         str_tab.py                # STR tab (per-family): EH sub-tab + locus dialog
         cohort_roh_tab.py         # Runs of homozygosity sub-tab + islands dialog (cohort-wide)
         cohort_str_tab.py         # STR sub-tab (cohort-wide): loci counts + flagged genotypes
+        sample_qc_tab.py          # Sample QC tab (per-family): issues, kinship, sex, quality
+        cohort_sample_qc_tab.py   # Sample QC sub-tab (cohort-wide) + cross-family network dialog
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
         status_panel.py           # Pipeline run status (Workflow tab + home card)
@@ -116,6 +119,8 @@ src/genetics_viz/
     str_eh.py                     # ExpansionHunter discovery, reading, cohort cache, locus pivot
     str_plots.py                  # ECharts builders for the STR views
     str_validation.py             # validations/strs.tsv writer (role-guarded) and reader
+    sample_qc.py                  # sampleqc (somalier) discovery, reading, flag wording, shaping
+    sample_qc_plots.py            # ECharts builders for the Sample QC views
     validation_files.py           # The validation kinds (SNV/SV/STR) and their files
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR) and their files
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
@@ -141,7 +146,7 @@ src/genetics_viz/
     vep.py                        # VEP consequence utilities (from YAML)
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
     sharding.py                   # Two-level sharded directory path resolution
-    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field
+    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels
     wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
     sample_counts.py              # Cohort Wombat/WisecondorX files, per-sample counts, outlier flags
     view_presets.py               # View preset loading with reload support
@@ -241,6 +246,16 @@ Config files (YAML) are loaded once at module level.
   - The older `str/reviewer/` directory comes from a separate STRchive run with other locus IDs, and is deliberately not shown.
   - Images are shown with `loading="lazy"`, because each one runs to a megabyte.
 
+### Sample QC (somalier)
+- The ghfc-ngs `sampleqc` step writes `<family>/qc/<FID>.<label>.{samples,pairs,flags,inputs}.tsv` and `cohorts/<NAME>/qc/<NAME>.<label>.{samples,pairs,flags,inputs}.tsv` plus `.html` (somalier's relate report, linked from the cohort tab). `<label>` is `sampleqc_label` (`somalier_hg38`): the STR naming, so discovery is `tsv.find_labels(dir, prefix, "samples")`. The contract is `modules/sampleqc/scripts/sampleqc_classify` in ghfc-ngs.
+- **Read through `read_qc_table`.** `.` is null; IDs are forced to strings. A stub run writes cut-down headers, so missing columns are added as nulls.
+- **The family files never hold cross-family findings.** The cohort tables are the family ones plus the cross-family pairs *observed related* (unrelated cross-family pairs are not written) and their `level: cohort` flags (`CRYPTIC_RELATED`, `DUPLICATE_OR_MZ`, `SAMPLE_SWAP_CANDIDATE`). The family tab reads the cohort tables off-thread for them; `family_flags_with_cohort` adds only the `cohort`-level rows, since the cohort file repeats the family flags.
+- **A cohort pair flag's `family_id` is `"FA,FB"`**: `sample_a` is in FA, `sample_b` in FB. Key samples by `FlagRow.keys` (`(family_id, sample)`), never by sample alone.
+- **The pipeline classifies everything** (relationships, karyotypes, flags, severities); the app only words and draws them from `config/sample_qc.yaml`. `KARYOTYPE_<k>` is matched by prefix; an unknown code is shown raw. The plot lines mirror the `sampleqc_classify` constants, and the KING cut-offs come from `roh.yaml`'s `kinship_degrees`.
+- **Wording is role-dependent, as for ROH**: viewers get `reader_label`, no evidence, an "Atypical" karyotype, and only pedigree-declared pairs (no parents' pair, no cross-family pairs in the tables). Presentation only.
+- **Hubs**: a sample with `HUB_MINIMUM` (5) or more cross-family relatives is outlined in the network. One EAGER founder is "third-degree" to 37 samples of other families; that is contamination or population structure, not kinship.
+- Elsewhere: the family header badge and member icons (family files only, read at page build), the cohort table's `Sample QC` column and filter, the home card's QC figure (off-thread, individuals by worst severity), and a warning above Wombat configs matching `de_?novo` when `denovo_risk` flags hit the family.
+
 ### CNV Coverage and SV Read Evidence
 - The ghfc-ngs `cnv_coverage` step writes `samples/.../<ID>/coverage/<ID>.cov_b<bin>q<mapq>.{bw,json}`: every bin holds `2 × depth / autosomal median` (about 2 on a normal autosome). The `cnv_panel` step of a controls cohort writes a versioned, self-contained `cohorts/<controls>/cnv_panel/v<version>/` (per-bin median and unscaled MAD for `autosomes`, `XX`, `XY`, plus `panel.json` with PARs and expected ploidy). A cohort fitted against it gets `cohorts/<NAME>/coverage/<NAME>.<tag>.panel_v<version>.fit.tsv`. The contract is documented in ghfc-ngs `documentation/params.md`.
 - **The division happens here, at view time**: CN = expected ploidy × sample / panel median, PAR-aware, in `utils/cnv_coverage.py`. Per-sample files never depend on a panel, so a new panel version rewrites nothing.
@@ -292,6 +307,7 @@ The page has two levels of tabs, and they are separate mechanisms.
 
 - **Page-level, full width**: `General` (the individuals table plus the right-hand panels that follow its filters) and `Workflow`. `Workflow` is *created only when the cohort has a params file* — absent, not disabled — and its own lazy loader is the only `async` one, because it warms the run-record and document caches off-thread before rendering.
 - **Right-hand panel, inside `General`**: `Statistics` / `Ancestry` / `Polygenic Scores` / `ROH` / `STR`, nested inside the General tab panel. Anything describing the pipeline run belongs on `Workflow` instead: it is a property of the cohort, not of the current filter, and does not fit a 400px column.
+- The right-hand panel also has `Sample QC`.
 - Both levels use the same lazy pattern — a `{"loaded": False}` dict, a `@ui.refreshable` body with `_loading(...)`, and `ui.timer(0.1, load, once=True)` on tab change. The inner level keys `tab_state` and `lazy_tabs` by the exact tab label and `tab_state[e.args]` is an unguarded lookup, so a label must be added to both dicts or removed from both.
 - `render_status_panel(cohort, title=None)` suppresses the panel's own heading, because the Workflow tab's expansion header already carries the title, status chip and step summary.
 

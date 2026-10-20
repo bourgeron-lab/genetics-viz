@@ -1,10 +1,14 @@
 """Tab-separated file reading helpers."""
 
 import gzip
+import logging
+import re
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, List, Optional, Tuple
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 
 def clean_tsv_field(text: str) -> str:
@@ -65,3 +69,26 @@ def read_tsv_or_none(
         return pl.read_csv(path, **kwargs)
     except pl.exceptions.NoDataError:
         return None
+
+
+def find_labels(directory: Path, prefix: str, kind: str) -> List[str]:
+    """Labels of the ``<prefix>.<label>.<kind>.tsv`` files in ``directory``.
+
+    Newest first, then by name. The label is the whole middle of the name: a
+    lazy capture would cut a dotted label short. Used where the pipeline names
+    a step's files by a free label (an STR catalog, a sample QC sites file)
+    rather than by a bundle version and filter tag.
+    """
+    if not directory.is_dir():
+        return []
+    pattern = re.compile(rf"^{re.escape(prefix)}\.(.+)\.{re.escape(kind)}\.tsv$")
+    found: List[Tuple[float, str]] = []
+    try:
+        for entry in directory.iterdir():
+            m = pattern.match(entry.name)
+            if m:
+                found.append((entry.stat().st_mtime, m.group(1)))
+    except OSError:
+        logger.warning("Cannot list %s", directory, exc_info=True)
+        return []
+    return [label for _, label in sorted(found, key=lambda t: (-t[0], t[1]))]

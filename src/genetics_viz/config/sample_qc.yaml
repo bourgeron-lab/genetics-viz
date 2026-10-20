@@ -1,0 +1,231 @@
+# Sample QC (ghfc-ngs `sampleqc` step): wording, colours and plot lines.
+#
+# The pipeline assigns every flag, severity and relationship class
+# (modules/sampleqc/scripts/sampleqc_classify); the app only words and draws
+# them, and never re-classifies.
+#
+# Wording is role-dependent, as for ROH (config/roh.yaml): a NOT_PARENT or an
+# unexpected relatedness between the parents is a non-paternity or
+# consanguinity reading. Viewers get `reader_label` and the severity only;
+# curators get `label`, `explain` and the evidence string. The data directory
+# is served statically without an auth check, so this is presentation only.
+
+categories:
+  # Display order, most actionable first.
+  family_relatedness:
+    label: "Relationship in family"
+    color: "#6a1b9a"
+  cross_family:
+    label: "Across families"
+    color: "#ad1457"
+  sex:
+    label: "Sex"
+    color: "#1565c0"
+  karyotype:
+    label: "Sex chromosomes"
+    color: "#00838f"
+  mendelian:
+    label: "Mendelian"
+    color: "#4e342e"
+  sample_quality:
+    label: "Sample quality"
+    color: "#546e7a"
+
+severities:
+  # Highest rank first.
+  high:
+    label: "High"
+    color: "#c62828"
+    rank: 3
+  medium:
+    label: "Medium"
+    color: "#ef6c00"
+    rank: 2
+  info:
+    label: "Info"
+    color: "#757575"
+    rank: 1
+
+flags:
+  SAMPLE_UNRELATED_TO_FAMILY:
+    category: family_relatedness
+    label: "Unrelated to its family"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: >-
+      Related to none of the members it should be close to. Likely a sample
+      swap or a sample from another family: check the cross-family relatives.
+  NOT_PARENT:
+    category: family_relatedness
+    label: "Not the declared parent"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: >-
+      The pair is not parent-offspring as the pedigree declares. A sample swap,
+      a pedigree error or non-paternity: inherited and de novo calls for this
+      trio are unreliable.
+  HALF_SIB_NOT_FULL:
+    category: family_relatedness
+    label: "Half sibs, declared full"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: >-
+      Second-degree relatedness where the pedigree declares full siblings: the
+      two do not share both parents.
+  FULL_SIB_NOT_HALF:
+    category: family_relatedness
+    label: "Full sibs, declared half"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: "First-degree relatedness where the pedigree declares half siblings."
+  UNEXPECTED_RELATED_IN_FAMILY:
+    category: family_relatedness
+    label: "Related, declared unrelated"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: >-
+      Two members the pedigree leaves unrelated are related. Between the
+      parents this is a consanguinity reading; between founders, undeclared
+      siblings.
+  EXPECTED_RELATED_UNRELATED:
+    category: family_relatedness
+    label: "Unrelated, declared related"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: >-
+      Two members declared related share no more than unrelated people do: a
+      sample swap or a pedigree error.
+  RELATIONSHIP_MISMATCH:
+    category: family_relatedness
+    label: "Other relationship"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: "Observed relatedness of another degree than the pedigree declares."
+  DUPLICATE_OR_MZ:
+    category: family_relatedness
+    label: "Duplicate or MZ twin"
+    reader_label: "Duplicate sample"
+    explain: >-
+      Genetically identical. Either monozygotic twins, or the same person
+      sequenced twice (under two IDs, or one sample loaded twice).
+  CRYPTIC_RELATED:
+    category: cross_family
+    label: "Related across families"
+    reader_label: "Related to another family"
+    explain: >-
+      Related to a member of another family. One sample related to many
+      families at third degree is more likely contamination or population
+      structure than many real relatives.
+  SAMPLE_SWAP_CANDIDATE:
+    category: cross_family
+    label: "Sample swap candidate"
+    reader_label: "Possible sample swap"
+    explain: >-
+      Unrelated to its own family, but closely related to someone in another
+      family: the sample probably belongs there.
+  SEX_MISMATCH:
+    category: sex
+    label: "Sex mismatch"
+    reader_label: "Sex inconsistent with pedigree"
+    explain: >-
+      The sex inferred from the X and Y copy numbers differs from the
+      pedigree: a sample swap or a pedigree entry error.
+  SEX_AMBIGUOUS:
+    category: sex
+    label: "Ambiguous sex"
+    reader_label: "Sex chromosomes unclear"
+    explain: >-
+      The X or Y copy number is not close to a whole number: mosaicism, or a
+      coverage artefact. Look at the copy-number view of chrX and chrY.
+  SEX_UNKNOWN_IN_PED:
+    category: sex
+    label: "Sex missing in pedigree"
+    reader_label: "Sex missing in pedigree"
+    explain: "The pedigree gives no sex: the inferred one could be filled in."
+  X_HET_INCONSISTENT:
+    category: karyotype
+    label: "chrX heterozygosity"
+    reader_label: "Sex chromosomes unclear"
+    explain: >-
+      chrX heterozygosity does not fit the number of X: heterozygous sites
+      with one X, or almost none with two. Contamination or an X copy-number
+      artefact.
+  LOW_INFORMATIVE_SITES:
+    category: sample_quality
+    label: "Few sites called"
+    reader_label: "Low data quality"
+    explain: "Too few somalier sites called: every relatedness call is weak."
+  POSSIBLE_CONTAMINATION:
+    category: sample_quality
+    label: "Possible contamination"
+    reader_label: "Possible contamination"
+    explain: >-
+      CHARR above the threshold: reads from another person may be mixed in.
+      Heterozygous calls, de novo calls in particular, are less reliable.
+  MENDELIAN_INCONSISTENT:
+    category: mendelian
+    label: "Mendelian errors"
+    reader_label: "Mendelian errors"
+    explain: >-
+      Parent-offspring from the CRAMs, but many opposite homozygotes in the
+      family VCF: a mix-up between the alignment and the calling, or a sample
+      contaminated in one of them.
+
+# KARYOTYPE_<k> (KARYOTYPE_XXY, KARYOTYPE_X0, ...) is matched by prefix.
+karyotype_flag:
+  prefix: "KARYOTYPE_"
+  category: karyotype
+  label: "Karyotype {karyotype}"
+  reader_label: "Sex chromosome anomaly"
+  explain: >-
+    The X and Y copy numbers read as {karyotype}: a possible sex chromosome
+    aneuploidy, to confirm (copy-number view of chrX/chrY, then karyotype).
+
+# A code the app does not know yet: its raw name, in grey.
+unknown_flag:
+  category: sample_quality
+  reader_label: "Sample QC issue"
+
+# Flags on a child or its parents that make the trio's de novo calls
+# unreliable (Wombat de novo configs show a warning).
+denovo_risk:
+  - NOT_PARENT
+  - SAMPLE_UNRELATED_TO_FAMILY
+  - SAMPLE_SWAP_CANDIDATE
+  - DUPLICATE_OR_MZ
+  - POSSIBLE_CONTAMINATION
+  - MENDELIAN_INCONSISTENT
+
+relationships:
+  # The pipeline's classes (observed and expected), closest first.
+  duplicate: {label: "Duplicate / MZ", color: "#b71c1c"}
+  parent-offspring: {label: "Parent–offspring", color: "#1565c0"}
+  full-sibs: {label: "Full sibs", color: "#2e7d32"}
+  first-degree: {label: "1st degree", color: "#00897b"}
+  half-sibs: {label: "Half sibs", color: "#f9a825"}
+  second-degree: {label: "2nd degree", color: "#ef6c00"}
+  third-degree: {label: "3rd degree", color: "#8d6e63"}
+  unrelated: {label: "Unrelated", color: "#9e9e9e"}
+  low_confidence: {label: "Low confidence", color: "#cfd8dc"}
+
+pair_status:
+  ok: {label: "OK", color: "#2e7d32"}
+  mismatch: {label: "Mismatch", color: "#c62828"}
+  low_confidence: {label: "Low confidence", color: "#9e9e9e"}
+
+karyotypes:
+  XX: "#d81b60"
+  XY: "#1e88e5"
+  other: "#6a1b9a"
+
+# Plot lines. These mirror the sampleqc_classify constants; the KING kinship
+# cut-offs are config/roh.yaml's kinship_degrees, the same values.
+thresholds:
+  po_ibs0_ibs2_max: 0.01      # PO_IBS0_IBS2_MAX: parent-offspring below, full sibs above
+  sex_tolerance: 0.25         # SEX_TOLERANCE: distance to a whole copy number
+  x_het_one_x_max: 0.25       # X_HET_ONE_X_MAX
+  x_het_two_x_min: 0.1        # X_HET_TWO_X_MIN
+  charr_max: 0.05             # CHARR_MAX
+  po_opposite_hom_max: 0.01   # PO_OPPOSITE_HOM_MAX
+
+# Reference karyotypes drawn on the X/Y copy-number plot: (X, Y).
+karyotype_points:
+  XX: [2, 0]
+  XY: [1, 1]
+  X0: [1, 0]
+  XXY: [2, 1]
+  XYY: [1, 2]
+  XXX: [3, 0]

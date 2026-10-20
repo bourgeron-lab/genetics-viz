@@ -21,6 +21,10 @@ from genetics_viz.pages.cohort.components.cohort_roh_tab import (
     probe_cohort_roh_data,
     render_cohort_roh_tab,
 )
+from genetics_viz.pages.cohort.components.cohort_sample_qc_tab import (
+    probe_cohort_qc_data,
+    render_cohort_sample_qc_tab,
+)
 from genetics_viz.pages.cohort.components.cohort_str_tab import (
     probe_cohort_eh_data,
     render_cohort_str_tab,
@@ -32,11 +36,22 @@ from genetics_viz.pages.cohort.components.status_panel import (
     render_status_panel,
     status_headline,
 )
-from genetics_viz.utils.auth import check_auth
+from genetics_viz.utils.auth import can_write, check_auth
 from genetics_viz.utils.cohort_state import read_cohort_state
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.ghfc_ngs_docs import fetch_params_doc
+from genetics_viz.utils.sample_qc import (
+    CATEGORIES,
+    category_badges,
+    flags_by_key,
+    load_cohort_qc,
+)
+
+#: QC filter options besides the categories.
+_QC_ANY = "Any issue"
+_QC_NONE = "No issue"
+_QC_UNCHECKED = "Not checked"
 
 # Diagnostic priority: higher value wins
 _DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
@@ -145,6 +160,37 @@ def cohort_page(cohort_name: str) -> None:
                     if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
                         sample_diag[sid] = diag
 
+        # Sample QC per (family, sample), when the cohort's step ran. The
+        # tables are tens of KB and cached on their stat.
+        try:
+            cohort_qc = load_cohort_qc(cohort)
+        except Exception:
+            cohort_qc = None
+        qc_by_key = flags_by_key(cohort_qc.flags) if cohort_qc else {}
+        qc_checked = (
+            {
+                ((r.get("family_id") or ""), (r.get("sample") or ""))
+                for r in cohort_qc.sample_rows()
+            }
+            if cohort_qc
+            else set()
+        )
+        show_qc_detail = can_write()
+
+        def qc_fields(fid: str, sid: str) -> Dict[str, Any]:
+            if cohort_qc is None:
+                return {}
+            flags = qc_by_key.get((fid, sid), [])
+            if (fid, sid) not in qc_checked and not flags:
+                return {"QC": "", "_qc_cats": [_QC_UNCHECKED], "_qc_rank": -1}
+            badges = category_badges(flags, show_qc_detail)
+            return {
+                "QC": "",
+                "QC_badges": badges,
+                "_qc_cats": [b["label"] for b in badges] or [_QC_NONE],
+                "_qc_rank": max((f.rank for f in flags), default=0),
+            }
+
         # Build flat list of all individuals from pedigree
         all_individuals: List[Dict[str, Any]] = []
         for family in cohort.families.values():
@@ -164,6 +210,7 @@ def cohort_page(cohort_name: str) -> None:
                             "benign": "#16a34a",
                             "conflicting": "#f59e0b",
                         }.get(sample_diag.get(sample.sample_id, ""), ""),
+                        **qc_fields(sample.family_id, sample.sample_id),
                     }
                 )
 
@@ -286,6 +333,20 @@ def cohort_page(cohort_name: str) -> None:
                                         or (has_na and not ind["Diagnostic"])
                                     ]
 
+                                # Sample QC filter (categories, any, none, unchecked)
+                                qc_vals = filters.get("QC") or []
+                                if qc_vals:
+                                    wanted_qc = set(qc_vals)
+                                    filtered = [
+                                        ind
+                                        for ind in filtered
+                                        if wanted_qc & set(ind.get("_qc_cats", []))
+                                        or (
+                                            _QC_ANY in wanted_qc
+                                            and ind.get("_qc_rank", -1) > 0
+                                        )
+                                    ]
+
                                 # Has father checkbox
                                 if filters.get("Father"):
                                     filtered = [
@@ -390,7 +451,31 @@ def cohort_page(cohort_name: str) -> None:
                                             "placeholder": "All",
                                         },
                                     },
-                                ],
+                                ]
+                                + (
+                                    [
+                                        {
+                                            "id": "QC",
+                                            "header": "Sample QC",
+                                            "cellType": "badge_list",
+                                            "sortable": True,
+                                            "sortField": "_qc_rank",
+                                            "sorting": "numerical",
+                                            "filter": {
+                                                "type": "multiselect",
+                                                "options": [_QC_ANY]
+                                                + [
+                                                    c.get("label", k)
+                                                    for k, c in CATEGORIES.items()
+                                                ]
+                                                + [_QC_NONE, _QC_UNCHECKED],
+                                                "placeholder": "All",
+                                            },
+                                        }
+                                    ]
+                                    if cohort_qc is not None
+                                    else []
+                                ),
                                 rows=all_individuals,
                                 row_key="Sample ID",
                                 pagination={"rowsPerPage": 20},
@@ -406,6 +491,7 @@ def cohort_page(cohort_name: str) -> None:
                         has_pgs = probe_cohort_pgs_data(cohort)
                         has_roh = probe_cohort_roh_data(cohort)
                         has_str = probe_cohort_eh_data(cohort)
+                        has_qc = probe_cohort_qc_data(cohort)
 
                         # Each tab reads its files on first view, not on first paint.
                         tab_state: Dict[str, Dict[str, bool]] = {
@@ -413,6 +499,7 @@ def cohort_page(cohort_name: str) -> None:
                             "Polygenic Scores": {"loaded": False},
                             "ROH": {"loaded": False},
                             "STR": {"loaded": False},
+                            "Sample QC": {"loaded": False},
                         }
 
                         # "min-width: 0" lets the flex item shrink below its content;
@@ -432,6 +519,9 @@ def cohort_page(cohort_name: str) -> None:
                                 pgs_tab = ui.tab("Polygenic Scores")
                                 roh_tab = ui.tab("ROH")
                                 str_tab = ui.tab("STR").tooltip("Short tandem repeats")
+                                qc_tab = ui.tab("Sample QC").tooltip(
+                                    "Relatedness, sex and contamination (somalier)"
+                                )
                                 if not has_ancestry:
                                     ancestry_tab.props("disable")
                                 if not has_pgs:
@@ -440,6 +530,8 @@ def cohort_page(cohort_name: str) -> None:
                                     roh_tab.props("disable")
                                 if not has_str:
                                     str_tab.props("disable")
+                                if not has_qc:
+                                    qc_tab.props("disable")
 
                             with ui.tab_panels(panel_tabs, value=stats_tab).classes(
                                 "w-full"
@@ -529,6 +621,26 @@ def cohort_page(cohort_name: str) -> None:
 
                                     str_content()
 
+                                with ui.tab_panel(qc_tab).classes("w-full p-0"):
+
+                                    @ui.refreshable
+                                    def qc_content() -> None:
+                                        if not has_qc:
+                                            ui.label(
+                                                "No cohort-level sample QC results"
+                                            ).classes("text-gray-500 italic")
+                                        elif tab_state["Sample QC"]["loaded"]:
+                                            render_cohort_sample_qc_tab(
+                                                store,
+                                                cohort,
+                                                filtered_state,
+                                                refreshers,
+                                            )
+                                        else:
+                                            _loading("Loading sample QC...")
+
+                                    qc_content()
+
                             # Keyed by the exact tab label, and parallel to tab_state:
                             # on_panel_tab_change looks the label up in both, so a tab
                             # in one and not the other is a KeyError or a dead tab.
@@ -537,6 +649,7 @@ def cohort_page(cohort_name: str) -> None:
                                 "Polygenic Scores": (has_pgs, pgs_content),
                                 "ROH": (has_roh, roh_content),
                                 "STR": (has_str, str_content),
+                                "Sample QC": (has_qc, qc_content),
                             }
 
                             def on_panel_tab_change(e: Any) -> None:

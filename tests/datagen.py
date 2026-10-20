@@ -23,7 +23,11 @@ exercise the traps found so far:
   WisecondorX loss, a control panel (inside DEMO itself) with a masked stretch
   and PAR-aware sex groups, reached through a compute-cluster
   ``cnv_panel_dir``; and a reference-free CRAM for S3 with one of each read
-  signature, split reads and a soft-clip cluster at the loss's breakpoints.
+  signature, split reads and a soft-clip cluster at the loss's breakpoints;
+- sample QC (somalier) tables for 1001 and AU-X-1 and the DEMO cohort: S1 is
+  not S3's father, S3 is contaminated, S5 reads XXY, S6 is male in the data
+  but female in the pedigree, and S2 is related to S5 across families; 1002
+  has none.
 """
 
 import gzip
@@ -532,6 +536,11 @@ def build_data_dir(root: Path) -> Path:
         if fid != "1002":
             str_rows += build_str_results(data, fid, members)
     build_cohort_str_results(demo, "DEMO", str_rows)
+    build_cohort_qc_results(
+        demo,
+        "DEMO",
+        [build_qc_results(data, fid, by_family[fid]) for fid in QC_FAMILIES],
+    )
     build_wombat_results(data)
     build_cnv_results(data, demo)
     return data
@@ -661,6 +670,13 @@ def build_wombat_results(data: Path) -> None:
         wombat / "1001.rare.vep1.annotated.strict.tsv",
         WOMBAT_COLUMNS,
         WOMBAT_ROWS[:2],
+    )
+    # A de novo config: the sample QC of 1001 puts a warning above it. Sorted
+    # after "default", so the first sub-tab is unchanged.
+    write_tsv(
+        wombat / "1001.rare.vep1.annotated.rare_denovo.tsv",
+        WOMBAT_COLUMNS,
+        WOMBAT_ROWS[:1],
     )
     write_tsv(
         data / "cohorts" / "DEMO" / "wombat" / "DEMO.rare.vep1.default.results.tsv",
@@ -950,3 +966,156 @@ def build_cram(path: Path) -> None:
                 seg.set_tag(tag, value)
             out.write(seg)
     pysam.index(str(path))
+
+
+# ---------------------------------------------------------------------------
+# Sample QC (somalier)
+# ---------------------------------------------------------------------------
+
+QC_LABEL = "somalier_hg38"
+QC_FAMILIES = ("1001", "AU-X-1")
+
+QC_SAMPLE_COLUMNS = [
+    "family_id", "sample", "father", "mother", "pedigree_sex", "inferred_sex",
+    "karyotype", "sex_evidence", "x_copies", "y_copies", "somalier_x_copies",
+    "somalier_y_copies", "x_het_rate", "x_sites", "depth_mean", "n_sites_called",
+    "het_hom_alt_ratio", "contamination_charr", "p_middling_ab",
+    "trio_informative_sites", "trio_mendelian_error_rate", "flags",
+]  # fmt: skip
+QC_PAIR_COLUMNS = [
+    "family_id_a", "sample_a", "family_id_b", "sample_b", "n_sites", "ibs0",
+    "ibs2", "ibs0_ibs2_ratio", "king_kinship", "somalier_relatedness",
+    "hom_concordance", "x_ibs0", "x_ibs2", "expected_kinship",
+    "expected_relationship", "observed_relationship", "po_informative_sites",
+    "po_opposite_hom_rate", "status",
+]  # fmt: skip
+QC_FLAG_COLUMNS = [
+    "level", "family_id", "sample_a", "sample_b", "flag", "severity", "evidence",
+]  # fmt: skip
+
+#: sample -> (inferred sex, karyotype, X, Y, X het, CHARR, trio sites, trio rate)
+QC_SAMPLES = {
+    "S1": ("male", "XY", 0.99, 0.91, 0.0, 0.021, None, None),
+    "S2": ("female", "XX", 1.99, 0.0, 0.62, 0.018, None, None),
+    "S3": ("male", "XY", 0.99, 0.90, 0.0, 0.071, 4500000, 0.0008),
+    "S5": ("male", "XXY", 1.98, 0.90, 0.35, 0.020, None, None),
+    "S6": ("male", "XY", 1.00, 0.92, 0.0, 0.019, None, None),
+}
+
+#: (sample_a, sample_b, kinship, ibs0/ibs2, expected kinship, expected,
+#: observed, PO opposite-hom rate, status)
+QC_PAIRS = {
+    "1001": [
+        ("S1", "S2", 0.0102, 0.1800, 0.0, "unrelated", "unrelated", None, "ok"),
+        ("S1", "S3", 0.0051, 0.1700, 0.25, "parent-offspring", "unrelated", 0.0300,
+         "mismatch"),
+        ("S2", "S3", 0.2512, 0.0, 0.25, "parent-offspring", "parent-offspring",
+         0.0004, "ok"),
+    ],
+    "AU-X-1": [
+        ("S5", "S6", 0.2490, 0.0, 0.25, "parent-offspring", "parent-offspring", None,
+         "ok"),
+    ],
+}  # fmt: skip
+
+QC_FLAGS = {
+    "1001": [
+        ("S1", "S3", "NOT_PARENT", "high",
+         "S1 is not the father of S3: expected parent-offspring (kinship 0.2500),"
+         " observed unrelated (kinship 0.0051, ibs0/ibs2 0.1700, 16200 sites);"
+         " opposite homozygotes at 0.0300 of 4000000 sites in the family BCF"),
+        ("S3", ".", "POSSIBLE_CONTAMINATION", "medium", "CHARR 0.071"),
+    ],
+    "AU-X-1": [
+        ("S5", ".", "KARYOTYPE_XXY", "high", "copy numbers X 1.98 Y 0.90 (coverage)"),
+        ("S6", ".", "SEX_MISMATCH", "high",
+         "pedigree female, inferred male (XY, copy numbers X 1.00 Y 0.92 (coverage))"),
+    ],
+}  # fmt: skip
+
+#: The cross-family pair the cohort sees: S2 (1001) and S5 (AU-X-1).
+QC_CROSS_PAIR = ("1001", "S2", "AU-X-1", "S5", 0.1100, 0.0500)
+
+_PED_SEX = {"1": "male", "2": "female"}
+
+
+def _qc_parent(parent: str) -> str:
+    """The pipeline writes ``0`` for every unknown-parent spelling."""
+    return "0" if parent in ("", "0", "-9", ".") else parent
+
+
+def _f4(value) -> str:
+    """The pipeline's float format: four decimals, ``.`` for missing."""
+    return "." if value is None else f"{float(value):.4f}"
+
+
+def _qc_pair_row(fa, a, fb, b, phi, ratio, exp_phi, expected, observed, po, status):
+    ibs2 = 9800
+    return [
+        fa, a, fb, b, 16200, int(round(ratio * ibs2)), ibs2, _f4(ratio), _f4(phi),
+        _f4(phi * 2), ".", 0, 200, _f4(exp_phi), expected, observed,
+        4000000 if po is not None else ".", _f4(po), status,
+    ]  # fmt: skip
+
+
+def build_qc_results(
+    data: Path, fid: str, members: Sequence[Sequence[str]]
+) -> Dict[str, List[List]]:
+    """``<family>/qc/<FID>.somalier_hg38.*``. Returns the rows for the cohort."""
+    qc = family_dir(data, fid) / "qc"
+    flags = [
+        ["family", fid, a, b, code, sev, ev] for a, b, code, sev, ev in QC_FLAGS[fid]
+    ]
+    by_sample: Dict[str, List[str]] = {}
+    for row in flags:
+        for sample in (row[2], row[3]):
+            if sample != ".":
+                by_sample.setdefault(sample, []).append(row[4])
+    samples = []
+    for _, sid, father, mother, sex, _pheno in members:
+        inferred, karyotype, x, y, het, charr, trio_n, trio_rate = QC_SAMPLES[sid]
+        samples.append(
+            [
+                fid, sid, _qc_parent(father), _qc_parent(mother),
+                _PED_SEX.get(sex.replace(".0", ""), "unknown"), inferred, karyotype,
+                "coverage", _f4(x), _f4(y), _f4(x), _f4(y), _f4(het), 330, "35.0000",
+                16800, "1.9000", _f4(charr), "0.0230",
+                trio_n if trio_n is not None else ".", _f4(trio_rate),
+                ",".join(sorted(set(by_sample.get(sid, [])))) or ".",
+            ]
+        )  # fmt: skip
+    pairs = [_qc_pair_row(fid, a, fid, b, *rest) for a, b, *rest in QC_PAIRS[fid]]
+    write_tsv(qc / f"{fid}.{QC_LABEL}.samples.tsv", QC_SAMPLE_COLUMNS, samples)
+    write_tsv(qc / f"{fid}.{QC_LABEL}.pairs.tsv", QC_PAIR_COLUMNS, pairs)
+    write_tsv(qc / f"{fid}.{QC_LABEL}.flags.tsv", QC_FLAG_COLUMNS, flags)
+    (qc / f"{fid}.{QC_LABEL}.inputs.tsv").write_text(
+        f"#inputs\tv1\n#step\tsampleqc\n#label\t{QC_LABEL}\n#family\t{fid}\n"
+    )
+    return {"samples": samples, "pairs": pairs, "flags": flags}
+
+
+def build_cohort_qc_results(
+    cohort_dir: Path, name: str, families: List[Dict[str, List[List]]]
+) -> None:
+    """The cohort tables: the families', plus the cross-family pair and its flag."""
+    qc = cohort_dir / "qc"
+    fa, a, fb, b, phi, ratio = QC_CROSS_PAIR
+    cross_flag = [
+        "cohort", f"{fa},{fb}", a, b, "CRYPTIC_RELATED", "high",
+        f"families {fa} and {fb}: observed second-degree (kinship {phi:.4f},"
+        f" ibs0/ibs2 {ratio:.4f}, 16200 sites)",
+    ]  # fmt: skip
+    samples = [list(r) for fam in families for r in fam["samples"]]
+    for row in samples:
+        if row[1] in (a, b):
+            codes = set(row[-1].split(",")) - {"."} | {"CRYPTIC_RELATED"}
+            row[-1] = ",".join(sorted(codes))
+    pairs = [r for fam in families for r in fam["pairs"]] + [
+        _qc_pair_row(fa, a, fb, b, phi, ratio, 0.0, "unrelated", "second-degree",
+                     None, "mismatch")
+    ]  # fmt: skip
+    flags = [r for fam in families for r in fam["flags"]] + [cross_flag]
+    write_tsv(qc / f"{name}.{QC_LABEL}.samples.tsv", QC_SAMPLE_COLUMNS, samples)
+    write_tsv(qc / f"{name}.{QC_LABEL}.pairs.tsv", QC_PAIR_COLUMNS, pairs)
+    write_tsv(qc / f"{name}.{QC_LABEL}.flags.tsv", QC_FLAG_COLUMNS, flags)
+    (qc / f"{name}.{QC_LABEL}.html").write_text("<html></html>")
