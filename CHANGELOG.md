@@ -5,6 +5,38 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-10-20
+
+### Changed
+- **STR: flags follow the pipeline's new severity tiers** (ghfc-ngs `expansionhunter`). A genotype is flagged when its severity is high (pathogenic) or medium (premutation, or a pathogenic call of low confidence). Intermediate alleles, carriers and common risk alleles are info and no longer counted as flagged. This applies to:
+  - the "EH (n flagged)" count;
+  - the cohort flagged table and its download;
+  - "common in cohort";
+  - the REViewer message.
+
+  Tables written before the pipeline had severities keep the old rule until their family is rebuilt.
+- **Sample QC: contamination is the pipeline's own CHARR** (Lu et al. 2023). It is drawn against 0.02 (medium) and 0.05 (high). somalier's estimate is shown and exported as `somalier_charr`.
+
+### Added
+- **STR:**
+  - `premutation` as a status and threshold (FMR1 55–200);
+  - a Severity column on the family table and the cohort tables;
+  - a `?` on low-confidence alleles;
+  - Confidence and Read length columns in the locus dialog;
+  - High and Med. counts on the cohort Loci table.
+- **Sample QC: the new flags are worded.** Readers get neutral labels:
+  - `CONSANGUINITY` and `RELATED_BEYOND_PEDIGREE`: "Pedigree relationship inconsistent";
+  - `MZ_TWIN_CANDIDATE`: "Possible identical twins";
+  - `UPD_CANDIDATE`, in a new "Uniparental disomy" category;
+  - `RELATEDNESS_UNRELIABLE`, under "Across families".
+- **Sample QC: pairs whose flags are only information** (twins, consanguinity, a third degree across families) are drawn as:
+  - grey diamonds in the relatedness plots;
+  - "Mismatch (info)" in the pair table;
+  - dashed edges in the cross-family network, which gains a Flag column.
+
+### Note
+- Acknowledgements are keyed by flag code. Consanguinity acknowledged under `UNEXPECTED_RELATED_IN_FAMILY` comes back as an unacknowledged `CONSANGUINITY` (info) once the pipeline reruns.
+
 ## [0.21.0] - 2026-10-20
 
 ### Added
