@@ -78,7 +78,12 @@ from genetics_viz.utils.cytobands import (
     VALIDATION_COLORS,
     norm_chrom,
 )
+from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.sample_counts import cohort_wombat_file
+from genetics_viz.utils.sample_qc import denovo_risk, flag_title, load_family_qc
+from genetics_viz.utils.sample_qc_acks import ack_summary, load_acks
+
+logger = logging.getLogger(__name__)
 
 #: Stack colours of the Stats dialog's variants-per-sample chart
 _TYPE_COLORS = {"SNV": "#3b82f6", "Indel": "#f59e0b"}
@@ -95,6 +100,73 @@ def probe_wombat_data(data_dir: Path, family_id: str) -> bool:
     return any(pattern.match(f.name) for f in wombat_dir.glob("*.tsv"))
 
 
+#: Wombat configs whose calls are de novo mutations.
+_DENOVO_CONFIG = re.compile(r"de_?novo", re.IGNORECASE)
+
+
+def _render_denovo_qc_warning(
+    store: Any, family_id: str, on_open_qc: Optional[Callable[[], None]]
+) -> None:
+    """A warning above a de novo table when sample QC doubts the trio.
+
+    A parent who is not the parent, a swapped, duplicated or contaminated
+    sample: each turns inherited variants into apparent de novo calls. Only the
+    family's own QC files are read (a few KB, cached).
+
+    A flag a curator acknowledged as explained (known MZ twins, say) is left
+    out. One acknowledged as a confirmed issue stays: the calls are still
+    unreliable, and the warning says it was confirmed.
+    """
+    try:
+        qc = load_family_qc(store.data_dir, family_id)
+    except Exception:
+        logger.warning("Failed to read sample QC of %s", family_id, exc_info=True)
+        return
+    if qc is None:
+        return
+    acks = load_acks(store.data_dir)
+    risky = [
+        f
+        for f in denovo_risk(
+            qc.flags, [r.get("sample") or "" for r in qc.sample_rows()]
+        )
+        if f.ack_key not in acks or acks[f.ack_key].status != "explained"
+    ]
+    if not risky:
+        return
+    show_detail = can_write()
+    with (
+        ui.row()
+        .classes(
+            "w-full items-start gap-2 p-3 mb-2 rounded border border-amber-400"
+            " bg-amber-50 no-wrap"
+        )
+        .mark("denovo-qc-warning")
+    ):
+        ui.icon("warning", color="amber-9").classes("mt-0.5")
+        with ui.column().classes("gap-0 min-w-0 flex-1"):
+            ui.label(
+                "Sample QC: de novo calls of this family may be unreliable."
+            ).classes("font-semibold text-amber-900")
+            if show_detail:
+                for f in risky:
+                    ack = acks.get(f.ack_key)
+                    ui.label(
+                        f"{flag_title(f, True)} — {' – '.join(f.samples)}"
+                        + (f": {f.evidence}" if f.evidence else "")
+                        + (f" ({ack_summary(f, ack, True)})" if ack else "")
+                    ).classes("text-sm text-amber-900")
+            else:
+                ui.label(
+                    "Sample QC flags a pedigree or sample issue in this family"
+                    " (relationship, duplicate or contamination)."
+                ).classes("text-sm text-amber-900")
+        if on_open_qc is not None:
+            ui.button("Sample QC", on_click=on_open_qc).props(
+                "flat dense no-caps color=amber-10"
+            )
+
+
 def render_wombat_tab(
     store: Any,
     family_id: str,
@@ -102,6 +174,7 @@ def render_wombat_tab(
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
     family: Optional[Family] = None,
+    on_open_qc: Optional[Callable[[], None]] = None,
 ) -> None:
     """Render the Wombat tab panel content.
 
@@ -113,6 +186,7 @@ def render_wombat_tab(
         data_table_refreshers: List to append refresh functions to
         family: The family's pedigree, for the MOI column's sex and parental
             phenotypes
+        on_open_qc: Opens the family's Sample QC tab, from the de novo warning
     """
     wombat_dir = get_family_path(store.data_dir, family_id) / "wombat"
 
@@ -232,6 +306,9 @@ def render_wombat_tab(
 
             def build_panel(wf=wf, config_name=config_name) -> None:
                 df = config_dfs[config_name]
+
+                if _DENOVO_CONFIG.search(config_name):
+                    _render_denovo_qc_warning(store, family_id, on_open_qc)
 
                 with ui.card().classes("w-full p-4"):
                     ui.label(f"Wombat Configuration: {wf['wombat_config']}").classes(

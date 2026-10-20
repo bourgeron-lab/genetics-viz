@@ -23,6 +23,8 @@ from genetics_viz.utils.data_availability import (
 )
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.pedigree import load_family_pedigree
+from genetics_viz.utils.sample_qc import cohort_headline, severity_info
+from genetics_viz.utils.sample_qc_acks import load_acks
 from genetics_viz.utils.pedigree_labels import (
     PHENO_LABELS,
     PHENO_ORDER,
@@ -114,6 +116,37 @@ def _gather_headlines(cohorts: List[Cohort]) -> Dict[str, Dict[str, Any]]:
         for cohort in cohorts
         if cohort.params_file is not None
     }
+
+
+def _gather_qc_headlines(
+    cohorts: List[Cohort], data_dir: Path
+) -> Dict[str, Dict[str, int]]:
+    """Every cohort's sample QC counts in one offloaded pass (two small reads each).
+
+    Flags a curator acknowledged do not count.
+    """
+    acknowledged = set(load_acks(data_dir))
+    out = {}
+    for cohort in cohorts:
+        counts = cohort_headline(cohort, acknowledged)
+        if counts is not None:
+            out[cohort.name] = counts
+    return out
+
+
+def _render_qc_summary(counts: Dict[str, int]) -> None:
+    """The card's third headline figure: individuals with a high-severity QC flag."""
+    high, medium = counts.get("high", 0), counts.get("medium", 0)
+    color = severity_info("high")["color"] if high else "#2e7d32"
+    tip = (
+        f"Sample QC (somalier): {high} individual(s) with a high-severity issue,"
+        f" {medium} more with a medium one. Details on the cohort page."
+    )
+    with ui.column().classes("items-center").tooltip(tip):
+        ui.label(str(high) if high else "✓").classes("text-2xl font-bold").style(
+            f"color: {color}"
+        )
+        ui.label("QC issues" if high else "QC ok").classes("text-xs text-gray-500")
 
 
 def _render_status_expansion(cohort: Cohort, headline: Dict[str, Any]) -> None:
@@ -452,6 +485,9 @@ async def home_page() -> None:
 
             # One offloaded pass rather than one blocking read per card.
             headlines = await asyncio.to_thread(_gather_headlines, cohorts)
+            qc_headlines = await asyncio.to_thread(
+                _gather_qc_headlines, cohorts, store.data_dir
+            )
 
             # Display cohorts as cards
             ui.label("Available Cohorts").classes(
@@ -494,6 +530,10 @@ async def home_page() -> None:
                                         "text-2xl font-bold text-green-600"
                                     )
                                     ui.label("Samples").classes("text-xs text-gray-500")
+
+                                qc_counts = qc_headlines.get(cohort_name)
+                                if qc_counts is not None:
+                                    _render_qc_summary(qc_counts)
 
                             # Per-phenotype breakdown table
                             per_pheno = stats["per_pheno"]

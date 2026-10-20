@@ -1,10 +1,15 @@
 """Tab-separated file reading helpers."""
 
+import fcntl
 import gzip
+import logging
+import re
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, List, Optional, Tuple
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 
 def clean_tsv_field(text: str) -> str:
@@ -19,6 +24,25 @@ def clean_tsv_field(text: str) -> str:
         .replace("\n", " ")
         .replace("\r", " ")
     )
+
+
+def append_tsv_row(path: Path, header: List[str], fields: Iterable[Any]) -> None:
+    """Append one record to a curation file, writing ``header`` first if it is new.
+
+    Every field goes through :func:`clean_tsv_field`. The write holds an
+    exclusive ``flock``, and the header check is made under it, at the end of
+    the file as it is now: two first saves must not both write the header.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0, 2)
+            if f.tell() == 0:
+                f.write("\t".join(header) + "\n")
+            f.write("\t".join(clean_tsv_field(str(v)) for v in fields) + "\n")
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _header(path: Path) -> list[str]:
@@ -65,3 +89,26 @@ def read_tsv_or_none(
         return pl.read_csv(path, **kwargs)
     except pl.exceptions.NoDataError:
         return None
+
+
+def find_labels(directory: Path, prefix: str, kind: str) -> List[str]:
+    """Labels of the ``<prefix>.<label>.<kind>.tsv`` files in ``directory``.
+
+    Newest first, then by name. The label is the whole middle of the name: a
+    lazy capture would cut a dotted label short. Used where the pipeline names
+    a step's files by a free label (an STR catalog, a sample QC sites file)
+    rather than by a bundle version and filter tag.
+    """
+    if not directory.is_dir():
+        return []
+    pattern = re.compile(rf"^{re.escape(prefix)}\.(.+)\.{re.escape(kind)}\.tsv$")
+    found: List[Tuple[float, str]] = []
+    try:
+        for entry in directory.iterdir():
+            m = pattern.match(entry.name)
+            if m:
+                found.append((entry.stat().st_mtime, m.group(1)))
+    except OSError:
+        logger.warning("Cannot list %s", directory, exc_info=True)
+        return []
+    return [label for _, label in sorted(found, key=lambda t: (-t[0], t[1]))]

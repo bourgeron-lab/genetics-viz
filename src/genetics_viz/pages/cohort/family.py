@@ -1,7 +1,7 @@
 """Family detail page - displays family members and analysis tabs."""
 
 from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from nicegui import ui
 
@@ -31,6 +31,11 @@ from genetics_viz.pages.cohort.components.roh_tab import (
     probe_roh_data,
     render_roh_tab,
 )
+from genetics_viz.pages.cohort.components.sample_qc_tab import (
+    family_qc_summary,
+    probe_qc_data,
+    render_sample_qc_tab,
+)
 from genetics_viz.pages.cohort.components.str_tab import probe_eh_data, render_str_tab
 from genetics_viz.pages.cohort.components.svs_tab import probe_svs_data, render_svs_tab
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
@@ -40,6 +45,12 @@ from genetics_viz.pages.cohort.components.wombat_tab import (
 )
 from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.sample_qc import (
+    count_by_severity,
+    flags_by_sample,
+    severity_info,
+    severity_summary,
+)
 from genetics_viz.utils.gene_scoring import (
     GeneScorer,
     build_gene_badges,
@@ -130,12 +141,41 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 sorted_fids.index(family_id) if family_id in sorted_fids else -1
             )
 
+            # Sample QC: the family's own flags, read now (a few KB) for the
+            # header badge and the member icons; cross-family ones need the
+            # cohort's tables and are left to the tab. Flags a curator
+            # acknowledged do not count; a review redraws both.
+            qc = {"summary": family_qc_summary(store, family_id)}
+            # Filled in once the analysis tabs exist: the badge opens one.
+            open_qc_tab: Dict[str, Any] = {"fn": None}
+
             with ui.row().classes("items-center gap-4 mb-6"):
                 ui.label(f"👨‍👩‍👧‍👦 Family: {family_id}").classes(
                     "text-3xl font-bold text-blue-900"
                 )
                 ui.badge(f"{family.num_samples} members").props("color=blue")
                 ui.badge(f"{family.num_founders} founders").props("color=teal")
+
+                @ui.refreshable
+                def qc_badge() -> None:
+                    qc_data, active, acked = qc["summary"]
+                    if qc_data is None:
+                        return
+                    counts = count_by_severity(active)
+                    summary = severity_summary(counts)
+                    worst = "high" if counts.get("high") else "medium"
+                    color = severity_info(worst)["color"] if summary else "#2e7d32"
+                    tip = "Sample QC (somalier): open the Sample QC tab"
+                    if acked:
+                        tip += f". {len(acked)} acknowledged flag(s) not counted."
+                    ui.badge(
+                        f"QC: {summary}" if summary else "QC ok", color=color
+                    ).classes("cursor-pointer").on(
+                        "click",
+                        lambda: open_qc_tab["fn"] and open_qc_tab["fn"](),
+                    ).tooltip(tip)
+
+                qc_badge()
 
                 if len(sorted_fids) > 1 and current_idx >= 0:
                     ui.space()
@@ -167,11 +207,25 @@ def family_page(cohort_name: str, family_id: str) -> None:
             data_table_refreshers: List = []
 
             with ui.row().classes("w-full gap-4 items-start"):
-                render_member_selector(
+                _, qc_active, qc_acked = qc["summary"]
+                update_qc_icons = render_member_selector(
                     members_data=members_data,
                     selected_members=selected_members,
                     data_table_refreshers=data_table_refreshers,
+                    qc_flags=(
+                        flags_by_sample(qc_active)
+                        if qc["summary"][0] is not None
+                        else None
+                    ),
+                    show_qc_detail=can_write(),
+                    qc_acked=flags_by_sample(qc_acked),
                 )
+
+                def on_acks_changed() -> None:
+                    qc["summary"] = family_qc_summary(store, family_id)
+                    _, active, acked = qc["summary"]
+                    qc_badge.refresh()
+                    update_qc_icons(flags_by_sample(active), flags_by_sample(acked))
 
                 # ---- Right column: tabbed info panel ----
                 with ui.column().classes("flex-1").style("gap: 0.5rem; min-width: 0"):
@@ -380,6 +434,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
             has_pgs = probe_pgs_data(store.data_dir, family_id)
             has_roh = probe_roh_data(store.data_dir, family_id)
             has_str = probe_eh_data(store.data_dir, family_id)
+            has_qc = probe_qc_data(store.data_dir, family_id)
 
             # Track loading state for each tab
             wombat_state = {"loaded": False}
@@ -388,6 +443,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
             pgs_state = {"loaded": False}
             roh_state = {"loaded": False}
             str_state = {"loaded": False}
+            qc_state = {"loaded": False}
 
             # Analysis tabs section
             with ui.tabs().classes("w-full").mark("family-tabs") as tabs:
@@ -397,6 +453,9 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 pgs_tab = ui.tab("Polygenic Scores")
                 roh_tab = ui.tab("ROH")
                 str_tab = ui.tab("STR").tooltip("Short tandem repeats")
+                qc_tab = ui.tab("Sample QC").tooltip(
+                    "Relatedness, sex and contamination checks (somalier)"
+                )
                 if not has_wombat:
                     wombat_tab.props("disable")
                 if not has_svs:
@@ -409,6 +468,8 @@ def family_page(cohort_name: str, family_id: str) -> None:
                     roh_tab.props("disable")
                 if not has_str:
                     str_tab.props("disable")
+                if not has_qc:
+                    qc_tab.props("disable")
 
             # Pick the first enabled tab as the default
             if has_wombat:
@@ -423,6 +484,8 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 default_tab_name = "roh"
             elif has_str:
                 default_tab_name = "str"
+            elif has_qc:
+                default_tab_name = "qc"
             else:
                 default_tab_name = "wombat"
 
@@ -433,6 +496,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "pgs": pgs_tab,
                 "roh": roh_tab,
                 "str": str_tab,
+                "qc": qc_tab,
             }[default_tab_name]
 
             with ui.tab_panels(tabs, value=default_tab).classes("w-full"):
@@ -455,6 +519,11 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
                                 family=family,
+                                on_open_qc=(
+                                    (lambda: open_qc_tab["fn"] and open_qc_tab["fn"]())
+                                    if has_qc
+                                    else None
+                                ),
                             )
                         else:
                             with ui.column().classes(
@@ -617,6 +686,37 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                     str_content()
 
+                # Sample QC tab panel
+                with ui.tab_panel(qc_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+
+                    @ui.refreshable
+                    def qc_content():
+                        if not has_qc:
+                            ui.label("No sample QC data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif qc_state["loaded"]:
+                            render_sample_qc_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                                on_acks_changed=on_acks_changed,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading sample QC...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    qc_content()
+
             # Each tab loads its data on first view: keyed by the tab name that
             # the "update:model-value" event reports.
             lazy_tabs = {
@@ -626,6 +726,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "Polygenic Scores": (has_pgs, pgs_state, pgs_content),
                 "ROH": (has_roh, roh_state, roh_content),
                 "STR": (has_str, str_state, str_content),
+                "Sample QC": (has_qc, qc_state, qc_content),
             }
             tab_names = {
                 "wombat": "Wombat",
@@ -634,6 +735,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 "pgs": "Polygenic Scores",
                 "roh": "ROH",
                 "str": "STR",
+                "qc": "Sample QC",
             }
 
             def make_loader(state, content):
@@ -660,6 +762,15 @@ def family_page(cohort_name: str, family_id: str) -> None:
                     ui.timer(0.1, make_loader(state, content), once=True)
 
             tabs.on("update:model-value", on_tab_change)
+
+            def show_qc_tab() -> None:
+                if not has_qc:
+                    return
+                tabs.set_value(qc_tab)
+                if not qc_state["loaded"]:
+                    ui.timer(0.1, make_loader(qc_state, qc_content), once=True)
+
+            open_qc_tab["fn"] = show_qc_tab
 
     except Exception as e:
         import traceback

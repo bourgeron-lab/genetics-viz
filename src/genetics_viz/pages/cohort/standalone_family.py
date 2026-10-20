@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from nicegui import ui
 
@@ -33,6 +33,11 @@ from genetics_viz.pages.cohort.components.roh_tab import (
     probe_roh_data,
     render_roh_tab,
 )
+from genetics_viz.pages.cohort.components.sample_qc_tab import (
+    family_qc_summary,
+    probe_qc_data,
+    render_sample_qc_tab,
+)
 from genetics_viz.pages.cohort.components.str_tab import probe_eh_data, render_str_tab
 from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
 from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
@@ -45,6 +50,7 @@ from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.data_availability import check_family_availability
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.pedigree import load_family_object, load_family_pedigree
+from genetics_viz.utils.sample_qc import flags_by_sample
 from genetics_viz.utils.sharding import get_family_path
 
 
@@ -182,12 +188,26 @@ async def standalone_family_page(family_id: str) -> None:
             }
             data_table_refreshers: List = []
 
+            # Redraws the member QC icons after a review in the Sample QC tab.
+            qc_icons: Dict[str, Any] = {"update": None}
+
+            def on_acks_changed() -> None:
+                if qc_icons["update"] is not None:
+                    _, active, acked = family_qc_summary(store, family_id)
+                    qc_icons["update"](flags_by_sample(active), flags_by_sample(acked))
+
             if members_data:
+                qc_data, qc_active, qc_acked = family_qc_summary(store, family_id)
                 with ui.row().classes("w-full gap-4 items-start"):
-                    render_member_selector(
+                    qc_icons["update"] = render_member_selector(
                         members_data=members_data,
                         selected_members=selected_members,
                         data_table_refreshers=data_table_refreshers,
+                        qc_flags=(
+                            flags_by_sample(qc_active) if qc_data is not None else None
+                        ),
+                        show_qc_detail=can_write(),
+                        qc_acked=flags_by_sample(qc_acked),
                     )
 
                     # ---- Right column: Notes + Diagnostics ----
@@ -385,6 +405,7 @@ async def standalone_family_page(family_id: str) -> None:
             has_pgs = probe_pgs_data(store.data_dir, family_id)
             has_roh = probe_roh_data(store.data_dir, family_id)
             has_str = probe_eh_data(store.data_dir, family_id)
+            has_qc = probe_qc_data(store.data_dir, family_id)
 
             wombat_state = {"loaded": False}
             svs_state = {"loaded": False}
@@ -392,6 +413,7 @@ async def standalone_family_page(family_id: str) -> None:
             pgs_state = {"loaded": False}
             roh_state = {"loaded": False}
             str_state = {"loaded": False}
+            qc_state = {"loaded": False}
 
             with ui.tabs().classes("w-full").mark("family-tabs") as tabs:
                 wombat_tab = ui.tab("Wombat")
@@ -400,6 +422,9 @@ async def standalone_family_page(family_id: str) -> None:
                 pgs_tab = ui.tab("Polygenic Scores")
                 roh_tab = ui.tab("ROH")
                 str_tab = ui.tab("STR").tooltip("Short tandem repeats")
+                qc_tab = ui.tab("Sample QC").tooltip(
+                    "Relatedness, sex and contamination checks (somalier)"
+                )
                 if not has_ancestry:
                     ancestry_tab.props("disable")
                 if not has_pgs:
@@ -408,6 +433,8 @@ async def standalone_family_page(family_id: str) -> None:
                     roh_tab.props("disable")
                 if not has_str:
                     str_tab.props("disable")
+                if not has_qc:
+                    qc_tab.props("disable")
 
             with ui.tab_panels(tabs, value=wombat_tab).classes("w-full"):
                 with ui.tab_panel(wombat_tab).classes(
@@ -579,6 +606,37 @@ async def standalone_family_page(family_id: str) -> None:
 
                     str_content()
 
+                # Sample QC tab panel: no cohort, so no cross-family relatives
+                with ui.tab_panel(qc_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+
+                    @ui.refreshable
+                    def qc_content():
+                        if not has_qc:
+                            ui.label("No sample QC data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif qc_state["loaded"]:
+                            render_sample_qc_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name="",
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                                on_acks_changed=on_acks_changed,
+                            )
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading sample QC...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    qc_content()
+
             def load_wombat():
                 wombat_state["loaded"] = True
                 wombat_content.refresh()
@@ -592,6 +650,7 @@ async def standalone_family_page(family_id: str) -> None:
                 "Polygenic Scores": (has_pgs, pgs_state, pgs_content),
                 "ROH": (has_roh, roh_state, roh_content),
                 "STR": (has_str, str_state, str_content),
+                "Sample QC": (has_qc, qc_state, qc_content),
             }
 
             def on_tab_change(e):

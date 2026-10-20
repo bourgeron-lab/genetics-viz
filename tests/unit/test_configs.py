@@ -69,6 +69,49 @@ def test_str_statuses_cover_the_pipeline_vocabulary():
     )
 
 
+def test_sample_qc_vocabulary_covers_the_pipeline():
+    cfg = load("sample_qc.yaml")
+    # sampleqc_classify's flag codes (KARYOTYPE_<k> goes by prefix).
+    assert set(cfg["flags"]) == {
+        "SEX_MISMATCH", "SEX_AMBIGUOUS", "SEX_UNKNOWN_IN_PED", "X_HET_INCONSISTENT",
+        "LOW_INFORMATIVE_SITES", "POSSIBLE_CONTAMINATION",
+        "SAMPLE_UNRELATED_TO_FAMILY", "DUPLICATE_OR_MZ", "NOT_PARENT",
+        "HALF_SIB_NOT_FULL", "FULL_SIB_NOT_HALF", "UNEXPECTED_RELATED_IN_FAMILY",
+        "EXPECTED_RELATED_UNRELATED", "RELATIONSHIP_MISMATCH",
+        "MENDELIAN_INCONSISTENT", "CRYPTIC_RELATED", "SAMPLE_SWAP_CANDIDATE",
+    }  # fmt: skip
+    categories = set(cfg["categories"])
+    assert {f["category"] for f in cfg["flags"].values()} <= categories
+    assert cfg["karyotype_flag"]["category"] in categories
+    assert set(cfg["denovo_risk"]) <= set(cfg["flags"])
+    ranks = [s["rank"] for s in cfg["severities"].values()]
+    assert set(cfg["severities"]) == {"high", "medium", "info"}
+    assert ranks == sorted(ranks, reverse=True)
+    assert set(cfg["relationships"]) == {
+        "duplicate", "parent-offspring", "full-sibs", "first-degree", "half-sibs",
+        "second-degree", "third-degree", "unrelated", "low_confidence",
+    }  # fmt: skip
+    assert set(cfg["pair_status"]) == {"ok", "mismatch", "low_confidence"}
+    colors = [c["color"] for c in cfg["categories"].values()]
+    colors += [v["color"] for v in cfg["relationships"].values()]
+    assert all(HEX.match(c) for c in colors)
+
+
+def test_sample_qc_acknowledgement_wording():
+    from genetics_viz.utils.sample_qc_acks import STATUSES
+
+    cfg = load("sample_qc.yaml")["acknowledgement"]
+    assert set(cfg["statuses"]) == set(STATUSES)
+    colors = [s["color"] for s in cfg["statuses"].values()] + [cfg["muted_color"]]
+    assert all(HEX.match(c) for c in colors)
+    # Readers may read the notes of these categories only: the others' reader
+    # wording hides a relationship or an aneuploidy a note would name.
+    categories = load("sample_qc.yaml")["categories"]
+    assert {k for k, c in categories.items() if c.get("reader_note")} == {
+        "sex", "mendelian", "sample_quality",
+    }  # fmt: skip
+
+
 def test_wisecondorx_thresholds_bracket_zero():
     cfg = load("wisecondorx_thresholds.yaml")
     assert (
