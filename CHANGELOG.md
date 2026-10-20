@@ -5,6 +5,28 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-10-20
+
+### Added
+- **TSV downloads on every tab.** Every cohort tab except Statistics, and every family tab, has a Download button.
+  - The file holds what the tab shows: the individuals that pass the cohort table's filter, or the family's selected members, plus the tab's own selectors. Every column is included, not just the one plotted.
+  - Per-sample files start with `FID, IID, sex, phenotype`. A family file and a cohort file of the same kind have the same columns.
+- **What each tab exports:**
+  - **Ancestry:** region labels, PC1–PC20 and the admixture proportions (`snp_coverage`, `admix_<component>`, read from the pipeline's `Q.tsv`).
+  - **Polygenic Scores:** the region and every trait z-score, one row per sample.
+  - **ROH:** F_ROH, the percentile against the reference group, F short, intermediate and long, pattern, grade and flags. The family tab also offers the segments, the genes in ROH and kinship, separately or as a zip.
+  - **STR:** the cohort's flagged genotypes; on the family page, every genotype of the selected members with validation and diagnostic.
+  - **Sample QC:** three tables, separately or as a zip:
+    - flags, with the curators' acknowledgement (status, note, user, date);
+    - sex karyotype and sample quality;
+    - pairs.
+  - **Wombat and SVs:** the table's rows and visible columns as currently shown.
+- **Files follow the user's role, like the tabs.** Readers get the neutral wording, an "Atypical" karyotype and only the pedigree-declared pairs. They get no evidence, observed relationship, ROH category or parents' kinship, and no acknowledgement note that could name a relationship.
+
+### Fixed
+- The Locus and Disease filters of the family STR table now filter.
+- Filtering the family Polygenic Scores table keeps its sort.
+
 ## [0.20.0] - 2026-10-20
 
 ### Added
