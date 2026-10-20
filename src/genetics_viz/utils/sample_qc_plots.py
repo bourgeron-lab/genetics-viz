@@ -9,7 +9,17 @@ cut-offs); the classes and flags themselves come from the pipeline.
 import html
 import math
 import random
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from .pedigree_labels import SEX_COLORS
 from .roh import KINSHIP_DEGREES
@@ -20,7 +30,18 @@ from .sample_qc import (
     CrossFamilyGraph,
     PairRow,
     relationship_info,
+    severity_info,
 )
+
+#: :func:`sample_qc.pair_severities`: a pair -> its worst flag's severity.
+PairSeverities = Dict[FrozenSet[Tuple[str, str]], str]
+
+
+def _is_info(p: PairRow, severities: Optional[PairSeverities]) -> bool:
+    """A mismatch whose only flags are information (twins, consanguinity, a
+    relative the pedigree's missing parents allow, a cross-family third degree)."""
+    return severities is not None and severities.get(p.flag_key) == "info"
+
 
 _PRECISION = 5
 _BACKGROUND_COLOR = "rgba(120, 120, 120, 0.30)"
@@ -93,7 +114,9 @@ def king_marklines() -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 
-def _pair_tip(p: PairRow, show_detail: bool) -> str:
+def _pair_tip(
+    p: PairRow, show_detail: bool, severities: Optional[PairSeverities] = None
+) -> str:
     lines = [f"<b>{_esc(p.sample_a)} – {_esc(p.sample_b)}</b>"]
     if p.cross_family:
         lines.append(f"families {_esc(p.family_a)} / {_esc(p.family_b)}")
@@ -108,7 +131,10 @@ def _pair_tip(p: PairRow, show_detail: bool) -> str:
     if p.n_sites is not None:
         lines.append(f"{int(p.n_sites)} sites")
     if p.status == "mismatch":
-        lines.append(f"<span style='color:{_MISMATCH_COLOR}'>mismatch</span>")
+        if _is_info(p, severities):
+            lines.append("mismatch (information)")
+        else:
+            lines.append(f"<span style='color:{_MISMATCH_COLOR}'>mismatch</span>")
     return "<br>".join(lines)
 
 
@@ -118,18 +144,21 @@ def relatedness_scatter_option(
     title: str,
     show_detail: bool,
     label_mismatches: bool = True,
+    severities: Optional[PairSeverities] = None,
 ) -> Dict:
     """KING kinship against IBS0/IBS2: the somalier/peddy relatedness plane.
 
     Horizontal lines are the KING degree cut-offs, the vertical one the
     parent-offspring / full-sib split (IBS0/IBS2 below 0.01). Points are
     coloured by the relationship the pedigree *declares*, so an error is a
-    point sitting in another class's band; mismatches are red-edged diamonds.
+    point sitting in another class's band; mismatches are red-edged diamonds,
+    grey ones when their flags are information only (``severities``).
     Viewers get one colour: the declared classes of undeclared pairs would
     say nothing, and the parents' pair is a consanguinity reading.
     """
     by_series: Dict[str, List[Dict]] = {}
     mismatches: List[Dict] = []
+    info_mismatches: List[Dict] = []
     xs: List[float] = []
     ys: List[float] = []
     for p in pairs:
@@ -140,10 +169,10 @@ def relatedness_scatter_option(
         item = {
             "name": f"{p.sample_a} – {p.sample_b}",
             "value": [_round(p.ratio), _round(p.kinship)],
-            "tip": _pair_tip(p, show_detail),
+            "tip": _pair_tip(p, show_detail, severities),
         }
         if p.status == "mismatch":
-            mismatches.append(item)
+            (info_mismatches if _is_info(p, severities) else mismatches).append(item)
             continue
         key = relationship_info(p.expected)["label"] if show_detail else "Pairs"
         by_series.setdefault(key, []).append(item)
@@ -169,6 +198,23 @@ def relatedness_scatter_option(
                 "symbolSize": 8,
                 "itemStyle": {"color": colors.get(name, "#607d8b"), "opacity": 0.8},
                 **({"markLine": marks} if i == 0 else {}),
+            }
+        )
+    if info_mismatches:
+        info = severity_info("info")
+        series.append(
+            {
+                "name": "Mismatch (information)",
+                "type": "scatter",
+                "data": info_mismatches,
+                "symbol": "diamond",
+                "symbolSize": 11,
+                "z": 9,
+                "itemStyle": {
+                    "color": info["color"],
+                    "borderColor": "#1f2937",
+                    "borderWidth": 1,
+                },
             }
         )
     series.append(
@@ -540,6 +586,15 @@ def x_het_option(
 # ---------------------------------------------------------------------------
 
 
+def charr_lines() -> List[Tuple[float, str, str]]:
+    """POSSIBLE_CONTAMINATION's two thresholds, as ``metric_strip_option`` lines."""
+    return [
+        (value, f"{severity} ≥ {value:g}", severity_info(severity)["color"])
+        for key, severity in (("charr_warn", "medium"), ("charr_high", "high"))
+        if (value := THRESHOLDS.get(key)) is not None
+    ]
+
+
 def metric_strip_option(
     points: Sequence[Dict[str, Any]],
     *,
@@ -646,13 +701,16 @@ def cross_family_graph_option(
     show_detail: bool,
     highlight: Optional[Set[Tuple[str, str]]] = None,
     hub_minimum: int = HUB_MINIMUM,
+    severities: Optional[PairSeverities] = None,
 ) -> Dict:
     """The cross-family related pairs as a force-directed graph of samples.
 
     Node size grows with the number of relatives outside the family, so a
-    sample related to many families - contamination or population structure
-    far more often than real relatives - stands out as a hub. Edges are
-    coloured by the observed relationship (curators) and nodes by family.
+    sample related to many families - shared ancestry or admixture far more
+    often than real relatives - stands out as a hub. Edges are coloured by
+    the observed relationship (curators) and nodes by family; an edge whose
+    flag is information only (a third degree, or an IBS0 of unrelated pairs)
+    is dashed and faint.
     """
     order: Dict[str, int] = {}
     nodes = []
@@ -679,7 +737,8 @@ def cross_family_graph_option(
                     f"<b>{_esc(node.sample)}</b><br>family {_esc(node.family_id)}"
                     f"<br>{node.degree} relative(s) in other families"
                     + (
-                        "<br><i>hub: check contamination / population</i>"
+                        "<br><i>hub: shared ancestry or admixture, more often"
+                        " than relatives</i>"
                         if is_hub
                         else ""
                     )
@@ -689,11 +748,14 @@ def cross_family_graph_option(
     links = []
     for p in graph.edges:
         info = relationship_info(p.observed)
+        faint = _is_info(p, severities)
         tip = f"<b>{_esc(p.sample_a)} – {_esc(p.sample_b)}</b>"
         if show_detail:
             tip += f"<br>{_esc(info['label'])}"
             if p.kinship is not None:
                 tip += f", KING {p.kinship:.4f}"
+        if faint:
+            tip += "<br><i>information: within reach of shared ancestry</i>"
         links.append(
             {
                 "source": ids[(p.family_a, p.sample_a)],
@@ -702,7 +764,8 @@ def cross_family_graph_option(
                 "lineStyle": {
                     "color": info["color"] if show_detail else "#9e9e9e",
                     "width": 1 + 8 * max(p.kinship or 0.0, 0.0),
-                    "opacity": 0.8,
+                    "opacity": 0.35 if faint else 0.8,
+                    "type": "dashed" if faint else "solid",
                 },
             }
         )

@@ -52,6 +52,7 @@ from genetics_viz.utils.sample_qc import (
     load_cohort_qc,
     mendelian_fence,
     pair_rows,
+    pair_severities,
     probe_cohort_qc_data,
     relationship_info,
     sample_point,
@@ -70,6 +71,8 @@ from genetics_viz.utils.sample_qc_export import (
     samples_export,
 )
 from genetics_viz.utils.sample_qc_plots import (
+    PairSeverities,
+    charr_lines,
     cross_family_graph_option,
     metric_strip_option,
     relatedness_scatter_option,
@@ -208,8 +211,14 @@ def _render_flagged(
 
 
 def _cross_pair_table(
-    pairs: List[PairRow], cohort_name: str, show_detail: bool
+    pairs: List[PairRow],
+    cohort_name: str,
+    show_detail: bool,
+    severities: PairSeverities,
 ) -> None:
+    def flag(p: PairRow) -> Dict[str, Any]:
+        return severity_info(severities.get(p.flag_key))
+
     rows = [
         {
             "key": p.key,
@@ -219,11 +228,14 @@ def _cross_pair_table(
             "family_b": p.family_b,
             "observed": relationship_info(p.observed)["label"],
             "observed_color": relationship_info(p.observed)["color"],
+            "severity": flag(p)["label"],
+            "severity_color": flag(p)["color"],
+            "severity_rank": flag(p)["rank"],
             "kinship": p.kinship,
             "ratio": p.ratio,
             "n_sites": p.n_sites,
         }
-        for p in sorted(pairs, key=lambda p: -(p.kinship or 0))
+        for p in sorted(pairs, key=lambda p: (-flag(p)["rank"], -(p.kinship or 0)))
     ]
     link = f"/cohort/{cohort_name}/family/"
     columns: List[Dict[str, Any]] = [
@@ -255,6 +267,14 @@ def _cross_pair_table(
             }
         )
     columns += [
+        {
+            "id": "severity",
+            "header": "Flag",
+            "cellType": "badge",
+            "colorField": "severity_color",
+            "sortField": "severity_rank",
+            **_NUM,
+        },
         {"id": "kinship", "header": "KING φ", **_NUM},
         {"id": "ratio", "header": "IBS0/IBS2", **_NUM},
         {"id": "n_sites", "header": "Sites", **_NUM},
@@ -274,6 +294,7 @@ def _open_cross_family_dialog(
     keys: Set[Key],
     cohort_name: str,
     show_detail: bool,
+    severities: PairSeverities,
 ) -> None:
     graph = cross_family_graph(pairs, restrict_to=keys)
     hubs = graph.hubs(HUB_MINIMUM)
@@ -291,16 +312,18 @@ def _open_cross_family_dialog(
             f"{len(graph.edges)} related pair(s) between {len(graph.nodes)} samples of"
             " different families, touching the individuals shown. Node size: number"
             " of relatives in other families; colour: family"
-            + ("; edge colour: observed relationship." if show_detail else ".")
-            + " Drag to move, scroll to zoom."
+            + ("; edge colour: observed relationship" if show_detail else "")
+            + "; dashed: information only (third degree, or the IBS0 of unrelated"
+            " pairs). Drag to move, scroll to zoom."
         ).classes("text-xs text-gray-500")
         if hubs:
             ui.label(
                 "Hubs (red outline): "
                 + ", ".join(f"{h.sample} ({h.degree})" for h in hubs[:10])
-                + ". A sample related to many families at third degree is more"
-                " often contaminated, or from an endogamous population, than"
-                " related to them all."
+                + ". A sample related to many families at third degree more often"
+                " shares their ancestry (admixture, an endogamous population) than"
+                " is related to them all. Contaminated samples (CHARR 0.05 or"
+                " more) are left out by the pipeline: Relatedness unreliable."
             ).classes("text-xs text-purple-800")
         with ui.row().classes("w-full gap-4 no-wrap items-start"):
             ui.echart(
@@ -309,10 +332,11 @@ def _open_cross_family_dialog(
                     show_detail=show_detail,
                     highlight=keys,
                     hub_minimum=HUB_MINIMUM,
+                    severities=severities,
                 )
             ).classes("min-w-0").style("flex: 3; height: 70vh")
             with ui.column().classes("min-w-0").style("flex: 2"):
-                _cross_pair_table(graph.edges, cohort_name, show_detail)
+                _cross_pair_table(graph.edges, cohort_name, show_detail, severities)
     dialog.open()
 
 
@@ -321,6 +345,7 @@ def _render_plots(
     by_key: Dict[Key, List[FlagRow]],
     pairs: List[PairRow],
     show_detail: bool,
+    severities: PairSeverities,
 ) -> None:
     def flagged(row: Dict[str, Any], categories: Any) -> bool:
         key = (row.get("family_id") or "", row.get("sample") or "")
@@ -350,15 +375,17 @@ def _render_plots(
                 title="",
                 show_detail=show_detail,
                 label_mismatches=sum(p.status == "mismatch" for p in pairs) <= 25,
+                severities=severities,
             )
         ).classes("w-full h-80")
         ui.label(
             "Within-family pairs of the shown individuals, and their relatives in"
             " other families (the cohort keeps only cross-family pairs observed"
-            " related). Red diamonds: mismatches with the pedigree."
+            " related). Red diamonds: mismatches with the pedigree; grey ones:"
+            " information only (twins, consanguinity, relatives the pedigree's"
+            " missing parents allow, a third degree across families)."
         ).classes("text-xs text-gray-500")
 
-    charr_max = THRESHOLDS.get("charr_max", 0.05)
     charr_flag = [r for r in rows if flagged(r, QUALITY_CATEGORIES)]
     charr_rest = [r for r in rows if not flagged(r, QUALITY_CATEGORIES)]
     _subtitle("Contamination")
@@ -379,7 +406,7 @@ def _render_plots(
             ],
             title="",
             axis_name="CHARR",
-            lines=[(charr_max, f"flag > {charr_max:g}", "#c62828")],
+            lines=charr_lines(),
         )
     ).classes("w-full h-48")
 
@@ -606,6 +633,7 @@ def render_cohort_sample_qc_tab(
                 if (p.family_a, p.sample_a) in keys or (p.family_b, p.sample_b) in keys
             ]
             cross = [p for p in pairs if p.cross_family]
+            severities = pair_severities(qc.flags)
             graph = cross_family_graph(cross)
             cross_counts = {k: n.degree for k, n in graph.nodes.items()}
 
@@ -647,11 +675,11 @@ def render_cohort_sample_qc_tab(
                     "Cross-family network…",
                     icon="hub",
                     on_click=lambda: _open_cross_family_dialog(
-                        cross, keys, cohort.name, show_detail
+                        cross, keys, cohort.name, show_detail, severities
                     ),
                 ).props("flat dense no-caps color=primary")
 
-            _render_plots(rows, by_key, pairs, show_detail)
+            _render_plots(rows, by_key, pairs, show_detail, severities)
 
         render_body()
         refreshers.append(render_body.refresh)

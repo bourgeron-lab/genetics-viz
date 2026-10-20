@@ -329,35 +329,56 @@ EH_COLUMNS = [
     "allele1_inrepeat", "allele2_inrepeat", "locus_coverage",
     "disease", "inheritance", "normal_max", "intermediate_min", "pathogenic_min",
     "allele1_class", "allele2_class", "status", "parents_max_allele",
+    "premutation_min", "report", "read_length", "allele1_confidence",
+    "allele2_confidence", "severity",
 ]  # fmt: skip
 
 #: locus -> (chrom, pos, end, motif, ref_units, disease, inheritance,
-#: normal_max, intermediate_min, pathogenic_min); "." where the catalog has none.
+#: normal_max, intermediate_min, premutation_min, pathogenic_min, report);
+#: "." where the catalog has none.
 EH_LOCI = {
-    "AFF3": ("chr2", 100104799, 100104822, "GCC", 8, ".", ".", ".", ".", "."),
-    "HTT": ("chr4", 3074876, 3074933, "CAG", 19, "Huntington disease", "AD", 26, 27, 36),
-    "FXN": ("chr9", 69037286, 69037304, "GAA", 6, "Friedreich ataxia", "AR", 30, ".", 70),
-    "ARX_2": ("chrX", 25013529, 25013565, "NGC", 12, "DEE1", "XLR", 12, ".", 20),
-    "FMR1": ("chrX", 147912050, 147912110, "CGG", 20, "Fragile X", "XLD", 40, 41, 55),
+    "AFF3": ("chr2", 100104799, 100104822, "GCC", 8, ".", ".", ".", ".", ".", ".", "."),
+    "HTT": ("chr4", 3074876, 3074933, "CAG", 19, "Huntington disease", "AD", 26, 27,
+            ".", 36, "flag"),
+    "FXN": ("chr9", 69037286, 69037304, "GAA", 6, "Friedreich ataxia", "AR", 30, ".",
+            ".", 70, "flag"),
+    "TCF4": ("chr18", 55586155, 55586227, "CTG", 25, "Fuchs dystrophy", "AD", 40, ".",
+             ".", 50, "risk"),
+    "ARX_2": ("chrX", 25013529, 25013565, "NGC", 12, "DEE1", "XLR", 12, ".", ".", 20,
+              "flag"),
+    "FMR1": ("chrX", 147912050, 147912110, "CGG", 20, "Fragile X", "XLD", 40, 41, 55,
+             201, "flag"),
 }  # fmt: skip
 
 #: (sample, locus) -> (allele1, allele2, support1, support2) where it differs
 #: from the default: 10 and 12 units, spanning (one allele on a male's chrX).
+#: HTT in S3 is pathogenic (high), FMR1 in S2 a premutation (medium), FXN in
+#: S2 a carrier and TCF4 in S5 a risk allele (info). ARX_2 in S6 is pathogenic
+#: but of low confidence at a GCN motif with no spanning read (medium).
 EH_CALLS = {
-    ("S3", "HTT"): (18, 40, "SPANNING", "INREPEAT"),
+    ("S3", "HTT"): (18, 40, "SPANNING", "SPANNING"),
     ("S2", "FXN"): (8, 120, "SPANNING", "INREPEAT"),
+    ("S2", "FMR1"): (30, 60, "SPANNING", "INREPEAT"),
+    ("S5", "TCF4"): (14, 60, "SPANNING", "INREPEAT"),
     ("S6", "AFF3"): (9, 31, "SPANNING", "FLANKING"),
+    ("S6", "ARX_2"): (12, 22, "SPANNING", "FLANKING"),
 }
+
+#: Read length per family, from the members' ExpansionHunter JSON: AU-X-1 is
+#: an older 100 bp genome.
+EH_READ_LENGTH = {"1001": 150, "AU-X-1": 100}
 
 _SEX = {"1": "male", "2": "female"}
 _PHENO = {"1": "unaffected", "2": "affected"}
 
 
-def _eh_class(count, normal, inter, patho) -> str:
-    if normal == "." and inter == "." and patho == ".":
+def _eh_class(count, normal, inter, premut, patho) -> str:
+    if normal == "." and inter == "." and premut == "." and patho == ".":
         return "."
     if patho != "." and count >= patho:
         return "pathogenic"
+    if premut != "." and count >= premut:
+        return "premutation"
     if inter != "." and count >= inter:
         return "intermediate"
     if normal == "." or count <= normal:
@@ -365,12 +386,40 @@ def _eh_class(count, normal, inter, patho) -> str:
     return "above_normal"
 
 
+def _eh_confidence(count, cls, spanning, inrepeat, motif, ref, patho, length) -> str:
+    """eh_family_table's confidence of one allele past normal."""
+    if count == "." or cls in (".", "normal"):
+        return "."
+    span = length - 20
+    if "N" in motif or count * len(motif) <= span:
+        return "ok" if spanning >= 2 else "low"
+    if ref * len(motif) > span and patho != "." and patho * len(motif) < 2 * length:
+        return "low"
+    return "ok" if inrepeat >= 3 else "low"
+
+
+def _eh_severity(status, confidences, report) -> str:
+    """eh_family_table's severity of a row."""
+    rank = {"pathogenic": 0, "premutation": 1, "intermediate": 2, "carrier": 2}.get(
+        status
+    )
+    if rank is None:
+        return "."
+    if report == "risk":
+        rank = 2
+    if "low" in confidences:
+        rank += 1
+    return ("high", "medium", "info")[min(rank, 2)]
+
+
 def _eh_rows(fid: str, members: Sequence[Sequence[str]]) -> List[List]:
     """One row per locus and member, as eh_family_table writes them."""
     ids = {m[1] for m in members}
     rows: List[List] = []
     longest: Dict = {}
-    for locus, (chrom, pos, end, motif, ref, disease, inh, n, i, p) in EH_LOCI.items():
+    length = EH_READ_LENGTH.get(fid, 150)
+    for locus, spec in EH_LOCI.items():
+        chrom, pos, end, motif, ref, disease, inh, n, i, pm, p, report = spec
         for m in members:
             sid, sex = m[1], _SEX.get(m[4].split(".")[0], ".")
             a1, a2, s1, s2 = EH_CALLS.get(
@@ -379,14 +428,15 @@ def _eh_rows(fid: str, members: Sequence[Sequence[str]]) -> List[List]:
             single = chrom == "chrX" and sex == "male"
             if single:
                 a1, a2, s2 = a2, ".", "."
-            classes = [_eh_class(a, n, i, p) if a != "." else "." for a in (a1, a2)]
+            classes = [_eh_class(a, n, i, pm, p) if a != "." else "." for a in (a1, a2)]
             ranked = [c for c in classes if c != "."]
             if not ranked:
                 status = "."
             elif inh == "AR" and len(ranked) == 2 and ranked.count("pathogenic") == 1:
                 status = "carrier"
             else:
-                order = ["normal", "above_normal", "intermediate", "pathogenic"]
+                order = ["normal", "above_normal", "intermediate", "premutation",
+                         "pathogenic"]  # fmt: skip
                 status = max(ranked, key=order.index)
             father = m[2] if m[2] in ids else "."
             mother = m[3] if m[3] in ids else "."
@@ -394,15 +444,30 @@ def _eh_rows(fid: str, members: Sequence[Sequence[str]]) -> List[List]:
                 longest[(x, locus)] for x in (father, mother) if (x, locus) in longest
             ]
             low = sid == "S6" and locus == "ARX_2"
+            # (spanning, in-repeat) reads of each allele
+            reads = [(12, 0)]
+            if a2 != ".":
+                reads.append(
+                    (9 if s2 == "SPANNING" else 0, 4 if s2 == "INREPEAT" else 0)
+                )
+            reads.append((0, 0))
+            confidences = [
+                _eh_confidence(a, c, r[0], r[1], motif, ref, p, length)
+                if inh != "."
+                else "."
+                for a, c, r in zip((a1, a2), classes, reads)
+            ]
+            severity = _eh_severity(status, confidences, report) if inh != "." else "."
             rows.append([
                 fid, sid, father, mother, sex, _PHENO.get(m[5].split(".")[0], "."),
                 locus, chrom, pos, end, motif, ref, "LowDepth" if low else "PASS",
                 "1" if single else "0/1",
                 a1, a2, f"{a1}-{a1}", "." if a2 == "." else f"{a2}-{a2 + 3}", s1, s2,
-                12, 0 if a2 == "." else 9, 30, 0 if a2 == "." else 28,
-                0, 0 if a2 == "." or s2 != "INREPEAT" else 4, 8.5 if low else 31.2,
-                disease, inh, n, i, p, classes[0], classes[1], status,
-                max(parents) if parents else ".",
+                reads[0][0], 0 if a2 == "." else reads[1][0], 30,
+                0 if a2 == "." else 28, 0, 0 if a2 == "." else reads[1][1],
+                8.5 if low else 31.2, disease, inh, n, i, p, classes[0], classes[1],
+                status, max(parents) if parents else ".", pm, report, length,
+                confidences[0], confidences[1], severity,
             ])  # fmt: skip
             longest[(sid, locus)] = max(a for a in (a1, a2) if a != ".")
     return rows
@@ -462,26 +527,29 @@ def build_cohort_str_results(cohort_dir: Path, name: str, rows: List[List]) -> N
         [[*r, pct(r)] for r in rows],
     )
     loci_rows = []
-    for locus, (chrom, pos, end, motif, _ref, disease, inh, n, i, p) in EH_LOCI.items():
+    statuses = ("pathogenic", "premutation", "carrier", "intermediate", "above_normal")
+    severities = ("high", "medium", "info")
+    for locus, spec in EH_LOCI.items():
+        chrom, pos, end, motif, _ref, disease, inh, n, i, pm, p, report = spec
         values = sorted(by_locus[locus])
         mine = [r for r in rows if r[col["locus"]] == locus]
-        count = {
-            s: sum(r[col["status"]] == s for r in mine)
-            for s in ("pathogenic", "carrier", "intermediate", "above_normal")
-        }
+        count = {s: sum(r[col["status"]] == s for r in mine) for s in statuses}
+        count.update(
+            {s: sum(r[col["severity"]] == s for r in mine) for s in severities}
+        )
         loci_rows.append([
-            locus, chrom, pos, end, motif, disease, inh, n, i, p, len(mine), len(values),
-            values[len(values) // 2], values[-1], values[-1], values[-1], values[-1],
-            count["pathogenic"], count["carrier"], count["intermediate"],
-            count["above_normal"], sum(r[col["filter"]] != "PASS" for r in mine),
+            locus, chrom, pos, end, motif, disease, inh, n, i, pm, p, report, len(mine),
+            len(values), values[len(values) // 2], values[-1], values[-1], values[-1],
+            values[-1], *(count[s] for s in statuses + severities),
+            sum(r[col["filter"]] != "PASS" for r in mine),
         ])  # fmt: skip
     write_tsv(
         edir / f"{name}.{EH_LABEL}.loci.tsv",
         ["locus", "chrom", "pos", "end", "motif", "disease", "inheritance", "normal_max",
-         "intermediate_min", "pathogenic_min", "n_samples", "n_founders",
-         "founders_median", "founders_p95", "founders_p99", "founders_p99.9",
-         "founders_max", "n_pathogenic", "n_carrier", "n_intermediate",
-         "n_above_normal", "n_not_pass"],
+         "intermediate_min", "premutation_min", "pathogenic_min", "report",
+         "n_samples", "n_founders", "founders_median", "founders_p95", "founders_p99",
+         "founders_p99.9", "founders_max", *(f"n_{s}" for s in statuses + severities),
+         "n_not_pass"],
         loci_rows,
     )  # fmt: skip
     write_tsv(
@@ -489,7 +557,7 @@ def build_cohort_str_results(cohort_dir: Path, name: str, rows: List[List]) -> N
         [*EH_COLUMNS, "cohort_percentile", "founders_median", "founders_p99.9",
          "founders_max"],
         [[*r, pct(r), 10, 12, 12] for r in rows
-         if r[col["status"]] in ("pathogenic", "carrier", "intermediate")],
+         if r[col["severity"]] in ("high", "medium")],
     )  # fmt: skip
 
 
@@ -1002,8 +1070,8 @@ QC_SAMPLE_COLUMNS = [
     "family_id", "sample", "father", "mother", "pedigree_sex", "inferred_sex",
     "karyotype", "sex_evidence", "x_copies", "y_copies", "somalier_x_copies",
     "somalier_y_copies", "x_het_rate", "x_sites", "depth_mean", "n_sites_called",
-    "het_hom_alt_ratio", "contamination_charr", "p_middling_ab",
-    "trio_informative_sites", "trio_mendelian_error_rate", "flags",
+    "het_hom_alt_ratio", "contamination_charr", "charr_sites", "somalier_charr",
+    "p_middling_ab", "trio_informative_sites", "trio_mendelian_error_rate", "flags",
 ]  # fmt: skip
 QC_PAIR_COLUMNS = [
     "family_id_a", "sample_a", "family_id_b", "sample_b", "n_sites", "ibs0",
@@ -1018,10 +1086,10 @@ QC_FLAG_COLUMNS = [
 
 #: sample -> (inferred sex, karyotype, X, Y, X het, CHARR, trio sites, trio rate)
 QC_SAMPLES = {
-    "S1": ("male", "XY", 0.99, 0.91, 0.0, 0.021, None, None),
+    "S1": ("male", "XY", 0.99, 0.91, 0.0, 0.012, None, None),
     "S2": ("female", "XX", 1.99, 0.0, 0.62, 0.018, None, None),
-    "S3": ("male", "XY", 0.99, 0.90, 0.0, 0.071, 4500000, 0.0008),
-    "S5": ("male", "XXY", 1.98, 0.90, 0.35, 0.020, None, None),
+    "S3": ("male", "XY", 0.99, 0.90, 0.0, 0.031, 4500000, 0.0008),
+    "S5": ("male", "XXY", 1.98, 0.90, 0.35, 0.015, None, None),
     "S6": ("male", "XY", 1.00, 0.92, 0.0, 0.019, None, None),
 }
 
@@ -1029,7 +1097,8 @@ QC_SAMPLES = {
 #: observed, PO opposite-hom rate, status)
 QC_PAIRS = {
     "1001": [
-        ("S1", "S2", 0.0102, 0.1800, 0.0, "unrelated", "unrelated", None, "ok"),
+        ("S1", "S2", 0.0600, 0.1400, 0.0, "unrelated", "third-degree", None,
+         "mismatch"),
         ("S1", "S3", 0.0051, 0.1700, 0.25, "parent-offspring", "unrelated", 0.0300,
          "mismatch"),
         ("S2", "S3", 0.2512, 0.0, 0.25, "parent-offspring", "parent-offspring",
@@ -1047,7 +1116,11 @@ QC_FLAGS = {
          "S1 is not the father of S3: expected parent-offspring (kinship 0.2500),"
          " observed unrelated (kinship 0.0051, ibs0/ibs2 0.1700, 16200 sites);"
          " opposite homozygotes at 0.0300 of 4000000 sites in the family BCF"),
-        ("S3", ".", "POSSIBLE_CONTAMINATION", "medium", "CHARR 0.071"),
+        ("S1", "S2", "CONSANGUINITY", "info",
+         "spouses: expected unrelated (kinship 0.0000), observed third-degree"
+         " (kinship 0.0600, ibs0/ibs2 0.1400, 16200 sites)"),
+        ("S3", ".", "POSSIBLE_CONTAMINATION", "medium",
+         "CHARR 0.031 at 8200 sites: about 3.1% of the reads from another person"),
     ],
     "AU-X-1": [
         ("S5", ".", "KARYOTYPE_XXY", "high", "copy numbers X 1.98 Y 0.90 (coverage)"),
@@ -1056,8 +1129,14 @@ QC_FLAGS = {
     ],
 }  # fmt: skip
 
-#: The cross-family pair the cohort sees: S2 (1001) and S5 (AU-X-1).
-QC_CROSS_PAIR = ("1001", "S2", "AU-X-1", "S5", 0.1100, 0.0500)
+#: The cross-family pairs the cohort sees: S2 (1001) and S5 (AU-X-1), second
+#: degree with the IBS0 of relatives (high), and S1 (1001) and S5 again,
+#: third degree (information).
+QC_CROSS_PAIRS = [
+    ("1001", "S2", "AU-X-1", "S5", 0.1100, 0.0500, "second-degree", "high", ""),
+    ("1001", "S1", "AU-X-1", "S5", 0.0500, 0.1400, "third-degree", "info",
+     "; the third degree is within the reach of shared ancestry or admixture"),
+]  # fmt: skip
 
 _PED_SEX = {"1": "male", "2": "female"}
 
@@ -1102,7 +1181,7 @@ def build_qc_results(
                 fid, sid, _qc_parent(father), _qc_parent(mother),
                 _PED_SEX.get(sex.replace(".0", ""), "unknown"), inferred, karyotype,
                 "coverage", _f4(x), _f4(y), _f4(x), _f4(y), _f4(het), 330, "35.0000",
-                16800, "1.9000", _f4(charr), "0.0230",
+                16800, "1.9000", _f4(charr), 8200, _f4(4 * charr), "0.0230",
                 trio_n if trio_n is not None else ".", _f4(trio_rate),
                 ",".join(sorted(set(by_sample.get(sid, [])))) or ".",
             ]
@@ -1120,24 +1199,26 @@ def build_qc_results(
 def build_cohort_qc_results(
     cohort_dir: Path, name: str, families: List[Dict[str, List[List]]]
 ) -> None:
-    """The cohort tables: the families', plus the cross-family pair and its flag."""
+    """The cohort tables: the families', plus the cross-family pairs and their flags."""
     qc = cohort_dir / "qc"
-    fa, a, fb, b, phi, ratio = QC_CROSS_PAIR
-    cross_flag = [
-        "cohort", f"{fa},{fb}", a, b, "CRYPTIC_RELATED", "high",
-        f"families {fa} and {fb}: observed second-degree (kinship {phi:.4f},"
-        f" ibs0/ibs2 {ratio:.4f}, 16200 sites)",
+    cross_flags = [
+        ["cohort", f"{fa},{fb}", a, b, "CRYPTIC_RELATED", severity,
+         f"families {fa} and {fb}: observed {observed} (kinship {phi:.4f},"
+         f" ibs0/ibs2 {ratio:.4f}, 16200 sites){note}"]
+        for fa, a, fb, b, phi, ratio, observed, severity, note in QC_CROSS_PAIRS
     ]  # fmt: skip
+    related = {s for p in QC_CROSS_PAIRS for s in (p[1], p[3])}
     samples = [list(r) for fam in families for r in fam["samples"]]
     for row in samples:
-        if row[1] in (a, b):
+        if row[1] in related:
             codes = set(row[-1].split(",")) - {"."} | {"CRYPTIC_RELATED"}
             row[-1] = ",".join(sorted(codes))
     pairs = [r for fam in families for r in fam["pairs"]] + [
-        _qc_pair_row(fa, a, fb, b, phi, ratio, 0.0, "unrelated", "second-degree",
-                     None, "mismatch")
+        _qc_pair_row(fa, a, fb, b, phi, ratio, 0.0, "unrelated", observed, None,
+                     "mismatch")
+        for fa, a, fb, b, phi, ratio, observed, _sev, _note in QC_CROSS_PAIRS
     ]  # fmt: skip
-    flags = [r for fam in families for r in fam["flags"]] + [cross_flag]
+    flags = [r for fam in families for r in fam["flags"]] + cross_flags
     write_tsv(qc / f"{name}.{QC_LABEL}.samples.tsv", QC_SAMPLE_COLUMNS, samples)
     write_tsv(qc / f"{name}.{QC_LABEL}.pairs.tsv", QC_PAIR_COLUMNS, pairs)
     write_tsv(qc / f"{name}.{QC_LABEL}.flags.tsv", QC_FLAG_COLUMNS, flags)
@@ -1160,6 +1241,8 @@ QC_ACKS = [
      "2026-09-03T10:00:00"],
     ["POSSIBLE_CONTAMINATION", "1001", "S3", "", "withdrawn", "", "curator",
      "2026-09-04T10:00:00"],
+    ["CONSANGUINITY", "1001", "S1", "S2", "explained",
+     "Declared: the parents are second cousins", "curator", "2026-09-05T10:00:00"],
 ]  # fmt: skip
 
 

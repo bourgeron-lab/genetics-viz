@@ -29,6 +29,9 @@ categories:
   karyotype:
     label: "Sex chromosomes"
     color: "#00838f"
+  upd:
+    label: "Uniparental disomy"
+    color: "#5d4037"
   mendelian:
     label: "Mendelian"
     color: "#4e342e"
@@ -83,12 +86,27 @@ flags:
     explain: "First-degree relatedness where the pedigree declares half siblings."
   UNEXPECTED_RELATED_IN_FAMILY:
     category: family_relatedness
-    label: "Related, declared unrelated"
+    label: "First-degree, declared otherwise"
     reader_label: "Pedigree relationship inconsistent"
     explain: >-
-      Two members the pedigree leaves unrelated are related. Between the
-      parents this is a consanguinity reading; between founders, undeclared
-      siblings.
+      First-degree relatives by their genotypes, though both have both parents
+      recorded and the pedigree does not make them so: a sample swap or a
+      pedigree error.
+  RELATED_BEYOND_PEDIGREE:
+    category: family_relatedness
+    label: "Closer than declared"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: >-
+      Closer than the pedigree says, which its missing parents allow: siblings
+      whose parents are not in it, or a relative through a parent written 0.
+      Information, not a contradiction.
+  CONSANGUINITY:
+    category: family_relatedness
+    label: "Consanguinity"
+    reader_label: "Pedigree relationship inconsistent"
+    explain: >-
+      The two parents of a member are related. Expect longer runs of
+      homozygosity in their children (ROH tab).
   EXPECTED_RELATED_UNRELATED:
     category: family_relatedness
     label: "Unrelated, declared related"
@@ -106,16 +124,35 @@ flags:
     label: "Duplicate or MZ twin"
     reader_label: "Duplicate sample"
     explain: >-
-      Genetically identical. Either monozygotic twins, or the same person
-      sequenced twice (under two IDs, or one sample loaded twice).
+      Genetically identical, and not same-sex siblings: the same person
+      sequenced twice (under two IDs, or one sample loaded twice), or
+      undeclared monozygotic twins.
+  MZ_TWIN_CANDIDATE:
+    category: family_relatedness
+    label: "MZ twin candidate"
+    reader_label: "Possible identical twins"
+    explain: >-
+      Siblings of the same sex who are one genome: monozygotic twins, or one
+      sample sequenced twice. Information when the twins are known.
+  UPD_CANDIDATE:
+    category: upd
+    label: "Uniparental disomy candidate"
+    reader_label: "Uniparental disomy"
+    explain: >-
+      A recorded parent and child whose opposite homozygotes lie on one
+      chromosome: over that span the child has no allele from this parent. No
+      heterozygous site at a normal depth is isodisomy; a lower depth, a
+      deletion of the parent's copy. The evidence gives the span. Replaces
+      "Not the declared parent".
   CRYPTIC_RELATED:
     category: cross_family
     label: "Related across families"
     reader_label: "Related to another family"
     explain: >-
-      Related to a member of another family. One sample related to many
-      families at third degree is more likely contamination or population
-      structure than many real relatives.
+      Related to a member of another family. High at the second degree or
+      closer with the IBS0 of relatives. Information at the third degree, or
+      when the IBS0 is that of unrelated pairs: shared ancestry or admixture
+      reach that far.
   SAMPLE_SWAP_CANDIDATE:
     category: cross_family
     label: "Sample swap candidate"
@@ -123,6 +160,14 @@ flags:
     explain: >-
       Unrelated to its own family, but closely related to someone in another
       family: the sample probably belongs there.
+  RELATEDNESS_UNRELIABLE:
+    category: cross_family
+    label: "Relatedness unreliable"
+    reader_label: "Relatedness unreliable"
+    explain: >-
+      CHARR of 0.05 or more: contamination raises the sample's kinship with
+      everyone, so its pairs with other families are left out (duplicates
+      excepted).
   SEX_MISMATCH:
     category: sex
     label: "Sex mismatch"
@@ -160,8 +205,9 @@ flags:
     label: "Possible contamination"
     reader_label: "Possible contamination"
     explain: >-
-      CHARR above the threshold: reads from another person may be mixed in.
-      Heterozygous calls, de novo calls in particular, are less reliable.
+      CHARR (Lu et al. 2023), the estimated fraction of reads from another
+      person: medium from 0.02, high from 0.05. Heterozygous calls, de novo
+      calls in particular, are less reliable.
   MENDELIAN_INCONSISTENT:
     category: mendelian
     label: "Mendelian errors"
@@ -243,7 +289,8 @@ thresholds:
   sex_tolerance: 0.25         # SEX_TOLERANCE: distance to a whole copy number
   x_het_one_x_max: 0.25       # X_HET_ONE_X_MAX
   x_het_two_x_min: 0.1        # X_HET_TWO_X_MIN
-  charr_max: 0.05             # CHARR_MAX
+  charr_warn: 0.02            # CHARR_WARN: POSSIBLE_CONTAMINATION medium from here
+  charr_high: 0.05            # CHARR_HIGH: high, and cross-family pairs left out
   po_opposite_hom_max: 0.01   # PO_OPPOSITE_HOM_MAX
 
 # Reference karyotypes drawn on the X/Y copy-number plot: (X, Y).

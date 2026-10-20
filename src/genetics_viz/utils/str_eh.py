@@ -7,7 +7,7 @@ each level, files named by the catalog label (``expansionhunter_catalog_name``):
 - family: ``<FID>.<label>.genotypes.tsv``, one row per locus and member;
 - cohort: ``<NAME>.<label>.genotypes.tsv`` (the family tables plus
   ``cohort_percentile``), ``.loci.tsv`` (per-locus founders' distribution and
-  status counts) and ``.flags.tsv`` (the flagged genotypes).
+  status and severity counts) and ``.flags.tsv`` (the flagged genotypes).
 
 Every table writes ``.`` for a missing value. ``allele1`` is the shorter
 allele; a male's chrX locus has one allele and ``allele2`` is ``.``.
@@ -16,8 +16,14 @@ family, so a member with neither is a *founder* of the family's data - the
 cohort statistics count only founders, so a family does not weigh an allele
 several times over.
 
-Classes, statuses and wording come from ``config/str.yaml``; the pipeline
-assigns them, the app only draws them.
+Each row has a ``severity``: ``high`` (pathogenic), ``medium`` (premutation)
+or ``info`` (intermediate, carrier, a common risk allele), one rank lower when
+an allele past normal is of low ``allele*_confidence`` for the sample's read
+length. Only high and medium are flagged. A table written before the pipeline
+had severities is flagged by status until its family is rebuilt.
+
+Classes, statuses, severities and wording come from ``config/str.yaml``; the
+pipeline assigns them, the app only draws them.
 """
 
 import logging
@@ -41,8 +47,12 @@ _CONFIG_PATH = Path(__file__).parent.parent / "config" / "str.yaml"
 
 EH_TOOL = "expansionhunter"
 
-#: Statuses the pipeline flags (``flags.tsv``), most severe first.
-FLAGGED = ("pathogenic", "carrier", "intermediate")
+#: Severities the pipeline flags (``flags.tsv``, REViewer).
+FLAGGED_SEVERITIES = ("high", "medium")
+
+#: Statuses flagged by tables with no ``severity`` column, written before the
+#: pipeline had one. The next run rebuilds them.
+LEGACY_FLAGGED = ("pathogenic", "carrier", "intermediate")
 
 #: Columns that hold identifiers or labels and must stay strings. Left to
 #: inference, ``family_id`` comes out as an integer (``88181200007``) and the
@@ -53,6 +63,7 @@ _STRING_COLUMNS = {
     "locus", "chrom", "motif", "filter", "genotype",
     "allele1_ci", "allele2_ci", "allele1_support", "allele2_support",
     "disease", "inheritance", "allele1_class", "allele2_class", "status",
+    "report", "allele1_confidence", "allele2_confidence", "severity",
 }  # fmt: skip
 
 
@@ -69,6 +80,8 @@ def _load_config() -> Dict[str, Any]:
 _CONFIG: Dict[str, Any] = _load_config()
 STATUSES: Dict[str, Dict[str, Any]] = _CONFIG.get("statuses", {})
 SUPPORT: Dict[str, Dict[str, str]] = _CONFIG.get("support", {})
+SEVERITIES: Dict[str, Dict[str, Any]] = _CONFIG.get("severities", {})
+LOW_CONFIDENCE: Dict[str, str] = _CONFIG.get("low_confidence", {})
 COMMON_FRACTION: float = float(_CONFIG.get("common_in_cohort_fraction", 0.05))
 REVIEWER_FILENAME: str = _CONFIG.get(
     "reviewer_filename", "{sample}.{label}.{locus}.svg"
@@ -78,11 +91,13 @@ REVIEWER_SUBDIR: str = _CONFIG.get("reviewer_subdir", "reviewer")
 
 def reload_str_config() -> None:
     """Reload the STR display configuration from YAML."""
-    global _CONFIG, STATUSES, SUPPORT, COMMON_FRACTION
+    global _CONFIG, STATUSES, SUPPORT, SEVERITIES, LOW_CONFIDENCE, COMMON_FRACTION
     global REVIEWER_FILENAME, REVIEWER_SUBDIR
     _CONFIG = _load_config()
     STATUSES = _CONFIG.get("statuses", {})
     SUPPORT = _CONFIG.get("support", {})
+    SEVERITIES = _CONFIG.get("severities", {})
+    LOW_CONFIDENCE = _CONFIG.get("low_confidence", {})
     COMMON_FRACTION = float(_CONFIG.get("common_in_cohort_fraction", 0.05))
     REVIEWER_FILENAME = _CONFIG.get("reviewer_filename", REVIEWER_FILENAME)
     REVIEWER_SUBDIR = _CONFIG.get("reviewer_subdir", REVIEWER_SUBDIR)
@@ -98,6 +113,37 @@ def status_info(status: Optional[str]) -> Dict[str, Any]:
         "color": info.get("color", "#9e9e9e"),
         "rank": int(info.get("rank", -1)),
     }
+
+
+def severity_info(severity: Optional[str]) -> Dict[str, Any]:
+    """Label, colour and rank of a row's severity; ``None`` (``.``) ranks 0."""
+    info = SEVERITIES.get(severity or "")
+    if info is None:
+        return {"key": None, "label": "", "color": "#9e9e9e", "rank": 0, "help": ""}
+    return {
+        "key": severity,
+        "label": info.get("label", severity),
+        "color": info.get("color", "#9e9e9e"),
+        "rank": int(info.get("rank", 0)),
+        "help": info.get("help", ""),
+    }
+
+
+def is_flagged(row: Dict[str, Any]) -> bool:
+    """Whether a genotype row is flagged: severity high or medium.
+
+    A row from a table with no ``severity`` column falls back to its status.
+    """
+    if "severity" in row:
+        return row["severity"] in FLAGGED_SEVERITIES
+    return row.get("status") in LEGACY_FLAGGED
+
+
+def flagged_expr(df: pl.DataFrame) -> pl.Expr:
+    """:func:`is_flagged` as a polars filter on ``df``'s rows."""
+    if "severity" in df.columns:
+        return pl.col("severity").is_in(FLAGGED_SEVERITIES)
+    return pl.col("status").is_in(LEGACY_FLAGGED)
 
 
 def support_code(support: Optional[str]) -> str:
@@ -322,15 +368,19 @@ def _coverage(value: Any) -> str:
 
 
 def thresholds_text(row: Dict[str, Any]) -> str:
-    """``≤20 · I 21 · P ≥24``, leaving out a threshold the locus lacks."""
+    """``N ≤40 · I ≥41 · PM ≥55 · P ≥201``, leaving out a threshold the locus
+    lacks; ``· risk`` when the locus reports a common risk allele."""
     parts = []
     if row.get("normal_max") is not None:
         parts.append(f"N ≤{_fmt(row['normal_max'])}")
     if row.get("intermediate_min") is not None:
         parts.append(f"I ≥{_fmt(row['intermediate_min'])}")
+    if row.get("premutation_min") is not None:
+        parts.append(f"PM ≥{_fmt(row['premutation_min'])}")
     if row.get("pathogenic_min") is not None:
         parts.append(f"P ≥{_fmt(row['pathogenic_min'])}")
-    return " · ".join(parts) or "no thresholds"
+    text = " · ".join(parts) or "no thresholds"
+    return f"{text} · risk" if row.get("report") == "risk" else text
 
 
 def longest_allele(row: Dict[str, Any]) -> Optional[int]:
@@ -341,7 +391,10 @@ def longest_allele(row: Dict[str, Any]) -> Optional[int]:
 
 
 def allele_badges(row: Dict[str, Any], percentile: Any = None) -> List[Dict[str, str]]:
-    """One badge per allele: repeat count plus support code, coloured by class."""
+    """One badge per allele: repeat count plus support code, coloured by class.
+
+    A low-confidence allele ends in the ``low_confidence`` code (``?``).
+    """
     badges = []
     for i in (1, 2):
         count = _int(row.get(f"allele{i}"))
@@ -349,6 +402,7 @@ def allele_badges(row: Dict[str, Any], percentile: Any = None) -> List[Dict[str,
             continue
         support = row.get(f"allele{i}_support")
         code = support_code(support)
+        low = row.get(f"allele{i}_confidence") == "low"
         info = status_info(row.get(f"allele{i}_class"))
         reads = (
             f"{row.get(f'allele{i}_spanning') or 0} spanning,"
@@ -362,13 +416,18 @@ def allele_badges(row: Dict[str, Any], percentile: Any = None) -> List[Dict[str,
             reads,
             _coverage(row.get("locus_coverage")),
         ]
+        if low:
+            tip.insert(2, "low confidence")
         if row.get("filter") and row.get("filter") != "PASS":
             tip.append(row["filter"])
         if percentile is not None:
             tip.append(f"cohort pct {_fmt(percentile)}")
+        label = f"{count}·{code}" if code else str(count)
+        if low:
+            label += LOW_CONFIDENCE.get("code", "?")
         badges.append(
             {
-                "label": f"{count}·{code}" if code else str(count),
+                "label": label,
                 "color": info["color"],
                 "tooltip": " · ".join(tip),
             }
@@ -440,6 +499,13 @@ def is_transmission(row: Dict[str, Any]) -> bool:
     return longest > parents_max and status_info(row.get("status"))["rank"] >= 1
 
 
+def loci_flagged(loci_row: Dict[str, Any]) -> int:
+    """Members flagged at a ``loci.tsv`` row: high plus medium, or by status
+    for a table written before severities."""
+    keys = FLAGGED_SEVERITIES if "n_high" in loci_row else LEGACY_FLAGGED
+    return sum(_int(loci_row.get(f"n_{k}")) or 0 for k in keys)
+
+
 def common_in_cohort(loci_row: Optional[Dict[str, Any]]) -> Optional[float]:
     """Share of the cohort flagged at this locus, when it passes the configured fraction."""
     if not loci_row:
@@ -447,8 +513,7 @@ def common_in_cohort(loci_row: Optional[Dict[str, Any]]) -> Optional[float]:
     n = _int(loci_row.get("n_samples"))
     if not n:
         return None
-    flagged = sum(_int(loci_row.get(f"n_{s}")) or 0 for s in FLAGGED)
-    share = flagged / n
+    share = loci_flagged(loci_row) / n
     return share if share >= COMMON_FRACTION else None
 
 
@@ -494,7 +559,8 @@ def family_locus_rows(
     validations: Optional[Dict[Tuple[str, str], str]] = None,
     diagnostics: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Pivot a family genotype table to one row per locus, most severe first.
+    """Pivot a family genotype table to one row per locus, most severe first:
+    by the worst severity, then the worst status.
 
     Each selected member gets ``m<i>_badges`` (one badge per allele) and
     ``m<i>_max`` (the longest allele, for sorting), ``i`` being their index in
@@ -552,6 +618,7 @@ def family_locus_rows(
             "thresholds": thresholds_text(info),
         }
         worst = status_info(None)
+        worst_severity = severity_info(None)
         flags: List[Dict[str, str]] = []
         for sample in wanted:
             key = member_key(index[sample])
@@ -573,6 +640,9 @@ def family_locus_rows(
             s = status_info(g.get("status"))
             if s["rank"] > worst["rank"]:
                 worst = s
+            sev = severity_info(g.get("severity"))
+            if sev["rank"] > worst_severity["rank"]:
+                worst_severity = sev
             if is_transmission(g):
                 flags.append(
                     {
@@ -589,15 +659,26 @@ def family_locus_rows(
         row["worst_badges"] = [
             {"label": worst["label"], "color": worst["color"], "tooltip": ""}
         ]
+        row["severity_rank"] = worst_severity["rank"]
+        row["severity"] = ""
+        row["severity_badges"] = (
+            [
+                {
+                    "label": worst_severity["label"],
+                    "color": worst_severity["color"],
+                    "tooltip": worst_severity["help"],
+                }
+            ]
+            if worst_severity["key"]
+            else []
+        )
 
         loci_row = loci_by_name.get(locus)
         if loci_row:
             row["founders_median"] = loci_row.get("founders_median")
             row["founders_p999"] = loci_row.get("founders_p99.9")
             row["founders_max"] = loci_row.get("founders_max")
-            row["cohort_flagged"] = sum(
-                _int(loci_row.get(f"n_{s}")) or 0 for s in FLAGGED
-            )
+            row["cohort_flagged"] = loci_flagged(loci_row)
             share = common_in_cohort(loci_row)
             if share is not None:
                 flags.insert(
@@ -605,9 +686,9 @@ def family_locus_rows(
                     {
                         "label": "common in cohort",
                         "color": "#455a64",
-                        "tooltip": f"{share:.0%} of the cohort is pathogenic, carrier"
-                        " or intermediate here: suspect the locus, catalog or"
-                        " thresholds before the individual",
+                        "tooltip": f"{share:.0%} of the cohort is flagged here:"
+                        " suspect the locus, catalog or thresholds before the"
+                        " individual",
                     },
                 )
         else:
@@ -617,7 +698,7 @@ def family_locus_rows(
         row["flags"] = ""
         rows.append(row)
 
-    rows.sort(key=lambda r: (-r["worst_rank"], r["order"]))
+    rows.sort(key=lambda r: (-r["severity_rank"], -r["worst_rank"], r["order"]))
     return rows
 
 
@@ -680,17 +761,26 @@ def restrict_to(
 def cohort_locus_rows(
     context: CohortContext, keys: List[Tuple[Optional[str], str]]
 ) -> List[Dict[str, Any]]:
-    """One row per locus: how many of the selected individuals reach each status.
+    """One row per locus: how many of the selected individuals reach each
+    severity and status.
 
     The founders' statistics come from ``loci.tsv`` and describe the whole
-    cohort; the counts follow the selection. Most flagged first.
+    cohort; the counts follow the selection. Most flagged first. ``n_high``
+    and ``n_medium`` are ``None`` for a table written before severities.
     """
     if context.genotypes is None:
         return []
     sub = restrict_to(context.genotypes, keys)
+    has_severity = "severity" in sub.columns
     counts: Dict[str, Dict[str, int]] = {}
-    for r in sub.group_by(["locus", "status"]).len().to_dicts():
-        counts.setdefault(r["locus"], {})[r["status"]] = r["len"]
+    for column in ("status", "severity") if has_severity else ("status",):
+        for r in sub.group_by(["locus", column]).len().to_dicts():
+            if r[column] is not None:
+                counts.setdefault(r["locus"], {})[r[column]] = r["len"]
+    flagged_counts = {
+        r["locus"]: r["len"]
+        for r in sub.filter(flagged_expr(sub)).group_by("locus").len().to_dicts()
+    }
     loci = (
         context.loci.to_dicts()
         if context.loci is not None
@@ -706,7 +796,6 @@ def cohort_locus_rows(
     rows = []
     for position, loc in enumerate(loci):
         c = counts.get(loc["locus"], {})
-        flagged = sum(c.get(s, 0) for s in FLAGGED)
         share = common_in_cohort(loc)
         rows.append(
             {
@@ -715,10 +804,13 @@ def cohort_locus_rows(
                 "locus": loc["locus"],
                 "disease": loc.get("disease") or "",
                 "inheritance": loc.get("inheritance") or "",
+                "n_high": c.get("high", 0) if has_severity else None,
+                "n_medium": c.get("medium", 0) if has_severity else None,
                 "n_pathogenic": c.get("pathogenic", 0),
+                "n_premutation": c.get("premutation", 0),
                 "n_carrier": c.get("carrier", 0),
                 "n_intermediate": c.get("intermediate", 0),
-                "n_flagged": flagged,
+                "n_flagged": flagged_counts.get(loc["locus"], 0),
                 "founders_p999": loc.get("founders_p99.9"),
                 "founders_max": loc.get("founders_max"),
                 "thresholds": thresholds_text(loc),
@@ -744,17 +836,20 @@ def cohort_locus_rows(
 def cohort_flagged_rows(
     context: CohortContext, keys: List[Tuple[Optional[str], str]]
 ) -> List[Dict[str, Any]]:
-    """The selected individuals' pathogenic, carrier and intermediate genotypes.
+    """The selected individuals' flagged genotypes (:func:`is_flagged`).
 
     Taken from the genotype table rather than ``flags.tsv``: it is already in
-    memory and carries the same rows, so a third file is not read.
+    memory and carries the same rows, so a third file is not read. High
+    first, then by status.
     """
     if context.genotypes is None:
         return []
-    sub = restrict_to(context.genotypes, keys).filter(pl.col("status").is_in(FLAGGED))
+    sub = restrict_to(context.genotypes, keys)
+    sub = sub.filter(flagged_expr(sub))
     rows = []
     for r in sub.to_dicts():
         info = status_info(r.get("status"))
+        sev = severity_info(r.get("severity"))
         rows.append(
             {
                 "id": f"{r['family_id']}|{r['sample']}|{r['locus']}",
@@ -766,6 +861,19 @@ def cohort_flagged_rows(
                 "status_badges": [
                     {"label": info["label"], "color": info["color"], "tooltip": ""}
                 ],
+                "severity": sev["label"],
+                "severity_rank": sev["rank"],
+                "severity_badges": (
+                    [
+                        {
+                            "label": sev["label"],
+                            "color": sev["color"],
+                            "tooltip": sev["help"],
+                        }
+                    ]
+                    if sev["key"]
+                    else []
+                ),
                 "alleles": "",
                 "alleles_badges": allele_badges(r, r.get("cohort_percentile")),
                 "allele_values": [
@@ -777,7 +885,14 @@ def cohort_flagged_rows(
                 "pct": r.get("cohort_percentile"),
             }
         )
-    rows.sort(key=lambda r: (-r["status_rank"], r["locus"], -(r["pct"] or 0)))
+    rows.sort(
+        key=lambda r: (
+            -r["severity_rank"],
+            -r["status_rank"],
+            r["locus"],
+            -(r["pct"] or 0),
+        )
+    )
     return rows
 
 
@@ -788,18 +903,19 @@ def cohort_flagged_rows(
 #: Genotype columns in export order; any other column of the table follows.
 _EXPORT_COLUMNS = [
     "father", "mother", "locus", "chrom", "pos", "end", "motif", "ref_units",
-    "disease", "inheritance", "status", "genotype", "allele1", "allele2",
-    "allele1_ci", "allele2_ci", "allele1_class", "allele2_class",
-    "allele1_support", "allele2_support", "normal_max", "intermediate_min",
-    "pathogenic_min", "cohort_percentile", "parents_max_allele", "filter",
-    "locus_coverage",
+    "disease", "inheritance", "severity", "status", "genotype", "allele1",
+    "allele2", "allele1_ci", "allele2_ci", "allele1_class", "allele2_class",
+    "allele1_confidence", "allele2_confidence", "allele1_support",
+    "allele2_support", "read_length", "normal_max", "intermediate_min",
+    "premutation_min", "pathogenic_min", "report", "cohort_percentile",
+    "parents_max_allele", "filter", "locus_coverage",
 ]  # fmt: skip
 
 
 def genotypes_export(
     genotypes: pl.DataFrame,
     people: List[Dict[str, Any]],
-    statuses: Optional[Collection[str]] = None,
+    flagged_only: bool = False,
     loci: Optional[Collection[str]] = None,
     context: Optional[CohortContext] = None,
     validations: Optional[Dict[Tuple[str, str], str]] = None,
@@ -807,7 +923,7 @@ def genotypes_export(
 ) -> pl.DataFrame:
     """The people's genotypes, one row per locus and person.
 
-    ``statuses`` and ``loci`` restrict the rows. A family table gets its
+    ``flagged_only`` (:func:`is_flagged`) and ``loci`` restrict the rows. A family table gets its
     ``cohort_percentile`` from ``context``; ``validations`` and
     ``diagnostics`` (``(locus, sample) -> status``) add the curators' columns.
     The pipeline's sex and phenotype words give way to the pedigree codes.
@@ -815,8 +931,8 @@ def genotypes_export(
     keys = people_frame(people).rename({"FID": "family_id", "IID": "sample"})
     sub = genotypes.drop([c for c in ("sex", "phenotype") if c in genotypes.columns])
     sub = sub.join(keys, on=["family_id", "sample"], how="inner", maintain_order="left")
-    if statuses is not None:
-        sub = sub.filter(pl.col("status").is_in(list(statuses)))
+    if flagged_only:
+        sub = sub.filter(flagged_expr(sub))
     if loci is not None:
         sub = sub.filter(pl.col("locus").is_in(list(loci)))
     if (

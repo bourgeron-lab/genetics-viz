@@ -165,13 +165,16 @@ async def test_family_str_tab_pivots_members_and_adds_cohort_context(user, monke
     await user.should_see("compared with 3 founders", retries=30)
 
     table = tables[-1]
-    assert {"m0", "m1", "m2", "founders_max", "cohort_flagged"} <= set(table["columns"])
+    assert {"m0", "m1", "m2", "severity", "founders_max", "cohort_flagged"} <= set(
+        table["columns"]
+    )
     first = table["rows"][0]
     assert first["locus"] == "HTT"
     [locus_badge] = first["LocusBadges"]
     assert locus_badge["label"] == "HTT"
     assert locus_badge["href"] == "http://genetrek.test/?search=HTT"
-    assert [b["label"] for b in first["m2_badges"]] == ["18", "40·IR"]
+    assert [b["label"] for b in first["m2_badges"]] == ["18", "40"]
+    # HTT (high) and FMR1 (medium); FXN's carrier is info
     assert _tab(user, "EH").props.get("label") == "EH (2 flagged)"
 
 
@@ -210,7 +213,8 @@ async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
     flagged = next(t for t in tables if "alleles" in t["columns"])
     assert {(r["sample"], r["locus"]) for r in flagged["rows"]} == {
         ("S3", "HTT"),
-        ("S2", "FXN"),
+        ("S2", "FMR1"),
+        ("S6", "ARX_2"),
     }
     assert all(
         r["LocusBadges"][0]["href"].endswith("?search=" + r["locus"].split("_")[0])
@@ -219,7 +223,7 @@ async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
 
     individuals = tables[0]
     with user.client:
-        individuals["on_filter"]({"filters": {"FID": "AU"}})
+        individuals["on_filter"]({"filters": {"FID": "1002"}})
     await user.should_see("No flagged genotype among the individuals shown", retries=30)
     loci = [t for t in tables if "n_pathogenic" in t["columns"]][-1]
     assert sum(r["n_flagged"] for r in loci["rows"]) == 0
@@ -343,7 +347,8 @@ async def test_reviewer_images_and_why_one_is_missing(user, monkeypatch):
 
 
 async def test_flagged_genotype_without_reviewer_image(user, monkeypatch):
-    await open_str_locus(user, monkeypatch, "reader", locus="FXN")
+    # S2's FMR1 premutation is flagged (medium) but was not drawn.
+    await open_str_locus(user, monkeypatch, "reader", locus="FMR1")
     await user.should_see("S2: no REViewer image")
 
 

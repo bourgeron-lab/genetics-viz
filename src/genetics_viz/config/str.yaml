@@ -1,15 +1,19 @@
 # Short tandem repeats (STR): display configuration.
 #
-# The classes and statuses are assigned by the ghfc-ngs expansionhunter step
-# (modules/expansionhunter/scripts/eh_family_table) against the STRipy
-# thresholds; the app only words and colours them.
+# The classes, statuses, confidences and severities are assigned by the
+# ghfc-ngs expansionhunter step (modules/expansionhunter/scripts/eh_family_table)
+# against the STRipy thresholds; the app only words and colours them.
 
-# Allele class and member status -> label, colour, severity rank (higher is
-# worse). "unclassified" stands for '.', a locus with no thresholds row.
+# Allele class and member status -> label, colour, rank (higher is worse).
+# "unclassified" stands for '.', a locus with no thresholds row.
 statuses:
   pathogenic:
     label: "Pathogenic"
     color: "#c62828"
+    rank: 5
+  premutation:
+    label: "Premutation"
+    color: "#d84315"
     rank: 4
   carrier:
     label: "Carrier"
@@ -45,14 +49,47 @@ support:
     code: "IR"
     help: "In-repeat reads: an expansion beyond the read length."
 
-# A locus where this share of the cohort is pathogenic, carrier or
-# intermediate is flagged "common in cohort": the threshold or the catalog is
-# more likely at fault than the individuals (ARX_2, XYLT1).
+# A genotype row's severity -> label, colour, rank, meaning. High and medium
+# are the flagged rows (flags.tsv, REViewer); info stays in genotypes.tsv. A
+# low-confidence allele drops its row one rank. Tables written before the
+# pipeline had severities flag by status instead (pathogenic, carrier,
+# intermediate) until their family is rebuilt.
+severities:
+  high:
+    label: "High"
+    color: "#c62828"
+    rank: 3
+    help: "A pathogenic status."
+  medium:
+    label: "Medium"
+    color: "#ef6c00"
+    rank: 2
+    help: "A premutation, or a pathogenic status of low confidence."
+  info:
+    label: "Info"
+    color: "#757575"
+    rank: 1
+    help: >-
+      Intermediate, carrier or a common risk allele, or a premutation of low
+      confidence. Not flagged.
+
+# allele*_confidence `low`: an allele past normal that the sample's reads do
+# not support at its length (100 bp genomes, GC-rich and polyalanine loci).
+low_confidence:
+  code: "?"
+  help: >-
+    Low confidence: too few spanning or in-repeat reads for this length at the
+    sample's read length, a degenerate (GCN) motif without spanning reads, or a
+    locus whose normal alleles the reads cannot span.
+
+# A locus where this share of the cohort is flagged (severity high or medium)
+# is marked "common in cohort": the threshold or the catalog is more likely at
+# fault than the individuals.
 common_in_cohort_fraction: 0.05
 
 # REViewer images, written by the ghfc-ngs EXPANSIONHUNTER_REVIEWER step into
 # the sample's str/expansionhunter/<reviewer_subdir>/, for flagged genotypes
-# only (pathogenic, carrier, intermediate). Fields: sample, label (catalog),
+# only (severity high or medium). Fields: sample, label (catalog),
 # locus. The locus is the catalog's LocusId, which differs from the table's
 # VariantId at multi-variant loci (FXN_A is drawn as FXN).
 reviewer_subdir: "reviewer"

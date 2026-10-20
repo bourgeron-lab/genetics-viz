@@ -33,13 +33,18 @@ async def test_curator_sees_flags_evidence_and_cross_family_relatives(
     tables = await open_family_qc(user, monkeypatch, "curator")
     issues = _issues(tables)
     assert "evidence" in issues["columns"] and "other_family" in issues["columns"]
-    # The acknowledged cross-family flag comes last, greyed, with its note.
+    # The acknowledged flags (the cross-family second degree, the declared
+    # consanguinity) come last, greyed, with their note.
     assert [r["flag"] for r in issues["rows"]] == [
         "Not the declared parent",
         "Possible contamination",
         "Related across families",
+        "Related across families",
+        "Consanguinity",
     ]
-    cross = next(r for r in issues["rows"] if r["other_family"])
+    third = issues["rows"][2]
+    assert third["samples"] == "S1 – S5" and third["review"] == ""
+    cross = next(r for r in issues["rows"] if r["samples"] == "S2 – S5")
     assert cross["other_family"] == "AU-X-1" and cross["samples"] == "S2 – S5"
     assert cross["review"] == "Explained"
     assert cross["note"] == "Known first cousins: their mothers are sisters"
@@ -70,7 +75,7 @@ async def test_reader_gets_neutral_wording_and_declared_pairs_only(user, monkeyp
     )
     # Readers see the review, not a note that may name a relationship.
     assert "actions" not in issues["columns"] and issues["on_row_action"] is None
-    cross = next(r for r in issues["rows"] if r["other_family"])
+    cross = next(r for r in issues["rows"] if r["samples"] == "S2 – S5")
     assert cross["review"] == "Explained" and cross["note"] == "(hidden)"
     assert all("cousins" not in b["tooltip"] for b in cross["review_badges"])
     pairs = [t for t in tables if "expected_kinship" in t["columns"]][-1]
@@ -139,12 +144,13 @@ async def test_cohort_qc_panel_follows_the_filters(user, monkeypatch):
     await user.should_see("Flagged individuals", retries=30)
     await user.should_see("5 of 6 shown individuals checked", retries=30)
     flagged = [t for t in tables if "issues" in t["columns"]][-1]
-    # Most severe first, then the most flags: two for S3. S2 and S6 have only
-    # acknowledged flags, which the panel leaves out by default.
-    assert [r["sample"] for r in flagged["rows"]][0] == "S3"
+    # Most severe first, then the most flags: S1's NOT_PARENT and third degree
+    # in AU-X-1. S2 and S6 have only acknowledged flags, which the panel
+    # leaves out by default.
+    assert [r["sample"] for r in flagged["rows"]][0] == "S1"
     assert {r["sample"] for r in flagged["rows"]} == {"S1", "S3", "S5"}
-    await user.should_see("2 acknowledged flag(s) not counted")
-    await user.should_see("1 related pair(s) across families", retries=10)
+    await user.should_see("3 acknowledged flag(s) not counted")
+    await user.should_see("2 related pair(s) across families", retries=10)
 
     individuals = tables[0]
     with user.client:
@@ -163,12 +169,14 @@ async def test_cohort_table_qc_column_filters(user, monkeypatch):
     assert "QC" in individuals["columns"]
     by_sample = {r["Sample ID"]: r for r in individuals["rows"]}
     assert by_sample["S4"]["_qc_cats"] == ["Not checked"]
-    # The acknowledged cross-family flag is one grey badge, after the others.
+    # The acknowledged cross-family flag is one grey badge, after the others;
+    # the third degree with S1 is not acknowledged.
     assert [b["label"] for b in by_sample["S5"]["QC_badges"]] == [
+        "Across families",
         "Sex chromosomes",
         "Acknowledged",
     ]
-    assert "cousins" not in by_sample["S5"]["QC_badges"][1]["tooltip"]
+    assert "cousins" not in by_sample["S5"]["QC_badges"][2]["tooltip"]
     assert by_sample["S6"]["_qc_cats"] == ["Acknowledged", "No issue"]
     assert by_sample["S6"]["_qc_rank"] == 0
     with user.client:
@@ -179,7 +187,7 @@ async def test_cohort_table_qc_column_filters(user, monkeypatch):
     await user.should_see("3 individuals (of 6 total)", retries=10)
     with user.client:
         individuals["on_filter"]({"filters": {"QC": ["Acknowledged"]}})
-    await user.should_see("3 individuals (of 6 total)", retries=10)
+    await user.should_see("4 individuals (of 6 total)", retries=10)
 
 
 async def test_home_card_shows_the_qc_figure(user):
@@ -233,9 +241,10 @@ async def test_curator_acknowledges_and_withdraws_a_flag(user, monkeypatch, data
     await _wait_for_table(tables, built)
     issues = _issues(tables)
     assert [r["flag"] for r in issues["rows"]][0] == "Possible contamination"
-    # The header badge and the member icons follow: S1 has nothing left.
+    # The header badge and the member icons follow: S1 has nothing left, and
+    # S2's only flag, the declared consanguinity, was acknowledged already.
     await user.should_see("QC: 1 medium", retries=10)
-    assert len(_icons(user, "warning")) == 1 and len(_icons(user, "task_alt")) == 1
+    assert len(_icons(user, "warning")) == 1 and len(_icons(user, "task_alt")) == 2
 
     row = next(r for r in issues["rows"] if r["flag"] == "Not the declared parent")
     with user.client:
@@ -251,11 +260,12 @@ async def test_show_acknowledged_switch_hides_them(user, monkeypatch):
     tables = await open_family_qc(user, monkeypatch, "reader")
     built = len(tables)
     user.find(marker="qc-show-acked").click()
-    await user.should_see("1 acknowledged flag(s) hidden", retries=10)
+    await user.should_see("2 acknowledged flag(s) hidden", retries=10)
     await _wait_for_table(tables, built)
     assert [r["flag"] for r in _issues(tables)["rows"]] == [
         "Pedigree relationship inconsistent",
         "Possible contamination",
+        "Related to another family",
     ]
 
 
@@ -291,7 +301,7 @@ async def test_cohort_panel_switch_counts_acknowledged_flags(user, monkeypatch):
     await user.should_see("Flagged individuals", retries=30)
     built = len(tables)
     user.find(marker="cohort-qc-include-acked").click()
-    await user.should_see("2 acknowledged flag(s) counted", retries=30)
+    await user.should_see("3 acknowledged flag(s) counted", retries=30)
     await _wait_for_table(tables, built)
     flagged = [t for t in tables if "issues" in t["columns"]][-1]
     assert {r["sample"] for r in flagged["rows"]} == {"S1", "S2", "S3", "S5", "S6"}

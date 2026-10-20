@@ -29,7 +29,7 @@ from genetics_viz.utils.sample_qc_export import (
     samples_export,
 )
 from genetics_viz.utils.str_eh import (
-    FLAGGED,
+    FLAGGED_SEVERITIES,
     eh_path,
     genotypes_export,
     get_family_eh_dir,
@@ -185,14 +185,19 @@ def test_family_segments_and_kinship_exports(data_dir):
 def test_cohort_flagged_genotypes_export(data_dir):
     context = load_cohort_context(Cohort(data_dir), datagen.EH_LABEL)
     df = genotypes_export(
-        context.genotypes, _demo_people("S2", "S3", "S1"), statuses=FLAGGED
+        context.genotypes, _demo_people("S2", "S3", "S1"), flagged_only=True
     )
     assert df.columns[:4] == ["FID", "IID", "sex", "phenotype"]
-    assert {"locus", "allele1", "allele2", "status", "cohort_percentile"} <= set(
+    assert {"locus", "allele1", "allele2", "status", "severity", "premutation_min",
+            "allele2_confidence", "read_length", "cohort_percentile"} <= set(
         df.columns
-    )
-    assert set(df["status"].to_list()) <= set(FLAGGED)
-    assert ("S3", "HTT") in set(zip(df["IID"].to_list(), df["locus"].to_list()))
+    )  # fmt: skip
+    assert set(df["severity"].to_list()) <= set(FLAGGED_SEVERITIES)
+    # S2's FXN carrier is info, her FMR1 premutation medium
+    assert set(zip(df["IID"].to_list(), df["locus"].to_list())) == {
+        ("S3", "HTT"),
+        ("S2", "FMR1"),
+    }
     assert "S1" not in df["IID"].to_list()
     # Pedigree codes, not the pipeline's words.
     assert set(df["sex"].to_list()) <= {"1", "2", "-9"}
@@ -266,7 +271,9 @@ def test_samples_export_masks_karyotype_and_splits_acknowledged(data_dir, curato
     assert "(explained)" in by_iid["S6"]["acknowledged_flags"]
     assert by_iid["S6"]["worst_severity"] == ""
     assert by_iid["S3"]["worst_severity"] == "high"
-    assert {"depth_mean", "contamination_charr", "x_copies"} <= set(columns)
+    assert {"depth_mean", "contamination_charr", "somalier_charr", "x_copies"} <= set(
+        columns
+    )
 
 
 def test_pairs_export_hides_undeclared_pairs_from_readers(data_dir):
