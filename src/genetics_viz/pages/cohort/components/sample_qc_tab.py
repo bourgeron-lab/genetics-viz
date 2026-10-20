@@ -16,6 +16,10 @@ the tab draws first and fills in.
 
 Wording follows the user's role, as on the ROH tab: viewers get neutral
 labels, no evidence, and only the pairs the pedigree declares related.
+
+Curators acknowledge a flag from the Issues table (``sample_qc_acks``): it is
+then listed greyed with its review, and the "Show acknowledged" switch hides
+it. Acknowledged flags never mark a plot point.
 """
 
 import asyncio
@@ -26,7 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from nicegui import ui
 
 from genetics_viz.components.tanstack_table import DataTable
-from genetics_viz.utils.auth import can_write
+from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.roh import to_float
 from genetics_viz.utils.sample_qc import (
     HUB_MINIMUM,
@@ -56,6 +60,20 @@ from genetics_viz.utils.sample_qc import (
     severity_info,
     status_info,
 )
+from genetics_viz.utils.sample_qc_acks import (
+    STATUSES,
+    Ack,
+    AckKey,
+    ack_summary,
+    acknowledged_badges,
+    load_acks,
+    muted_color,
+    note_visible,
+    save_flag_ack,
+    ack_status_info,
+    split_acknowledged,
+    withdraw_flag_ack,
+)
 from genetics_viz.utils.sample_qc_plots import (
     kinship_matrix_option,
     metric_strip_option,
@@ -83,48 +101,181 @@ def _table_box() -> ui.element:
     return ui.element("div").classes("w-full min-w-0")
 
 
+def _badges(
+    flags: List[FlagRow], acks: Dict[AckKey, Ack], show_detail: bool
+) -> List[Dict[str, str]]:
+    """The flags' badges, the acknowledged ones greyed after the others."""
+    active, acked = split_acknowledged(flags, acks)
+    return flag_badges(active, show_detail) + acknowledged_badges(
+        acked, acks, show_detail
+    )
+
+
 # ---------------------------------------------------------------------------
 # 1. Issues
 # ---------------------------------------------------------------------------
 
 
+def _open_ack_dialog(
+    anchor: ui.element,
+    data_dir: Any,
+    flag: FlagRow,
+    ack: Optional[Ack],
+    on_saved: Callable[[], None],
+) -> None:
+    """Acknowledge a flag, change its review, or withdraw it (curators only)."""
+    anchor.clear()  # the previous review's dialog
+    with anchor:
+        dialog = ui.dialog()
+    with dialog, ui.card().classes("w-[36rem] max-w-full"):
+        ui.label("Review a sample QC flag").classes(
+            "text-lg font-semibold text-blue-700"
+        )
+        ui.label(f"{flag_title(flag, True)} — {' – '.join(flag.samples)}").classes(
+            "font-medium"
+        )
+        if flag.evidence:
+            ui.label(flag.evidence).classes("text-xs text-gray-600")
+        status = (
+            ui.radio(
+                {s: ack_status_info(s)["label"] for s in STATUSES},
+                value=ack.status if ack else STATUSES[0],
+            )
+            .props("inline dense")
+            .mark("qc-ack-status")
+        )
+        help_text = ui.label().classes("text-xs text-gray-500")
+
+        def show_help() -> None:
+            help_text.text = ack_status_info(status.value)["help"]
+
+        status.on_value_change(show_help)
+        show_help()
+        note = (
+            ui.textarea(
+                "Note",
+                value=ack.note if ack else "",
+                placeholder="Why it is expected, or what was checked",
+            )
+            .props("outlined autogrow")
+            .classes("w-full")
+            .mark("qc-ack-note")
+        )
+        ui.label(
+            "Viewers see that the flag was reviewed"
+            + (
+                " and this note."
+                if note_visible(flag, False)
+                else ", not this note: it may name a relationship."
+            )
+        ).classes("text-xs text-gray-500")
+
+        def finish(action: Callable[[], None], done: str) -> None:
+            try:
+                action()
+            except (PermissionError, ValueError) as err:
+                ui.notify(str(err), type="negative")
+                return
+            ui.notify(done, type="positive")
+            dialog.close()
+            on_saved()
+
+        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+            if ack is not None:
+                ui.button(
+                    "Withdraw",
+                    on_click=lambda: finish(
+                        lambda: withdraw_flag_ack(
+                            data_dir, flag, user=get_current_user()
+                        ),
+                        "Acknowledgement withdrawn",
+                    ),
+                ).props("flat color=negative").mark("qc-ack-withdraw")
+            ui.button(
+                "Save",
+                on_click=lambda: finish(
+                    lambda: save_flag_ack(
+                        data_dir,
+                        flag,
+                        user=get_current_user(),
+                        status=status.value,
+                        note=note.value or "",
+                    ),
+                    "Acknowledgement saved",
+                ),
+            ).props("color=primary").mark("qc-ack-save")
+    dialog.open()
+
+
 def _render_issues(
     flags: List[FlagRow],
+    acks: Dict[AckKey, Ack],
     family_id: str,
     cohort_name: str,
     show_detail: bool,
     cohort_note: str,
+    hidden_acked: int = 0,
+    on_review: Optional[Callable[[FlagRow], None]] = None,
 ) -> None:
-    if not flags:
+    """The flags, acknowledged ones greyed and last; ``on_review`` adds the action."""
+    active, acked = split_acknowledged(flags, acks)
+    flags = active + acked
+    if not active:
         with ui.row().classes("items-center gap-2"):
             ui.icon("check_circle", color="green")
-            ui.label("No sample QC issue among the selected members.").classes(
-                "text-green-800"
-            )
-    else:
+            ui.label(
+                "No sample QC issue among the selected members"
+                + (", besides acknowledged ones." if flags else ".")
+            ).classes("text-green-800")
+    if flags:
         rows = []
         for i, f in enumerate(flags):
             sev = severity_info(f.severity)
             other = f.other_family(family_id)
+            ack = acks.get(f.ack_key)
+            color = muted_color() if ack else sev["color"]
+            tooltip = flag_tooltip(f, show_detail)
+            if ack:
+                tooltip += f"\nAcknowledged — {ack_summary(f, ack, show_detail)}"
             rows.append(
                 {
                     "key": str(i),
                     "severity": sev["label"],
-                    "severity_color": sev["color"],
-                    "severity_rank": sev["rank"],
+                    "severity_color": color,
+                    # Acknowledged flags sort below every active one.
+                    "severity_rank": sev["rank"] - (10 if ack else 0),
                     "category": f.info.category_label,
-                    "category_color": f.info.category_color,
+                    "category_color": muted_color() if ack else f.info.category_color,
                     "flag": flag_title(f, show_detail),
                     "flag_badges": [
                         {
                             "label": flag_title(f, show_detail),
-                            "color": sev["color"],
-                            "tooltip": flag_tooltip(f, show_detail),
+                            "color": color,
+                            "tooltip": tooltip,
                         }
                     ],
                     "samples": " – ".join(f.samples),
                     "other_family": other or "",
                     "evidence": f.evidence,
+                    "review": ack.label if ack else "",
+                    "review_badges": (
+                        [
+                            {
+                                "label": ack.label,
+                                "color": ack.color,
+                                "tooltip": ack_summary(f, ack, show_detail),
+                            }
+                        ]
+                        if ack
+                        else []
+                    ),
+                    "note": (
+                        (ack.note if note_visible(f, show_detail) else "(hidden)")
+                        if ack and ack.note
+                        else ""
+                    ),
+                    "_index": i,
                 }
             )
         columns: List[Dict[str, Any]] = [
@@ -159,16 +310,54 @@ def _render_issues(
             )
         if show_detail:
             columns.append({"id": "evidence", "header": "Evidence"})
+        if acked:
+            columns += [
+                {"id": "review", "header": "Review", "cellType": "badge_list"},
+                {"id": "note", "header": "Note"},
+            ]
+        if on_review is not None:
+            columns.insert(
+                0,
+                {
+                    "id": "actions",
+                    # Not "": the table falls back to the id for an empty header.
+                    "header": " ",
+                    "cellType": "action",
+                    "actionName": "review_flag",
+                    "actionIcon": "rate_review",
+                    "actionColor": "#1976d2",
+                    "actionTooltip": "Acknowledge, or change the review",
+                    "sortable": False,
+                },
+            )
+
+        def on_row_action(e: Dict[str, Any]) -> None:
+            index = (e.get("row") or {}).get("_index")
+            if on_review is not None and isinstance(index, int):
+                on_review(flags[index])
+
         with _table_box():
             DataTable(
                 columns=columns,
                 rows=rows,
                 row_key="key",
                 pagination={"rowsPerPage": 10},
+                on_row_action=on_row_action if on_review is not None else None,
             )
-        ui.label("Hover an issue for what it means and what to check.").classes(
-            "text-xs text-gray-500"
-        )
+        ui.label(
+            "Hover an issue for what it means and what to check."
+            + (
+                " Acknowledge a flag a curator has explained: it stops counting"
+                " in the badges and the cohort's figures."
+                if on_review is not None
+                else ""
+            )
+        ).classes("text-xs text-gray-500")
+    if hidden_acked:
+        ui.label(
+            f"{hidden_acked} acknowledged flag(s) hidden: switch on"
+            ' "Show acknowledged" to list them.'
+        ).classes("text-xs text-gray-500 italic")
     if cohort_note:
         ui.label(cohort_note).classes("text-xs text-gray-500 italic")
 
@@ -325,6 +514,7 @@ def _render_relationships(
 def _render_sex(
     rows: List[Dict[str, Any]],
     by_sample: Dict[str, List[FlagRow]],
+    acks: Dict[AckKey, Ack],
     background: List[Tuple[float, float]],
     background_het: List[Tuple[float, float]],
     show_detail: bool,
@@ -356,11 +546,11 @@ def _render_sex(
                 "x_sites": r.get("x_sites"),
                 "evidence": r.get("sex_evidence") or "—",
                 "flags": "",
-                "flags_badges": flag_badges(flags, show_detail),
+                "flags_badges": _badges(flags, acks, show_detail),
             }
         )
         point = sample_point(r)
-        point["flagged"] = bool(flags)
+        point["flagged"] = any(f.ack_key not in acks for f in flags)
         if not show_detail:
             point["inferred_sex"] = point["karyotype"] = None
         points.append(point)
@@ -439,6 +629,7 @@ def _render_sex(
 def _render_quality(
     rows: List[Dict[str, Any]],
     by_sample: Dict[str, List[FlagRow]],
+    acks: Dict[AckKey, Ack],
     cohort_rows: List[Dict[str, Any]],
     member_set: Set[str],
     show_detail: bool,
@@ -462,7 +653,7 @@ def _render_quality(
                 "trio_sites": to_float(r.get("trio_informative_sites")),
                 "mendel": to_float(r.get("trio_mendelian_error_rate")),
                 "flags": "",
-                "flags_badges": flag_badges(flags, show_detail),
+                "flags_badges": _badges(flags, acks, show_detail),
             }
         )
     with _table_box():
@@ -563,6 +754,7 @@ def render_sample_qc_tab(
     cohort_name: str,
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
+    on_acks_changed: Optional[Callable[[], None]] = None,
 ) -> None:
     """Render the Sample QC tab panel content.
 
@@ -572,6 +764,8 @@ def render_sample_qc_tab(
         cohort_name: Cohort name ("" on the standalone family page)
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
+        on_acks_changed: Called after a curator acknowledges or withdraws a
+            flag, so the page header and member icons follow
     """
     family_qc = load_family_qc(store.data_dir, family_id)
     if family_qc is None:
@@ -587,6 +781,7 @@ def render_sample_qc_tab(
         "qc": family_qc,
         "cohort_qc": None,
         "cohort_loading": has_cohort,
+        "show_acked": True,
     }
 
     async def load_cohort() -> None:
@@ -602,10 +797,21 @@ def render_sample_qc_tab(
         state["cohort_loading"] = False
         render_content.refresh()
 
-    with ui.row().classes("items-center gap-2 mb-2"):
+    with ui.row().classes("w-full items-center gap-2 mb-2"):
         ui.label("Sample QC").classes("text-lg font-semibold text-blue-700")
         provenance = ui.label(f"somalier · {family_qc.label}").classes(
             "text-xs text-gray-500"
+        )
+        ui.space()
+
+        def on_show_acked(e: Any) -> None:
+            state["show_acked"] = bool(e.value)
+            render_content.refresh()
+
+        ui.switch("Show acknowledged", value=True, on_change=on_show_acked).props(
+            "dense"
+        ).tooltip("Flags a curator reviewed and acknowledged, greyed").mark(
+            "qc-show-acked"
         )
 
     if len(family_qc.labels) > 1:
@@ -628,6 +834,27 @@ def render_sample_qc_tab(
             on_change=on_label,
         ).props("outlined dense").classes("w-64 mb-2")
 
+    # Outside the refreshable section: a save refreshes it, which would
+    # otherwise delete the dialog that sent it.
+    dialog_anchor = ui.element("div")
+
+    def acks_saved() -> None:
+        render_content.refresh()
+        if on_acks_changed is not None:
+            on_acks_changed()
+
+    def review(flag: FlagRow) -> None:
+        if not show_detail:
+            return
+        acks = load_acks(store.data_dir)
+        _open_ack_dialog(
+            dialog_anchor,
+            store.data_dir,
+            flag,
+            acks.get(flag.ack_key),
+            acks_saved,
+        )
+
     @ui.refreshable
     def render_content() -> None:
         qc: QcData = state["qc"]
@@ -641,11 +868,17 @@ def render_sample_qc_tab(
         qc_members = [r["sample"] for r in sample_rows]
         not_checked = [m for m in members if m not in set(qc_members)]
 
+        acks = load_acks(store.data_dir)
         flags = [
             f
             for f in family_flags_with_cohort(qc, cohort_qc, family_id)
             if any(s in member_set for s in f.samples)
         ]
+        hidden_acked = 0
+        if not state["show_acked"]:
+            active = [f for f in flags if f.ack_key not in acks]
+            hidden_acked = len(flags) - len(active)
+            flags = active
         by_sample = flags_by_sample(flags)
 
         if state["cohort_loading"]:
@@ -666,7 +899,16 @@ def render_sample_qc_tab(
             )
 
         _section("Issues", "Flags raised by the pipeline, most severe first.")
-        _render_issues(flags, family_id, cohort_name, show_detail, cohort_note)
+        _render_issues(
+            flags,
+            acks,
+            family_id,
+            cohort_name,
+            show_detail,
+            cohort_note,
+            hidden_acked=hidden_acked,
+            on_review=review if show_detail else None,
+        )
 
         cross: List[PairRow] = []
         if cohort_qc is not None:
@@ -728,12 +970,16 @@ def render_sample_qc_tab(
             "Sex and karyotype",
             "Sex inferred from the X and Y copy numbers, against the pedigree.",
         )
-        _render_sex(sample_rows, by_sample, background, background_het, show_detail)
+        _render_sex(
+            sample_rows, by_sample, acks, background, background_het, show_detail
+        )
 
         _section(
             "Sample quality", "Depth, sites called, contamination and Mendelian errors."
         )
-        _render_quality(sample_rows, by_sample, cohort_rows, member_set, show_detail)
+        _render_quality(
+            sample_rows, by_sample, acks, cohort_rows, member_set, show_detail
+        )
 
     render_content()
     data_table_refreshers.append(render_content.refresh)
@@ -743,16 +989,18 @@ def render_sample_qc_tab(
 
 def family_qc_summary(
     store: Any, family_id: str
-) -> Tuple[Optional[QcData], Dict[str, List[FlagRow]]]:
-    """The family's QC tables and its flags by sample, for the page header.
+) -> Tuple[Optional[QcData], List[FlagRow], List[FlagRow]]:
+    """The family's QC tables, then its flags still counting and those acknowledged.
 
-    The family files are a few KB; cohort-level flags are left to the tab.
+    For the page header and the member icons. The family files are a few KB;
+    cohort-level flags are left to the tab. Call it again after a review.
     """
     try:
         qc = load_family_qc(store.data_dir, family_id)
     except Exception:
         logger.warning("Failed to read sample QC of %s", family_id, exc_info=True)
-        return None, {}
+        return None, [], []
     if qc is None:
-        return None, {}
-    return qc, flags_by_sample(qc.flags)
+        return None, [], []
+    active, acked = split_acknowledged(qc.flags, load_acks(store.data_dir))
+    return qc, active, acked

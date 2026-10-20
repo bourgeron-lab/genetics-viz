@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from nicegui import ui
 
@@ -50,6 +50,7 @@ from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.data_availability import check_family_availability
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.pedigree import load_family_object, load_family_pedigree
+from genetics_viz.utils.sample_qc import flags_by_sample
 from genetics_viz.utils.sharding import get_family_path
 
 
@@ -187,14 +188,26 @@ async def standalone_family_page(family_id: str) -> None:
             }
             data_table_refreshers: List = []
 
+            # Redraws the member QC icons after a review in the Sample QC tab.
+            qc_icons: Dict[str, Any] = {"update": None}
+
+            def on_acks_changed() -> None:
+                if qc_icons["update"] is not None:
+                    _, active, acked = family_qc_summary(store, family_id)
+                    qc_icons["update"](flags_by_sample(active), flags_by_sample(acked))
+
             if members_data:
+                qc_data, qc_active, qc_acked = family_qc_summary(store, family_id)
                 with ui.row().classes("w-full gap-4 items-start"):
-                    render_member_selector(
+                    qc_icons["update"] = render_member_selector(
                         members_data=members_data,
                         selected_members=selected_members,
                         data_table_refreshers=data_table_refreshers,
-                        qc_flags=family_qc_summary(store, family_id)[1],
+                        qc_flags=(
+                            flags_by_sample(qc_active) if qc_data is not None else None
+                        ),
                         show_qc_detail=can_write(),
+                        qc_acked=flags_by_sample(qc_acked),
                     )
 
                     # ---- Right column: Notes + Diagnostics ----
@@ -611,6 +624,7 @@ async def standalone_family_page(family_id: str) -> None:
                                 cohort_name="",
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                on_acks_changed=on_acks_changed,
                             )
                         else:
                             with ui.column().classes(

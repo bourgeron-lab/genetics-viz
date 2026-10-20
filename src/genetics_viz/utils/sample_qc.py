@@ -24,7 +24,7 @@ flag, severity and relationship class; the app only words and draws them
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Optional, Set, Tuple
 
 import polars as pl
 import yaml
@@ -89,7 +89,7 @@ _CONFIG: Dict[str, Any] = _load_config()
 def _apply_config(config: Dict[str, Any]) -> None:
     global CATEGORIES, SEVERITIES, FLAGS, KARYOTYPE_FLAG, UNKNOWN_FLAG
     global DENOVO_RISK, RELATIONSHIPS, PAIR_STATUS, KARYOTYPE_COLORS
-    global THRESHOLDS, KARYOTYPE_POINTS
+    global THRESHOLDS, KARYOTYPE_POINTS, ACKNOWLEDGEMENT
     CATEGORIES = config.get("categories", {})
     SEVERITIES = config.get("severities", {})
     FLAGS = config.get("flags", {})
@@ -104,6 +104,7 @@ def _apply_config(config: Dict[str, Any]) -> None:
         k: (float(v[0]), float(v[1]))
         for k, v in config.get("karyotype_points", {}).items()
     }
+    ACKNOWLEDGEMENT = config.get("acknowledgement", {})
 
 
 CATEGORIES: Dict[str, Dict[str, Any]] = {}
@@ -117,6 +118,7 @@ PAIR_STATUS: Dict[str, Dict[str, str]] = {}
 KARYOTYPE_COLORS: Dict[str, str] = {}
 THRESHOLDS: Dict[str, float] = {}
 KARYOTYPE_POINTS: Dict[str, Tuple[float, float]] = {}
+ACKNOWLEDGEMENT: Dict[str, Any] = {}
 _apply_config(_CONFIG)
 
 
@@ -356,6 +358,15 @@ class FlagRow:
     @property
     def is_cross_family(self) -> bool:
         return len(set(self.families)) > 1
+
+    @property
+    def ack_key(self) -> Tuple[str, str, str, str]:
+        """``(code, family_id, sample_a, sample_b)``: what a curator acknowledges.
+
+        The family files and the cohort file write a family flag alike, so one
+        acknowledgement covers it on both pages.
+        """
+        return (self.code, self.family_id, self.sample_a, self.sample_b or "")
 
     @property
     def info(self) -> FlagInfo:
@@ -735,9 +746,12 @@ def worst_by_individual(flags: Iterable[FlagRow]) -> Dict[str, int]:
     return counts
 
 
-def cohort_headline(cohort: Any) -> Optional[Dict[str, int]]:
+def cohort_headline(
+    cohort: Any, acknowledged: Collection[Tuple[str, str, str, str]] = ()
+) -> Optional[Dict[str, int]]:
     """Individuals by worst severity, for the home card; ``None`` when QC has not run.
 
+    Flags whose :attr:`FlagRow.ack_key` is in ``acknowledged`` do not count.
     Blocking I/O - call it through ``asyncio.to_thread``.
     """
     try:
@@ -747,7 +761,7 @@ def cohort_headline(cohort: Any) -> Optional[Dict[str, int]]:
         return None
     if qc is None:
         return None
-    return worst_by_individual(qc.flags)
+    return worst_by_individual(f for f in qc.flags if f.ack_key not in acknowledged)
 
 
 #: Categories a sex / karyotype plot marks as flagged.

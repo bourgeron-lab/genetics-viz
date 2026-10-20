@@ -24,6 +24,7 @@ from genetics_viz.utils.data_availability import (
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.pedigree import load_family_pedigree
 from genetics_viz.utils.sample_qc import cohort_headline, severity_info
+from genetics_viz.utils.sample_qc_acks import load_acks
 from genetics_viz.utils.pedigree_labels import (
     PHENO_LABELS,
     PHENO_ORDER,
@@ -117,11 +118,17 @@ def _gather_headlines(cohorts: List[Cohort]) -> Dict[str, Dict[str, Any]]:
     }
 
 
-def _gather_qc_headlines(cohorts: List[Cohort]) -> Dict[str, Dict[str, int]]:
-    """Every cohort's sample QC counts in one offloaded pass (two small reads each)."""
+def _gather_qc_headlines(
+    cohorts: List[Cohort], data_dir: Path
+) -> Dict[str, Dict[str, int]]:
+    """Every cohort's sample QC counts in one offloaded pass (two small reads each).
+
+    Flags a curator acknowledged do not count.
+    """
+    acknowledged = set(load_acks(data_dir))
     out = {}
     for cohort in cohorts:
-        counts = cohort_headline(cohort)
+        counts = cohort_headline(cohort, acknowledged)
         if counts is not None:
             out[cohort.name] = counts
     return out
@@ -478,7 +485,9 @@ async def home_page() -> None:
 
             # One offloaded pass rather than one blocking read per card.
             headlines = await asyncio.to_thread(_gather_headlines, cohorts)
-            qc_headlines = await asyncio.to_thread(_gather_qc_headlines, cohorts)
+            qc_headlines = await asyncio.to_thread(
+                _gather_qc_headlines, cohorts, store.data_dir
+            )
 
             # Display cohorts as cards
             ui.label("Available Cohorts").classes(

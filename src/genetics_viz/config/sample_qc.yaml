@@ -11,7 +11,11 @@
 # is served statically without an auth check, so this is presentation only.
 
 categories:
-  # Display order, most actionable first.
+  # Display order, most actionable first. `reader_note: true` lets viewers read
+  # a curator's acknowledgement note on the category's flags. It is off where
+  # the reader wording hides a reading (non-paternity, consanguinity, a
+  # relative in another family, a sex chromosome aneuploidy), since a note
+  # such as "known consanguinity" would name it.
   family_relatedness:
     label: "Relationship in family"
     color: "#6a1b9a"
@@ -21,15 +25,18 @@ categories:
   sex:
     label: "Sex"
     color: "#1565c0"
+    reader_note: true
   karyotype:
     label: "Sex chromosomes"
     color: "#00838f"
   mendelian:
     label: "Mendelian"
     color: "#4e342e"
+    reader_note: true
   sample_quality:
     label: "Sample quality"
     color: "#546e7a"
+    reader_note: true
 
 severities:
   # Highest rank first.
@@ -188,6 +195,24 @@ denovo_risk:
   - DUPLICATE_OR_MZ
   - POSSIBLE_CONTAMINATION
   - MENDELIAN_INCONSISTENT
+
+# Curator acknowledgements (validations/sampleqc.tsv): a flag reviewed once
+# stops counting in the badges, icons, cohort counts and home card. The status
+# words are the same for every role; the note follows `reader_note` above.
+acknowledgement:
+  statuses:
+    explained:
+      label: "Explained"
+      color: "#2e7d32"
+      help: "Known and harmless here: MZ twins, declared consanguinity, adoption."
+    confirmed:
+      label: "Confirmed issue"
+      color: "#6d4c41"
+      help: >-
+        Real, known and accepted (e.g. contamination judged tolerable). Still
+        named in the de novo warning, since the calls stay unreliable.
+  # Badge and severity colour of an acknowledged flag.
+  muted_color: "#bdbdbd"
 
 relationships:
   # The pipeline's classes (observed and expected), closest first.

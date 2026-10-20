@@ -81,6 +81,7 @@ from genetics_viz.utils.cytobands import (
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.sample_counts import cohort_wombat_file
 from genetics_viz.utils.sample_qc import denovo_risk, flag_title, load_family_qc
+from genetics_viz.utils.sample_qc_acks import ack_summary, load_acks
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,10 @@ def _render_denovo_qc_warning(
     A parent who is not the parent, a swapped, duplicated or contaminated
     sample: each turns inherited variants into apparent de novo calls. Only the
     family's own QC files are read (a few KB, cached).
+
+    A flag a curator acknowledged as explained (known MZ twins, say) is left
+    out. One acknowledged as a confirmed issue stays: the calls are still
+    unreliable, and the warning says it was confirmed.
     """
     try:
         qc = load_family_qc(store.data_dir, family_id)
@@ -119,7 +124,14 @@ def _render_denovo_qc_warning(
         return
     if qc is None:
         return
-    risky = denovo_risk(qc.flags, [r.get("sample") or "" for r in qc.sample_rows()])
+    acks = load_acks(store.data_dir)
+    risky = [
+        f
+        for f in denovo_risk(
+            qc.flags, [r.get("sample") or "" for r in qc.sample_rows()]
+        )
+        if f.ack_key not in acks or acks[f.ack_key].status != "explained"
+    ]
     if not risky:
         return
     show_detail = can_write()
@@ -138,9 +150,11 @@ def _render_denovo_qc_warning(
             ).classes("font-semibold text-amber-900")
             if show_detail:
                 for f in risky:
+                    ack = acks.get(f.ack_key)
                     ui.label(
                         f"{flag_title(f, True)} — {' – '.join(f.samples)}"
                         + (f": {f.evidence}" if f.evidence else "")
+                        + (f" ({ack_summary(f, ack, True)})" if ack else "")
                     ).classes("text-sm text-amber-900")
             else:
                 ui.label(

@@ -120,6 +120,7 @@ src/genetics_viz/
     str_plots.py                  # ECharts builders for the STR views
     str_validation.py             # validations/strs.tsv writer (role-guarded) and reader
     sample_qc.py                  # sampleqc (somalier) discovery, reading, flag wording, shaping
+    sample_qc_acks.py             # validations/sampleqc.tsv: curator flag acknowledgements (role-guarded)
     sample_qc_plots.py            # ECharts builders for the Sample QC views
     validation_files.py           # The validation kinds (SNV/SV/STR) and their files
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR) and their files
@@ -146,7 +147,7 @@ src/genetics_viz/
     vep.py                        # VEP consequence utilities (from YAML)
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
     sharding.py                   # Two-level sharded directory path resolution
-    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels
+    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels, append_tsv_row
     wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
     sample_counts.py              # Cohort Wombat/WisecondorX files, per-sample counts, outlier flags
     view_presets.py               # View preset loading with reload support
@@ -255,6 +256,13 @@ Config files (YAML) are loaded once at module level.
 - **Wording is role-dependent, as for ROH**: viewers get `reader_label`, no evidence, an "Atypical" karyotype, and only pedigree-declared pairs (no parents' pair, no cross-family pairs in the tables). Presentation only.
 - **Hubs**: a sample with `HUB_MINIMUM` (5) or more cross-family relatives is outlined in the network. One EAGER founder is "third-degree" to 37 samples of other families; that is contamination or population structure, not kinship.
 - Elsewhere: the family header badge and member icons (family files only, read at page build), the cohort table's `Sample QC` column and filter, the home card's QC figure (off-thread, individuals by worst severity), and a warning above Wombat configs matching `de_?novo` when `denovo_risk` flags hit the family.
+- **Curators acknowledge recurring flags** (MZ twins, declared consanguinity, adoption, tolerated contamination) in `validations/sampleqc.tsv`, through `utils/sample_qc_acks.py`:
+  - Keyed by `FlagRow.ack_key`: code, the `family_id` cell (`"FA,FB"` for a cross-family pair), `sample_a`, `sample_b` (empty for one sample). No sites label, so a rerun keeps it. The family and cohort files write a family flag alike, so one key covers both pages.
+  - Append-only (`tsv.append_tsv_row`, under `flock`): status `explained` or `confirmed`, a note, user, timestamp. `withdrawn` takes it back; the last row of a key wins. Not a variant validation, so not in `VALIDATION_KINDS`. `save_flag_ack` / `withdraw_flag_ack` check `can_write()` themselves.
+  - Acknowledged flags leave the family header badge, the member icons (grey `task_alt` when nothing else is left), the cohort column (one grey "Acknowledged" badge and filter option, not "Any issue"), the cohort panel counts, the home figure, and the de novo warning. The warning keeps a `confirmed` flag: the calls stay unreliable.
+  - The family Issues table lists them greyed and last, with the review and note ("Show acknowledged" hides them). The cohort panel leaves them out unless "Include acknowledged" is on.
+  - A review redraws the header badge and member icons through `render_sample_qc_tab(on_acks_changed=...)`. The dialog hangs from an anchor outside the refreshable section, as the STR locus dialog does.
+  - **Readers see the status, and the note only for categories with `reader_note: true`** in `sample_qc.yaml` (sex, mendelian, sample quality). Elsewhere a note such as "known cousins" would name what `reader_label` hides.
 
 ### CNV Coverage and SV Read Evidence
 - The ghfc-ngs `cnv_coverage` step writes `samples/.../<ID>/coverage/<ID>.cov_b<bin>q<mapq>.{bw,json}`: every bin holds `2 × depth / autosomal median` (about 2 on a normal autosome). The `cnv_panel` step of a controls cohort writes a versioned, self-contained `cohorts/<controls>/cnv_panel/v<version>/` (per-bin median and unscaled MAD for `autosomes`, `XX`, `XY`, plus `panel.json` with PARs and expected ploidy). A cohort fitted against it gets `cohorts/<NAME>/coverage/<NAME>.<tag>.panel_v<version>.fit.tsv`. The contract is documented in ghfc-ngs `documentation/params.md`.

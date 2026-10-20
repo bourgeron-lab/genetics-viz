@@ -97,6 +97,21 @@ def test_sample_qc_vocabulary_covers_the_pipeline():
     assert all(HEX.match(c) for c in colors)
 
 
+def test_sample_qc_acknowledgement_wording():
+    from genetics_viz.utils.sample_qc_acks import STATUSES
+
+    cfg = load("sample_qc.yaml")["acknowledgement"]
+    assert set(cfg["statuses"]) == set(STATUSES)
+    colors = [s["color"] for s in cfg["statuses"].values()] + [cfg["muted_color"]]
+    assert all(HEX.match(c) for c in colors)
+    # Readers may read the notes of these categories only: the others' reader
+    # wording hides a relationship or an aneuploidy a note would name.
+    categories = load("sample_qc.yaml")["categories"]
+    assert {k for k, c in categories.items() if c.get("reader_note")} == {
+        "sex", "mendelian", "sample_quality",
+    }  # fmt: skip
+
+
 def test_wisecondorx_thresholds_bracket_zero():
     cfg = load("wisecondorx_thresholds.yaml")
     assert (

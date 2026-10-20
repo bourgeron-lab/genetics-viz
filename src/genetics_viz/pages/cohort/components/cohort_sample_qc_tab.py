@@ -11,6 +11,10 @@ Follows the filters of the individuals table:
 
 The cohort tables are tens of KB; they are still read off-thread, as the
 other cohort tabs' are. Wording follows the user's role (see ``sample_qc``).
+
+Flags a curator acknowledged (``sample_qc_acks``) are left out of the counts,
+the flagged individuals and the plot marks, unless "Include acknowledged" is
+on; they are then listed greyed.
 """
 
 import asyncio
@@ -46,6 +50,13 @@ from genetics_viz.utils.sample_qc import (
     relationship_info,
     sample_point,
     severity_info,
+)
+from genetics_viz.utils.sample_qc_acks import (
+    Ack,
+    AckKey,
+    acknowledged_badges,
+    load_acks,
+    split_acknowledged,
 )
 from genetics_viz.utils.sample_qc_plots import (
     cross_family_graph_option,
@@ -128,21 +139,25 @@ def _render_flagged(
     cross_counts: Dict[Key, int],
     cohort_name: str,
     show_detail: bool,
+    acks: Dict[AckKey, Ack],
 ) -> None:
     rows = []
     for key in keys:
         flags = by_key.get(key)
         if not flags:
             continue
-        worst = max(flags, key=lambda f: f.rank)
+        active, acked = split_acknowledged(flags, acks)
+        # An individual with acknowledged flags only sorts below the others.
+        worst = max(active, key=lambda f: f.rank).rank if active else 0
         rows.append(
             {
                 "key": f"{key[0]}|{key[1]}",
                 "FID": key[0],
                 "sample": key[1],
                 "issues": "",
-                "issues_badges": flag_badges(flags, show_detail),
-                "rank": worst.rank * 1000 + len(flags),
+                "issues_badges": flag_badges(active, show_detail)
+                + acknowledged_badges(acked, acks, show_detail),
+                "rank": worst * 1000 + len(active),
                 "relatives": cross_counts.get(key, 0) or None,
             }
         )
@@ -413,7 +428,12 @@ def render_cohort_sample_qc_tab(
         return
 
     show_detail = can_write()
-    state: Dict[str, Any] = {"label": labels[0], "qc": None, "loading": True}
+    state: Dict[str, Any] = {
+        "label": labels[0],
+        "qc": None,
+        "loading": True,
+        "include_acked": False,
+    }
 
     async def load() -> None:
         state["loading"] = True
@@ -435,6 +455,16 @@ def render_cohort_sample_qc_tab(
             if len(labels) == 1:
                 ui.label(f"somalier · {labels[0]}").classes("text-xs text-gray-500")
             ui.space()
+
+            def on_include_acked(e: Any) -> None:
+                state["include_acked"] = bool(e.value)
+                render_body.refresh()
+
+            ui.switch(
+                "Include acknowledged", value=False, on_change=on_include_acked
+            ).props("dense").classes("text-xs").tooltip(
+                "Count the flags a curator reviewed and acknowledged"
+            ).mark("cohort-qc-include-acked")
             report = cohort_report_url(cohort, labels[0], get_static_prefix())
             if report:
                 ui.link("somalier report ↗", report, new_tab=True).classes(
@@ -477,7 +507,10 @@ def render_cohort_sample_qc_tab(
             checked = {
                 ((r.get("family_id") or ""), (r.get("sample") or "")) for r in rows
             }
-            by_key = flags_by_key(qc.flags)
+            acks = load_acks(store.data_dir)
+            active, acked = split_acknowledged(qc.flags, acks)
+            by_key = flags_by_key(qc.flags if state["include_acked"] else active)
+            acked_shown = sum(1 for f in acked if any(k in checked for k in f.keys))
             all_pairs = pair_rows(qc.pairs)
             pairs = [
                 p
@@ -491,12 +524,18 @@ def render_cohort_sample_qc_tab(
             note = f"{len(checked)} of {len(keys)} shown individuals checked."
             if len(checked) < len(keys):
                 note += " The others have no somalier extract."
+            if acked_shown:
+                note += f" {acked_shown} acknowledged flag(s)" + (
+                    " counted." if state["include_acked"] else " not counted."
+                )
             ui.label(note).classes("text-xs text-gray-500")
 
             _render_counts(by_key, checked)
 
             _subtitle("Flagged individuals")
-            _render_flagged(by_key, checked, cross_counts, cohort.name, show_detail)
+            _render_flagged(
+                by_key, checked, cross_counts, cohort.name, show_detail, acks
+            )
 
             _subtitle("Relatives across families")
             hubs = [

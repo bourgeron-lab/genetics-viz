@@ -16,13 +16,12 @@ Append-only under an exclusive ``flock``, like the other curation files.
 """
 
 import csv
-import fcntl
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .auth import can_write
-from .tsv import clean_tsv_field
+from .tsv import append_tsv_row
 from .validation_files import validation_path
 
 HEADER = [
@@ -81,19 +80,7 @@ def save_str_validation(
         family_id, variant_key, sample, user, inheritance, validation,
         curated_repeats, comment, "0", timestamp or datetime.now().isoformat(),
     ]  # fmt: skip
-    path = str_validation_file(data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            # Checked under the lock, at the end as it is now: two first saves
-            # must not both write the header.
-            f.seek(0, 2)
-            if f.tell() == 0:
-                f.write("\t".join(HEADER) + "\n")
-            f.write("\t".join(clean_tsv_field(str(v)) for v in fields) + "\n")
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    append_tsv_row(str_validation_file(data_dir), HEADER, fields)
 
 
 def read_str_validations(

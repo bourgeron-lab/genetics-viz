@@ -27,7 +27,9 @@ exercise the traps found so far:
 - sample QC (somalier) tables for 1001 and AU-X-1 and the DEMO cohort: S1 is
   not S3's father, S3 is contaminated, S5 reads XXY, S6 is male in the data
   but female in the pedigree, and S2 is related to S5 across families; 1002
-  has none.
+  has none. ``validations/sampleqc.tsv`` acknowledges two of them: S6's sex
+  (explained) and the S2-S5 relatedness, whose note names a relationship; an
+  earlier acknowledgement of S3's contamination was withdrawn.
 """
 
 import gzip
@@ -541,6 +543,7 @@ def build_data_dir(root: Path) -> Path:
         "DEMO",
         [build_qc_results(data, fid, by_family[fid]) for fid in QC_FAMILIES],
     )
+    build_qc_acks(data)
     build_wombat_results(data)
     build_cnv_results(data, demo)
     return data
@@ -1119,3 +1122,27 @@ def build_cohort_qc_results(
     write_tsv(qc / f"{name}.{QC_LABEL}.pairs.tsv", QC_PAIR_COLUMNS, pairs)
     write_tsv(qc / f"{name}.{QC_LABEL}.flags.tsv", QC_FLAG_COLUMNS, flags)
     (qc / f"{name}.{QC_LABEL}.html").write_text("<html></html>")
+
+
+QC_ACK_COLUMNS = [
+    "Flag", "FID", "SampleA", "SampleB", "Status", "Note", "User", "Timestamp",
+]  # fmt: skip
+
+#: The rows of ``validations/sampleqc.tsv``: the last one of a key wins.
+QC_ACKS = [
+    ["POSSIBLE_CONTAMINATION", "1001", "S3", "", "confirmed", "", "curator",
+     "2026-09-01T10:00:00"],
+    ["SEX_MISMATCH", "AU-X-1", "S6", "", "explained",
+     "Pedigree entry error, fixed at the next release", "curator",
+     "2026-09-02T10:00:00"],
+    ["CRYPTIC_RELATED", "1001,AU-X-1", "S2", "S5", "explained",
+     "Known first cousins: their mothers are sisters", "curator",
+     "2026-09-03T10:00:00"],
+    ["POSSIBLE_CONTAMINATION", "1001", "S3", "", "withdrawn", "", "curator",
+     "2026-09-04T10:00:00"],
+]  # fmt: skip
+
+
+def build_qc_acks(data: Path) -> None:
+    """Curator acknowledgements of sample QC flags, as the app appends them."""
+    write_tsv(data / "validations" / "sampleqc.tsv", QC_ACK_COLUMNS, QC_ACKS)

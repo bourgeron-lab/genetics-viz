@@ -1,5 +1,6 @@
 """Tab-separated file reading helpers."""
 
+import fcntl
 import gzip
 import logging
 import re
@@ -23,6 +24,25 @@ def clean_tsv_field(text: str) -> str:
         .replace("\n", " ")
         .replace("\r", " ")
     )
+
+
+def append_tsv_row(path: Path, header: List[str], fields: Iterable[Any]) -> None:
+    """Append one record to a curation file, writing ``header`` first if it is new.
+
+    Every field goes through :func:`clean_tsv_field`. The write holds an
+    exclusive ``flock``, and the header check is made under it, at the end of
+    the file as it is now: two first saves must not both write the header.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0, 2)
+            if f.tell() == 0:
+                f.write("\t".join(header) + "\n")
+            f.write("\t".join(clean_tsv_field(str(v)) for v in fields) + "\n")
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _header(path: Path) -> list[str]:

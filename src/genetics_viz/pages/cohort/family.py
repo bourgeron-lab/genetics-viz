@@ -47,6 +47,7 @@ from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.sample_qc import (
     count_by_severity,
+    flags_by_sample,
     severity_info,
     severity_summary,
 )
@@ -142,8 +143,9 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
             # Sample QC: the family's own flags, read now (a few KB) for the
             # header badge and the member icons; cross-family ones need the
-            # cohort's tables and are left to the tab.
-            qc_data, qc_flags = family_qc_summary(store, family_id)
+            # cohort's tables and are left to the tab. Flags a curator
+            # acknowledged do not count; a review redraws both.
+            qc = {"summary": family_qc_summary(store, family_id)}
             # Filled in once the analysis tabs exist: the badge opens one.
             open_qc_tab: Dict[str, Any] = {"fn": None}
 
@@ -153,17 +155,27 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 )
                 ui.badge(f"{family.num_samples} members").props("color=blue")
                 ui.badge(f"{family.num_founders} founders").props("color=teal")
-                if qc_data is not None:
-                    counts = count_by_severity(qc_data.flags)
+
+                @ui.refreshable
+                def qc_badge() -> None:
+                    qc_data, active, acked = qc["summary"]
+                    if qc_data is None:
+                        return
+                    counts = count_by_severity(active)
                     summary = severity_summary(counts)
                     worst = "high" if counts.get("high") else "medium"
                     color = severity_info(worst)["color"] if summary else "#2e7d32"
+                    tip = "Sample QC (somalier): open the Sample QC tab"
+                    if acked:
+                        tip += f". {len(acked)} acknowledged flag(s) not counted."
                     ui.badge(
                         f"QC: {summary}" if summary else "QC ok", color=color
                     ).classes("cursor-pointer").on(
                         "click",
                         lambda: open_qc_tab["fn"] and open_qc_tab["fn"](),
-                    ).tooltip("Sample QC (somalier): open the Sample QC tab")
+                    ).tooltip(tip)
+
+                qc_badge()
 
                 if len(sorted_fids) > 1 and current_idx >= 0:
                     ui.space()
@@ -195,13 +207,25 @@ def family_page(cohort_name: str, family_id: str) -> None:
             data_table_refreshers: List = []
 
             with ui.row().classes("w-full gap-4 items-start"):
-                render_member_selector(
+                _, qc_active, qc_acked = qc["summary"]
+                update_qc_icons = render_member_selector(
                     members_data=members_data,
                     selected_members=selected_members,
                     data_table_refreshers=data_table_refreshers,
-                    qc_flags=qc_flags,
+                    qc_flags=(
+                        flags_by_sample(qc_active)
+                        if qc["summary"][0] is not None
+                        else None
+                    ),
                     show_qc_detail=can_write(),
+                    qc_acked=flags_by_sample(qc_acked),
                 )
+
+                def on_acks_changed() -> None:
+                    qc["summary"] = family_qc_summary(store, family_id)
+                    _, active, acked = qc["summary"]
+                    qc_badge.refresh()
+                    update_qc_icons(flags_by_sample(active), flags_by_sample(acked))
 
                 # ---- Right column: tabbed info panel ----
                 with ui.column().classes("flex-1").style("gap: 0.5rem; min-width: 0"):
@@ -680,6 +704,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                 cohort_name=cohort_name,
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                on_acks_changed=on_acks_changed,
                             )
                         else:
                             with ui.column().classes(

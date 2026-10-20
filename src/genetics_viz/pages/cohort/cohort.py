@@ -47,11 +47,18 @@ from genetics_viz.utils.sample_qc import (
     flags_by_key,
     load_cohort_qc,
 )
+from genetics_viz.utils.sample_qc_acks import (
+    acknowledged_titles,
+    load_acks,
+    muted_color,
+    split_acknowledged,
+)
 
 #: QC filter options besides the categories.
 _QC_ANY = "Any issue"
 _QC_NONE = "No issue"
 _QC_UNCHECKED = "Not checked"
+_QC_ACKED = "Acknowledged"
 
 # Diagnostic priority: higher value wins
 _DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
@@ -166,7 +173,14 @@ def cohort_page(cohort_name: str) -> None:
             cohort_qc = load_cohort_qc(cohort)
         except Exception:
             cohort_qc = None
-        qc_by_key = flags_by_key(cohort_qc.flags) if cohort_qc else {}
+        # Flags a curator acknowledged leave the badges and "Any issue"; they
+        # get one grey badge, which the filter's "Acknowledged" option finds.
+        qc_acks = load_acks(store.data_dir)
+        qc_active, qc_acked = (
+            split_acknowledged(cohort_qc.flags, qc_acks) if cohort_qc else ([], [])
+        )
+        qc_by_key = flags_by_key(qc_active)
+        qc_acked_by_key = flags_by_key(qc_acked)
         qc_checked = (
             {
                 ((r.get("family_id") or ""), (r.get("sample") or ""))
@@ -181,13 +195,33 @@ def cohort_page(cohort_name: str) -> None:
             if cohort_qc is None:
                 return {}
             flags = qc_by_key.get((fid, sid), [])
-            if (fid, sid) not in qc_checked and not flags:
+            acked = qc_acked_by_key.get((fid, sid), [])
+            if (fid, sid) not in qc_checked and not flags and not acked:
                 return {"QC": "", "_qc_cats": [_QC_UNCHECKED], "_qc_rank": -1}
             badges = category_badges(flags, show_qc_detail)
+            if acked:
+                badges.append(
+                    {
+                        "label": _QC_ACKED,
+                        "color": muted_color(),
+                        "tooltip": "\n".join(
+                            [
+                                "Acknowledged by a curator:",
+                                *(
+                                    f"• {t}"
+                                    for t in acknowledged_titles(
+                                        acked, qc_acks, show_qc_detail
+                                    )
+                                ),
+                            ]
+                        ),
+                    }
+                )
             return {
                 "QC": "",
                 "QC_badges": badges,
-                "_qc_cats": [b["label"] for b in badges] or [_QC_NONE],
+                "_qc_cats": [b["label"] for b in badges]
+                + ([] if flags else [_QC_NONE]),
                 "_qc_rank": max((f.rank for f in flags), default=0),
             }
 
@@ -468,7 +502,7 @@ def cohort_page(cohort_name: str) -> None:
                                                     c.get("label", k)
                                                     for k, c in CATEGORIES.items()
                                                 ]
-                                                + [_QC_NONE, _QC_UNCHECKED],
+                                                + [_QC_NONE, _QC_ACKED, _QC_UNCHECKED],
                                                 "placeholder": "All",
                                             },
                                         }
