@@ -14,12 +14,13 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 import polars as pl
 import yaml
 
 from ..config_model import get_ancestry_reference_dir
+from .export import PERSON_COLUMNS, people_frame
 from .sharding import get_family_path
 from .tsv import read_tsv_or_none
 
@@ -88,8 +89,10 @@ _FILENAME_TMPL = (
     r"{eid}\.apgs_b(?P<bundle>.+?)_(?P<filters>[^.]+)\.(?P<kind>{kinds})\.tsv$"
 )
 
-#: Result kinds of the ancestry step, in its ``ancestry/`` directory.
-_KINDS = ("pcs", "ancestry", "pgs_zscore")
+#: Result kinds of the ancestry step, in its ``ancestry/`` directory. ``Q`` is
+#: the admixture proportions (``IID``, ``snp_coverage``, one column per
+#: reference component); only the exports read it.
+_KINDS = ("pcs", "ancestry", "pgs_zscore", "Q")
 
 #: Result kinds of the ROH step, in its own ``roh/`` directory. Same naming:
 #: the step labels its outputs with the ancestry panel they were called on.
@@ -149,6 +152,11 @@ class AncestryFiles:
     def path(self, kind: str) -> Optional[Path]:
         """The file of ``kind`` for the selected variant, if present."""
         return self.paths.get(kind)
+
+    @property
+    def file_tag(self) -> str:
+        """The filename tag, e.g. ``apgs_b1.0.0_dp10gq20``."""
+        return f"apgs_b{self.bundle_version}_{self.filter_tag}"
 
     @property
     def label(self) -> str:
@@ -387,3 +395,94 @@ def load_reference_pcs(bundle_version: str) -> Optional[pl.DataFrame]:
 def clear_reference_cache() -> None:
     """Drop the cached reference panels (used when config or data changes)."""
     _reference_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Exports, shared by the family and cohort tabs
+# ---------------------------------------------------------------------------
+
+#: Columns of the pipeline tables that are keys, not data.
+_KEY_COLUMNS = ("IID", "FID", "family_id")
+
+
+def _read_export(path: Optional[Path]) -> Optional[pl.DataFrame]:
+    if path is None:
+        return None
+    df = read_tsv_or_none(
+        path,
+        infer_schema_length=10000,
+        null_values=NULL_VALUES,
+        string_columns=ID_COLUMNS,
+    )
+    if df is None or "IID" not in df.columns:
+        return None
+    return df
+
+
+def _attach(
+    base: pl.DataFrame,
+    frame: Optional[pl.DataFrame],
+    how: str = "left",
+    rename: Optional[Dict[str, str]] = None,
+) -> Tuple[pl.DataFrame, List[str]]:
+    """Join ``frame``'s data columns onto ``base``; return them with the result.
+
+    On ``(family_id, IID)`` when the frame carries ``family_id`` (the cohort
+    tables: a sample may sit in two families), on ``IID`` otherwise.
+    """
+    if frame is None:
+        return (base.clear() if how == "inner" else base), []
+    data = [c for c in frame.columns if c not in _KEY_COLUMNS and c not in base.columns]
+    if "family_id" in frame.columns:
+        right = frame.select(["family_id", "IID", *data]).rename({"family_id": "FID"})
+        on = ["FID", "IID"]
+    else:
+        right = frame.select(["IID", *data])
+        on = ["IID"]
+    right = right.unique(subset=on, keep="first", maintain_order=True)
+    if rename:
+        right = right.rename({k: v for k, v in rename.items() if k in data})
+        data = [rename.get(c, c) for c in data]
+    return base.join(right, on=on, how=how, maintain_order="left"), data
+
+
+def ancestry_export(files: AncestryFiles, people: List[Dict[str, Any]]) -> pl.DataFrame:
+    """The people with principal components: labels, PCs, admixture proportions.
+
+    Blocking I/O. The admixture components are prefixed ``admix_``; a family
+    without a ``Q.tsv`` gets none.
+    """
+    base = people_frame(people)
+    out, pcs = _attach(base, _read_export(files.pcs_path), how="inner")
+    out, labels = _attach(out, _read_export(files.ancestry_path))
+    q = _read_export(files.path("Q"))
+    components = (
+        []
+        if q is None
+        else [c for c in q.columns if c not in _KEY_COLUMNS and c != "snp_coverage"]
+    )
+    out, admixture = _attach(out, q, rename={c: f"admix_{c}" for c in components})
+    return out.select([*PERSON_COLUMNS, *labels, *pcs, *admixture])
+
+
+def pgs_export(
+    files: AncestryFiles,
+    people: List[Dict[str, Any]],
+    regions: Optional[Collection[str]] = None,
+) -> pl.DataFrame:
+    """The people with z-scores: region, then every trait.
+
+    ``regions`` keeps only those predicted regions (``"—"`` for none), as the
+    cohort tab's region selector does.
+    """
+    base = people_frame(people)
+    out, traits = _attach(base, _read_export(files.pgs_zscore_path), how="inner")
+    labels = _read_export(files.ancestry_path)
+    if labels is not None and "region" in labels.columns:
+        keys = [c for c in ("IID", "family_id") if c in labels.columns]
+        out, _ = _attach(out, labels.select([*keys, "region"]))
+    else:
+        out = out.with_columns(pl.lit(None, dtype=pl.String).alias("region"))
+    if regions is not None:
+        out = out.filter(pl.col("region").fill_null("—").is_in(list(regions)))
+    return out.select([*PERSON_COLUMNS, "region", *traits])

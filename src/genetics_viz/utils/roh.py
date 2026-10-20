@@ -561,3 +561,92 @@ def is_flagged(row: Dict[str, Any]) -> bool:
         or bool(row.get("upd_candidate_chrom"))
         or row.get("qc_pass") is False
     )
+
+
+# ---------------------------------------------------------------------------
+# Exports, shared by the family and cohort tabs
+# ---------------------------------------------------------------------------
+
+#: The percentiles are against the person's reference group, not the cohort;
+#: the export header says so.
+_VS_REF = "_vs_ref_group"
+
+#: ``froh`` columns written as they are, after the readings.
+_FROH_EXPORT_METRICS = [
+    "nroh", "sroh_mb", "nroh_1.5mb", "largest_roh_mb", "largest_roh_cm",
+    "froh_0.5mb", "froh_5mb", "froh_10mb", "ref_median_froh_1.5mb", "call_rate",
+    "qc_pass", "upd_candidate_chrom",
+]  # fmt: skip
+
+
+def froh_export(
+    paired: List[Tuple[Dict[str, Any], Dict[str, Any]]], show_relationship: bool
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """One row per person: ``(froh row, export.person dict)`` -> ``(rows, columns)``.
+
+    Readers get the neutral grade and no category, parents' kinship or
+    expected F, as on the tabs.
+    """
+    columns = [
+        "FID", "IID", "sex", "phenotype", "region", "ref_group", "ref_n",
+        "froh_1.5mb", f"pct_froh_1.5mb{_VS_REF}", "f_short", "f_intermediate",
+        "f_long", F_BACKGROUND, f"pct_f_short{_VS_REF}",
+        f"pct_f_intermediate{_VS_REF}", f"pct_f_long{_VS_REF}", "pattern", "grade",
+        "flags", *_FROH_EXPORT_METRICS,
+    ]  # fmt: skip
+    if show_relationship:
+        columns += ["froh_category", "parents_kinship", "expected_f"]
+    rows = []
+    for r, who in paired:
+        row = {
+            **who,
+            "region": r.get("region"),
+            "ref_group": r.get("ref_group"),
+            "ref_n": r.get("ref_n"),
+            F_BACKGROUND: background(r),
+            "pattern": pattern_info(r.get("homozygosity_pattern"))["label"],
+            "grade": grade_text(r.get("froh_category"), show_relationship),
+            "flags": "; ".join(b["label"] for b in flag_badges(r)),
+            "froh_category": r.get("froh_category"),
+        }
+        for name in ("froh_1.5mb", "f_short", "f_intermediate", "f_long"):
+            row[name] = r.get(name)
+            row[f"pct_{name}{_VS_REF}"] = r.get(f"pct_{name}")
+        for name in (*_FROH_EXPORT_METRICS, "parents_kinship", "expected_f"):
+            row[name] = r.get(name)
+        rows.append(row)
+    return rows, columns
+
+
+def segments_export(
+    segments: Optional[pl.DataFrame], family_id: str, members: List[str]
+) -> Optional[pl.DataFrame]:
+    """The members' ROH segments (``roh`` or ``roh_genes``), ``FID`` first."""
+    if segments is None or "IID" not in segments.columns:
+        return None
+    sub = segments.filter(pl.col("IID").is_in(members))
+    sub = sub.drop([c for c in ("family_id",) if c in sub.columns])
+    return sub.select(pl.lit(family_id).alias("FID"), *[pl.col(c) for c in sub.columns])
+
+
+def kinship_export(
+    kinship: Optional[pl.DataFrame],
+    froh: pl.DataFrame,
+    members: List[str],
+    show_relationship: bool,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """The members' kinship pairs against the pedigree; readers: declared pairs."""
+    columns = ["IID1", "IID2", "declared", "kinship", "ibs0", "n_sites", "observed",
+               "check"]  # fmt: skip
+    if kinship is None:
+        return [], columns
+    rows = [
+        r
+        for r in kinship_rows(kinship, parents_from_froh(froh))
+        if r["IID1"] in members and r["IID2"] in members
+    ]
+    if not show_relationship:
+        rows = [r for r in rows if r["is_declared"]]
+    for r in rows:
+        r["check"] = "Mismatch" if r["mismatch"] else ("OK" if r["is_declared"] else "")
+    return rows, columns

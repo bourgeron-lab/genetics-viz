@@ -1,6 +1,7 @@
 """Pages rendered in NiceGUI's user simulation, logged in as each role."""
 
 import asyncio
+from types import SimpleNamespace
 
 import datagen
 from nicegui import ui
@@ -222,6 +223,54 @@ async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
     await user.should_see("No flagged genotype among the individuals shown", retries=30)
     loci = [t for t in tables if "n_pathogenic" in t["columns"]][-1]
     assert sum(r["n_flagged"] for r in loci["rows"]) == 0
+
+
+async def test_family_str_table_filters_on_locus_and_disease(user, monkeypatch):
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO/family/1001")
+    open_tab(user, "family-tabs", "STR")
+    await user.should_see("compared with 3 founders", retries=30)
+
+    eh = tables[-1]
+    assert eh["on_filter"], "the Locus and Disease filter boxes need a handler"
+    table = eh["table"]
+    with user.client:
+        eh["on_filter"]({"filters": {"locus": "ht"}})
+    assert [r["locus"] for r in table.rows] == ["HTT"]
+    with user.client:
+        eh["on_filter"]({"filters": {"disease": "ATAXIA"}})
+    assert [r["locus"] for r in table.rows] == ["FXN"]
+    with user.client:
+        eh["on_filter"]({"filters": {"locus": "x", "disease": "dee"}})
+    assert [r["locus"] for r in table.rows] == ["ARX_2"]
+    with user.client:
+        eh["on_filter"]({"filters": {}})
+    assert len(table.rows) == len(eh["rows"])
+
+
+async def test_family_pgs_filter_keeps_the_sort(user, monkeypatch):
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO/family/1001")
+    open_tab(user, "family-tabs", "Polygenic Scores")
+    await user.should_see("2 polygenic scores", retries=30)
+
+    pgs = tables[-1]
+    table = pgs["table"]
+    assert [r["Trait"] for r in table.rows] == list(datagen.TRAITS)
+    # Filter first: the sort then reorders only the filtered rows, and the
+    # next filter used to restart from the unsorted ones.
+    with user.client:
+        pgs["on_filter"]({"filters": {"Trait": "_TEST"}})
+        table._default_sort_handler(
+            SimpleNamespace(args={"sorting": [{"id": "Trait", "desc": False}]})
+        )
+    expected = sorted(datagen.TRAITS)
+    assert [r["Trait"] for r in table.rows] == expected
+    with user.client:
+        pgs["on_filter"]({"filters": {}})
+    assert [r["Trait"] for r in table.rows] == expected
 
 
 async def open_str_locus(user, monkeypatch, username, locus="HTT"):

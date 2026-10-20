@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.utils.ancestry import (
     ID_COLUMNS,
     NULL_VALUES,
@@ -23,6 +24,12 @@ from genetics_viz.utils.ancestry import (
     find_cohort_ancestry_files,
     get_cohort_ancestry_dir,
     get_region_color,
+    pgs_export,
+)
+from genetics_viz.utils.export import (
+    export_filename,
+    frame_to_tsv,
+    people_from_individuals,
 )
 from genetics_viz.utils.pedigree_labels import (
     PHENO_COLORS,
@@ -220,6 +227,32 @@ def render_cohort_pgs_tab(
         with ui.row().classes("items-center gap-2 w-full"):
             ui.label("Polygenic Scores").classes("text-lg font-semibold text-blue-700")
             provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
+            ui.space()
+            download_button(
+                [
+                    Download(
+                        "pgs",
+                        "Every z-score of the individuals shown",
+                        lambda: export_filename(
+                            cohort.name, "pgs", tag=state["files"].file_tag
+                        ),
+                        lambda: frame_to_tsv(
+                            pgs_export(
+                                state["files"],
+                                people_from_individuals(
+                                    filtered_state.get("individuals", [])
+                                ),
+                                regions=(
+                                    set(controls["regions"])
+                                    if state["regions"]
+                                    else None
+                                ),
+                            )
+                        ),
+                    )
+                ],
+                mark="download-pgs",
+            )
 
         variants = state["files"].all_variants
         if len(variants) > 1:

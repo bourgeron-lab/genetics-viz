@@ -23,11 +23,12 @@ assigns them, the app only draws them.
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 import polars as pl
 import yaml
 
+from .export import PERSON_COLUMNS, people_frame
 from .sharding import get_family_path, get_sample_path
 from .tsv import find_labels, read_tsv_or_none
 from .diagnostic_badges import STATUS_CFG as DIAGNOSTIC_CFG
@@ -778,3 +779,72 @@ def cohort_flagged_rows(
         )
     rows.sort(key=lambda r: (-r["status_rank"], r["locus"], -(r["pct"] or 0)))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Exports, shared by the family and cohort tabs
+# ---------------------------------------------------------------------------
+
+#: Genotype columns in export order; any other column of the table follows.
+_EXPORT_COLUMNS = [
+    "father", "mother", "locus", "chrom", "pos", "end", "motif", "ref_units",
+    "disease", "inheritance", "status", "genotype", "allele1", "allele2",
+    "allele1_ci", "allele2_ci", "allele1_class", "allele2_class",
+    "allele1_support", "allele2_support", "normal_max", "intermediate_min",
+    "pathogenic_min", "cohort_percentile", "parents_max_allele", "filter",
+    "locus_coverage",
+]  # fmt: skip
+
+
+def genotypes_export(
+    genotypes: pl.DataFrame,
+    people: List[Dict[str, Any]],
+    statuses: Optional[Collection[str]] = None,
+    loci: Optional[Collection[str]] = None,
+    context: Optional[CohortContext] = None,
+    validations: Optional[Dict[Tuple[str, str], str]] = None,
+    diagnostics: Optional[Dict[Tuple[str, str], str]] = None,
+) -> pl.DataFrame:
+    """The people's genotypes, one row per locus and person.
+
+    ``statuses`` and ``loci`` restrict the rows. A family table gets its
+    ``cohort_percentile`` from ``context``; ``validations`` and
+    ``diagnostics`` (``(locus, sample) -> status``) add the curators' columns.
+    The pipeline's sex and phenotype words give way to the pedigree codes.
+    """
+    keys = people_frame(people).rename({"FID": "family_id", "IID": "sample"})
+    sub = genotypes.drop([c for c in ("sex", "phenotype") if c in genotypes.columns])
+    sub = sub.join(keys, on=["family_id", "sample"], how="inner", maintain_order="left")
+    if statuses is not None:
+        sub = sub.filter(pl.col("status").is_in(list(statuses)))
+    if loci is not None:
+        sub = sub.filter(pl.col("locus").is_in(list(loci)))
+    if (
+        "cohort_percentile" not in sub.columns
+        and context is not None
+        and context.genotypes is not None
+        and "cohort_percentile" in context.genotypes.columns
+    ):
+        pct = context.genotypes.select(
+            ["family_id", "sample", "locus", "cohort_percentile"]
+        ).unique(subset=["family_id", "sample", "locus"], keep="first")
+        sub = sub.join(
+            pct, on=["family_id", "sample", "locus"], how="left", maintain_order="left"
+        )
+    extra = []
+    for name, curated in (("validation", validations), ("diagnostic", diagnostics)):
+        if curated is None:
+            continue
+        sub = sub.with_columns(
+            pl.struct(["locus", "sample"])
+            .map_elements(
+                lambda r, c=curated: c.get((r["locus"], r["sample"])),
+                return_dtype=pl.String,
+            )
+            .alias(name)
+        )
+        extra.append(name)
+    sub = sub.rename({"family_id": "FID", "sample": "IID"})
+    listed = [c for c in _EXPORT_COLUMNS if c in sub.columns]
+    rest = [c for c in sub.columns if c not in (*PERSON_COLUMNS, *listed, *extra)]
+    return sub.select([*PERSON_COLUMNS, *listed, *rest, *extra])

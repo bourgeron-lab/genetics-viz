@@ -118,6 +118,7 @@ class DataTable:
         self._on_filter = on_filter
         self._on_page_change = on_page_change
         self.initial_sorting = initial_sorting or []
+        self.sorting = list(self.initial_sorting)
         self.initial_page = initial_page
         self._state_holder = state_holder
 
@@ -215,48 +216,58 @@ class DataTable:
 
     # ---- Default sort handler (server-side in Python) ----
 
+    def sort_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Sort *rows* in place by the table's current sorting, and return them.
+
+        An ``on_filter`` handler passes its filtered rows through this, so a
+        filter keeps the sort the header arrow shows.
+        """
+        if not self.sorting:
+            return rows
+        col_id = self.sorting[0]["id"]
+        desc = self.sorting[0].get("desc", False)
+
+        # Look up column def for sort metadata
+        col_def = next((c for c in self.columns if c.get("id") == col_id), {})
+        sort_field = col_def.get("sortField", col_id)
+        sort_type = col_def.get("sorting", "")
+
+        if sort_type == "genomic":
+            from genetics_viz.utils.column_names import genomic_sort_key
+
+            rows.sort(
+                key=lambda r: (
+                    r.get(sort_field) is None,
+                    genomic_sort_key(r.get(sort_field, "")),
+                ),
+                reverse=desc,
+            )
+        elif sort_type == "numerical":
+
+            def _num_key(r: dict) -> tuple:
+                v = r.get(sort_field)
+                if v is None:
+                    return (True, 0.0)
+                try:
+                    return (False, float(v))
+                except (ValueError, TypeError):
+                    return (True, 0.0)
+
+            rows.sort(key=_num_key, reverse=desc)
+        else:
+            rows.sort(
+                key=lambda r: (
+                    r.get(sort_field) is None,
+                    r.get(sort_field, ""),
+                ),
+                reverse=desc,
+            )
+        return rows
+
     def _default_sort_handler(self, e: Any) -> None:
-        data = e.args
-        sorting = data.get("sorting", [])
-        if sorting:
-            col_id = sorting[0]["id"]
-            desc = sorting[0].get("desc", False)
-
-            # Look up column def for sort metadata
-            col_def = next((c for c in self.columns if c.get("id") == col_id), {})
-            sort_field = col_def.get("sortField", col_id)
-            sort_type = col_def.get("sorting", "")
-
-            if sort_type == "genomic":
-                from genetics_viz.utils.column_names import genomic_sort_key
-
-                self.rows.sort(
-                    key=lambda r: (
-                        r.get(sort_field) is None,
-                        genomic_sort_key(r.get(sort_field, "")),
-                    ),
-                    reverse=desc,
-                )
-            elif sort_type == "numerical":
-
-                def _num_key(r: dict) -> tuple:
-                    v = r.get(sort_field)
-                    if v is None:
-                        return (True, 0.0)
-                    try:
-                        return (False, float(v))
-                    except (ValueError, TypeError):
-                        return (True, 0.0)
-
-                self.rows.sort(key=_num_key, reverse=desc)
-            else:
-                self.rows.sort(
-                    key=lambda r: (
-                        r.get(sort_field) is None,
-                        r.get(sort_field, ""),
-                    ),
-                    reverse=desc,
-                )
+        sorting = e.args.get("sorting", [])
+        self.sorting = sorting
+        self.sort_rows(self.rows)
         # Save sorting state for persistence across refreshes
         if self._state_holder is not None:
             self._state_holder["sorting"] = sorting

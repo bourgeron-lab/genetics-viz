@@ -25,9 +25,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import polars as pl
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import Variant, get_region_color
 from genetics_viz.utils.auth import can_write
+from genetics_viz.utils.export import export_filename, person, rows_to_tsv
 from genetics_viz.utils.pedigree_labels import (
     PHENO_COLORS,
     PHENO_ORDER,
@@ -39,6 +41,7 @@ from genetics_viz.utils.pedigree_labels import (
     sex_label,
 )
 from genetics_viz.utils.roh import (
+    froh_export,
     EXCESS_PERCENTILE,
     F_BACKGROUND,
     GRADE_HELP,
@@ -535,12 +538,54 @@ def render_cohort_roh_tab(
         "scatter_group": None,
     }
 
+    def shown() -> List[Tuple[Dict, Dict]]:
+        """``(froh row, individual)`` of the shown individuals with ROH results."""
+        by_sample = state["by_sample"] or {}
+        allowed = set(controls["groups"])
+        paired: List[Tuple[Dict, Dict]] = []
+        seen = set()
+        for ind in filtered_state.get("individuals", []):
+            key = (ind.get("FID"), ind["Sample ID"])
+            # Some pedigrees repeat a row; count each person once.
+            if key in seen:
+                continue
+            seen.add(key)
+            row = by_sample.get(key)
+            if row is None:
+                continue
+            if allowed and (row.get("ref_group") or POOLED) not in allowed:
+                continue
+            paired.append((row, ind))
+        return paired
+
+    def export() -> str:
+        paired = []
+        for row, ind in shown():
+            who = person(ind["FID"], ind["Sample ID"], ind["Sex"], ind["Phenotype"])
+            paired.append((row, who))
+        rows, columns = froh_export(paired, show_relationship)
+        return rows_to_tsv(rows, columns) if rows else ""
+
     with ui.card().classes("w-full min-w-0"):
         with ui.row().classes("items-center gap-2 w-full"):
             ui.label("Runs of homozygosity").classes(
                 "text-lg font-semibold text-blue-700"
             )
             provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
+            ui.space()
+            download_button(
+                [
+                    Download(
+                        "froh",
+                        "F_ROH, pattern and grade of the individuals shown",
+                        lambda: export_filename(
+                            cohort.name, "roh", tag=state["files"].file_tag
+                        ),
+                        export,
+                    )
+                ],
+                mark="download-roh",
+            )
 
         variants = state["files"].all_variants
         if len(variants) > 1:
@@ -604,23 +649,8 @@ def render_cohort_roh_tab(
 
         @ui.refreshable
         def render_body() -> None:
-            by_sample = state["by_sample"]
             reference = state["reference"]
-            allowed = set(controls["groups"])
-            paired: List[Tuple[Dict, Dict]] = []
-            seen = set()
-            for ind in filtered_state.get("individuals", []):
-                key = (ind.get("FID"), ind["Sample ID"])
-                # Some pedigrees repeat a row; count each person once.
-                if key in seen:
-                    continue
-                seen.add(key)
-                row = by_sample.get(key)
-                if row is None:
-                    continue
-                if allowed and (row.get("ref_group") or POOLED) not in allowed:
-                    continue
-                paired.append((row, ind))
+            paired = shown()
 
             if reference is None:
                 ref_dir = get_reference_roh_dir(state["files"].bundle_version)

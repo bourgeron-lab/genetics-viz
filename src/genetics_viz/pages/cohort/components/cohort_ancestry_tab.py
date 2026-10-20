@@ -14,8 +14,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from nicegui import ui
 
+from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
+    ancestry_export,
     ID_COLUMNS,
     NULL_VALUES,
     AncestryFiles,
@@ -30,6 +32,11 @@ from genetics_viz.utils.ancestry_plots import (
     reference_series,
     round_coord,
     tooltip_formatter,
+)
+from genetics_viz.utils.export import (
+    export_filename,
+    frame_to_tsv,
+    people_from_individuals,
 )
 from genetics_viz.utils.tsv import read_tsv_or_none
 
@@ -303,6 +310,27 @@ def render_cohort_ancestry_tab(
         with ui.row().classes("items-center gap-2 w-full"):
             ui.label("Ancestry").classes("text-lg font-semibold text-blue-700")
             provenance = ui.label(state["files"].label).classes("text-xs text-gray-500")
+            ui.space()
+            download_button(
+                [
+                    Download(
+                        "ancestry",
+                        "PCs, regions and admixture of the individuals shown",
+                        lambda: export_filename(
+                            cohort.name, "ancestry", tag=state["files"].file_tag
+                        ),
+                        lambda: frame_to_tsv(
+                            ancestry_export(
+                                state["files"],
+                                people_from_individuals(
+                                    filtered_state.get("individuals", [])
+                                ),
+                            )
+                        ),
+                    )
+                ],
+                mark="download-ancestry",
+            )
 
         variants = state["files"].all_variants
         if len(variants) > 1:

@@ -1,8 +1,6 @@
 """Search page for cohort-wide variant search."""
 
 import asyncio
-import csv
-import io
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -22,6 +20,7 @@ from genetics_viz.components.filters import (
     create_geneset_filter_menu,
     create_validation_filter_menu,
 )
+from genetics_viz.utils.export import is_export_column, rows_to_tsv
 from genetics_viz.utils.locus import (
     filter_bed_dataframe,
     filter_dataframe,
@@ -86,45 +85,6 @@ from genetics_viz.utils.vep import (
     format_consequence_display,
     get_consequence_color,
 )
-
-
-# Keys that are internal/display-only and should never appear in TSV exports
-_INTERNAL_KEYS = {
-    "_source_type",
-    "_cohort_name",
-    "_is_snv",
-    "_original_locus",
-    "_curated_tooltip",
-    "_wisecondorx_tooltip",
-    "IsCurated",
-    "ConsequenceBadges",
-    "ClinVarBadges",
-    "GeneBadges",
-    "VEP_Gene_badges",
-    "MoiBadges",
-    "_moi_rank",
-    "_genetrek_url",
-    "Diagnostic_badge",
-}
-
-
-def _is_export_column(key: str) -> bool:
-    """Return True if the key should be included in a TSV export."""
-    if key in _INTERNAL_KEYS:
-        return False
-    if key.endswith("_badge") or key.endswith("_badges"):
-        return False
-    return True
-
-
-def _generate_tsv(rows: List[Dict[str, Any]], columns: List[str]) -> str:
-    """Generate TSV content string from rows using only the specified columns."""
-    output = io.StringIO()
-    writer = csv.writer(output, delimiter="\t")
-    writer.writerow(columns)
-    for row in rows:
-        writer.writerow([row.get(col, "") for col in columns])
-    return output.getvalue()
 
 
 def _apply_curated_coordinates(
@@ -1976,7 +1936,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                         for col in target_preset.get("columns", [])
                                         if col != "Validation"
                                         and col in all_columns
-                                        and _is_export_column(col)
+                                        and is_export_column(col)
                                     ]
                                     # Auto-include essential SV fields for validation file page
                                     if current_name in ("SV View", "Mix View"):
@@ -1986,7 +1946,7 @@ def search_cohort_page(cohort_name: str) -> None:
                                                 and sv_col not in save_cols
                                             ):
                                                 save_cols.append(sv_col)
-                                    tsv_content = _generate_tsv(rows, save_cols)
+                                    tsv_content = rows_to_tsv(rows, save_cols)
                                     to_validate_dir = store.data_dir / "to_validate"
                                     to_validate_dir.mkdir(parents=True, exist_ok=True)
                                     file_path = to_validate_dir / filename
@@ -2008,9 +1968,9 @@ def search_cohort_page(cohort_name: str) -> None:
                                     download_cols = [
                                         col
                                         for col in selected_cols["value"]
-                                        if _is_export_column(col)
+                                        if is_export_column(col)
                                     ]
-                                    tsv_content = _generate_tsv(rows, download_cols)
+                                    tsv_content = rows_to_tsv(rows, download_cols)
                                     ui.download(
                                         tsv_content.encode("utf-8"),
                                         filename,
