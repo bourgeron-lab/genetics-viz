@@ -5,6 +5,29 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-10-20
+
+### Added
+- **Sample QC from the ghfc-ngs `sampleqc` step (somalier).** The app reads each family's and cohort's `qc/<id>.<label>.{samples,pairs,flags}.tsv` and shows:
+  - relatives across families;
+  - relationship errors inside a family (not the declared parent, half vs full sibs, unexpectedly related, duplicates);
+  - sex mismatches and possible sex chromosome aneuploidies;
+  - contamination and Mendelian errors.
+- **Family page: a Sample QC tab.**
+  - The issues, with relatives in other families linked to their family.
+  - A kinship matrix (observed against pedigree) and the KING kinship / IBS0-IBS2 plot.
+  - X/Y copy numbers with karyotype boxes, and chrX heterozygosity.
+  - Contamination and Mendelian error plots against the cohort.
+  - A QC badge in the family header opens the tab, and flagged members get a warning icon.
+- **Cohort page.**
+  - A Sample QC column with a filter in the individuals table.
+  - A Sample QC panel that follows the filters, with a link to somalier's HTML report.
+  - A cross-family network where "hub" samples, related to many families, stand out. These are more likely contamination or population structure than real relatives.
+- **Home cards** show how many individuals have a high-severity QC issue.
+- **De novo warning.** Wombat de novo tables warn when the family has a non-parent, swap, duplicate, contamination or Mendelian flag.
+- **Curator acknowledgements.** A curator can mark a flag as explained (known twins, known consanguinity…) or as a confirmed issue, with a note, in `validations/sampleqc.tsv`. Acknowledged flags stop counting in the badges, the cohort column and counts, the home cards and the de novo warning; confirmed issues still trigger the de novo warning.
+- Wording follows the ROH tab: readers get neutral labels, no evidence and only the pairs the pedigree declares related.
+
 ## [0.19.2] - 2026-10-20
 
 ### Added
