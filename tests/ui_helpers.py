@@ -46,6 +46,7 @@ def capture_tables(monkeypatch) -> list:
                 "rows": rows,
                 "on_filter": kwargs.get("on_filter"),
                 "on_row_action": kwargs.get("on_row_action"),
+                "table": self,
             }
         )
         original(self, columns, rows, *args, **kwargs)

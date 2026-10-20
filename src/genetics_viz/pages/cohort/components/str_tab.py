@@ -341,12 +341,25 @@ def render_eh_subtab(
                     on_saved=content.refresh,
                 )
 
-        DataTable(
+        dt_ref: Dict[str, Any] = {"dt": None}
+
+        def on_filter(e: Dict[str, Any]) -> None:
+            filters = e.get("filters") or {}
+            filtered = list(rows)
+            for col in ("locus", "disease"):
+                text = (filters.get(col) or "").strip().lower()
+                if text:
+                    filtered = [r for r in filtered if text in (r[col] or "").lower()]
+            if dt_ref["dt"]:
+                dt_ref["dt"].update_data(dt_ref["dt"].sort_rows(filtered))
+
+        dt_ref["dt"] = DataTable(
             columns=columns,
             rows=rows,
             row_key="id",
             pagination={"rowsPerPage": 60},
             on_row_action=on_row_action,
+            on_filter=on_filter,
             initial_sorting=[{"id": "worst", "desc": True}],
         )
         _legend()

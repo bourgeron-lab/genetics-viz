@@ -176,14 +176,15 @@ def render_pgs_tab(
 
         def on_filter(e: Dict[str, Any]) -> None:
             filters = e.get("filters", {})
-            filtered = all_rows
+            filtered = list(all_rows)
 
             trait_text = (filters.get(_TRAIT_COL) or "").strip().lower()
             if trait_text:
                 filtered = [r for r in filtered if trait_text in r[_TRAIT_COL].lower()]
 
             if dt_ref["dt"]:
-                dt_ref["dt"].update_data(filtered)
+                # Restarted from all_rows, so the active sort is applied again.
+                dt_ref["dt"].update_data(dt_ref["dt"].sort_rows(filtered))
 
         with ui.card().classes("w-full"):
             dt_ref["dt"] = DataTable(
