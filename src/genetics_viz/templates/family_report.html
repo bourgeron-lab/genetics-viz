@@ -52,7 +52,10 @@
   tr { break-inside: avoid; }
   th { text-align: left; background: #f3f4f6; border-bottom: 1px solid #d1d5db;
        padding: 3px 4px; font-weight: 600; }
-  td { border-bottom: 1px solid #e5e7eb; padding: 3px 4px; vertical-align: top; }
+  /* "anywhere" also lowers a cell's minimum width, so one long value (a VEP
+     list, a locus) wraps instead of pushing the table off the page. */
+  td { border-bottom: 1px solid #e5e7eb; padding: 3px 4px; vertical-align: top;
+       overflow-wrap: anywhere; }
   tr.muted td { color: #9ca3af; }
   tr.attention td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
   .chip { display: inline-block; color: white; border-radius: 3px; padding: 0 4px;
