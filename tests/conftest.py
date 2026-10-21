@@ -24,6 +24,7 @@ from genetics_viz.utils import (
     genetrek,
     ghfc_ngs_docs,
     pipeline_params,
+    report_summaries,
     roh,
     sample_counts,
     sample_qc,
@@ -51,6 +52,7 @@ def _reset_globals() -> None:
     sample_counts.clear_sample_count_cache()
     sample_qc.clear_qc_cache()
     sample_qc_acks.clear_ack_cache()
+    report_summaries.clear_summary_cache()
     cohort_state.clear_state_cache()
     cohort_state.clear_sha_cache()
     pipeline_params.clear_params_cache()

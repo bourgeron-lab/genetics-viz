@@ -1,0 +1,154 @@
+# Family report: wording, PGS traits, thresholds and methods.
+#
+# The report goes to the referring clinician of each centre, never to the
+# patient. Every sentence it prints that is not data lives here.
+#
+# Tool versions below were read from ghfc-ngs at the commit in
+# `methods_source`. They are written by hand: the pipeline does not record
+# software versions in its run record yet. The report prints the run's own
+# pipeline version and commit, so a reader can see when the two differ.
+
+title: "Genomic analysis report"
+subtitle: "Research whole-genome sequencing, family summary"
+
+audience: >-
+  Confidential. For the referring clinician only; not to be given to the
+  patient or family as is.
+
+disclaimer: >-
+  These results come from a research analysis. They have not been produced
+  by an accredited diagnostic laboratory. Any finding considered for clinical
+  use or for returning to the family must first be confirmed by an accredited
+  laboratory (ISO 15189) on a new sample.
+
+# Diagnostics listed in the report, by curator verdict. "conflicting" is
+# computed when curators disagree and is listed so it is not lost.
+diagnostic_verdicts:
+  pathogenic: { label: "Pathogenic", color: "#c62828" }
+  uncertain: { label: "Uncertain significance", color: "#ef6c00" }
+  conflicting: { label: "Curators disagree", color: "#f9a825" }
+
+# Polygenic scores shown, in this order. `id` is the column of the pipeline's
+# pgs_zscore table.
+pgs_traits:
+  - id: autism_grove2026
+    label: "Autism"
+    source: "Grove et al. 2026"
+  - id: adhd_demontis2023
+    label: "ADHD"
+    source: "Demontis et al. 2023, doi:10.1038/s41588-022-01285-8"
+  - id: epilepsy_ILAE2023/all
+    label: "Epilepsy (all)"
+    source: "ILAE Consortium 2023, doi:10.1038/s41588-023-01485-w"
+  - id: int_savage2018
+    label: "Intelligence"
+    source: "Savage et al. 2018, doi:10.1038/s41588-018-0152-6"
+
+pgs_note: >-
+  A polygenic score summarises many common variants of small effect. It is
+  not diagnostic: at the individual level it explains a small part of the
+  variance of a trait, and most people with a high score do not have the
+  condition. The percentile places the person among reference genomes of
+  similar ancestry. The weights come mostly from European studies and
+  transfer less well to other ancestries.
+
+# Admixture components shown for a person from this proportion up.
+admixture_min: 0.05
+
+# Aneuploidy: same-direction WisecondorX aberrations covering at least this
+# fraction of a chromosome's assessable length (the q arm of an acrocentric
+# chromosome) are reported as a whole-chromosome gain or loss.
+aneuploidy_min_fraction: 0.75
+aneuploidy_note: >-
+  Read-depth analysis detects whole-chromosome gains and losses present in
+  most cells. Low-level mosaicism and balanced rearrangements are not
+  detected.
+
+# Shown when a section has nothing to report.
+none:
+  sample_qc: "No sample quality issue was found."
+  aneuploidy: "No whole-chromosome aneuploidy was detected."
+  upd: "No uniparental disomy candidate was found."
+  diagnostics: "No pathogenic or uncertain finding has been recorded by the curators."
+
+methods_source: "ghfc-ngs 4c7ac2b (2026-10-21)"
+
+# Methods paragraphs, printed for the sections that have data. Placeholders in
+# braces are filled from the family's own files; unknown ones print "n/a".
+methods:
+  sequencing:
+    title: "Sequencing and small variants"
+    text: >-
+      Reads were aligned to GRCh38 (GIAB v3 analysis set, no alternate contigs)
+      with BWA-MEM2 2.2.1; duplicates were marked with samblaster 0.1.26.
+      Variants were called per sample with DeepVariant 1.9.0 (WGS model) and
+      genotyped jointly within the family with GLnexus 1.4.1, then normalised
+      with bcftools. Annotation used Ensembl VEP 115 (cache 112, GENCODE 46,
+      LOFTEE, UTRAnnotator), gnomAD v4.1, CADD 1.7, REVEL, AlphaMissense,
+      SpliceAI, MPC and popEVE. Candidate variants were selected with pywombat
+      1.6.1: rare variants (gnomAD FAF95 at most 0.1%) and de novo variants
+      (child DP 10 and GQ 18 or more, parental alternate allele fraction at
+      most 2%). Curators reviewed candidates against the reads (IGV).
+  cnv:
+    title: "Copy-number variants and aneuploidy"
+    text: >-
+      Read-depth copy-number variants were called with WisecondorX 2.1.2
+      (germline fork with zero-bin correction) in {wcx_bins} against
+      a reference of the lab's genomes ({wcx_args}). Gains and losses covering
+      at least {aneuploidy_pct}% of a chromosome are reported as whole-chromosome
+      events. Sex-chromosome copy numbers come from normalised read depth
+      (mosdepth 0.3.11, 250 bp bins) outside the pseudo-autosomal regions,
+      rounded to whole copies.
+  sample_qc:
+    title: "Sample quality control"
+    text: >-
+      Identity, sex and relatedness were checked with somalier 0.3.5 on
+      17,384 autosomal, 365 chrX and 17 chrY common sites ({qc_label}).
+      Relatedness uses the KING-robust kinship coefficient (degree cut-offs
+      0.354, 0.177, 0.088, 0.044) compared with the declared pedigree.
+      Contamination is estimated with CHARR (Lu et al. 2023; warning from
+      0.02, high from 0.05). Mendelian errors are counted at GQ 20 and DP 10 or
+      more.
+  ancestry:
+    title: "Genetic ancestry"
+    text: >-
+      Genotypes at 85,165 LD-pruned sites were projected with PLINK 2.0 onto
+      the principal components of a reference panel of 6,752 unrelated genomes
+      (gnomAD HGDP and 1000 Genomes, AADR Human Origins; bundle {bundle},
+      genotype filters {tag}). The region is the majority among the 20 nearest
+      reference genomes on 10 components. Admixture proportions come from a
+      K=7 model trained on the reference. Genetic ancestry is a statistical
+      description of the genome, not an ethnic or national identity.
+  roh:
+    title: "Runs of homozygosity"
+    text: >-
+      Runs of homozygosity were called with BCFtools/RoH 1.24 on about 1.04
+      million sites, using allele frequencies of unrelated reference genomes of
+      the person's ancestry region and the HapMap II genetic map. F_ROH is the
+      fraction of the autosomes (2,641 Mb) in runs of 1.5 Mb or more; its
+      percentile is among unrelated reference genomes of the same region. A
+      UPD candidate is a chromosome holding at least 10 Mb of runs of 5 Mb or
+      more, 75% or more of all such runs, while the rest of the genome is not
+      inbred.
+  upd:
+    title: "Uniparental disomy"
+    text: >-
+      Two independent signals are used: the runs of homozygosity above, and,
+      in trios, 20 or more sites where the child is homozygous for the allele
+      a parent lacks, 80% of them on one chromosome (somalier sites). A
+      curator reviews each candidate.
+  pgs:
+    title: "Polygenic scores"
+    text: >-
+      Weights were estimated with SBayesRC (GCTB 2.5.2, UK Biobank European
+      LD reference, baseline 2.2 annotations) and scored with PLINK 2.0 (bundle
+      {bundle}). Each score is adjusted for ancestry by regression on 10
+      principal components of the reference, and standardised by the spread
+      among the 100 nearest reference genomes. The percentile is the normal
+      distribution's value at that z-score.
+  str:
+    title: "Short tandem repeats"
+    text: >-
+      Repeat expansions were genotyped with ExpansionHunter 5.0.0 (catalog
+      {catalog}) and classed with STRipy thresholds; flagged genotypes were
+      inspected with REViewer 0.2.7.

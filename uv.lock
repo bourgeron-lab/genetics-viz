@@ -374,6 +374,7 @@ name = "genetics-viz"
 version = "0.23.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jinja2" },
     { name = "nicegui" },
     { name = "numpy" },
     { name = "plotly" },
@@ -394,6 +395,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "nicegui", specifier = ">=2.0.0" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "plotly", specifier = ">=5.0.0" },

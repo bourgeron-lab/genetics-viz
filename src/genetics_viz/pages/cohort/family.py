@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from nicegui import ui
 
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
+from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
 from genetics_viz.components.notes_loader import (
     delete_note,
@@ -111,7 +112,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
             # Filled in once the analysis tabs exist: the badge opens one.
             open_qc_tab: Dict[str, Any] = {"fn": None}
 
-            with ui.row().classes("items-center gap-4 mb-6"):
+            with ui.row().classes("w-full items-center gap-4 mb-6"):
                 ui.label(f"👨‍👩‍👧‍👦 Family: {family_id}").classes(
                     "text-3xl font-bold text-blue-900"
                 )
@@ -139,8 +140,10 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                 qc_badge()
 
+                ui.space()
+                render_report_buttons(store.data_dir, family_id, family, cohort)
+
                 if len(sorted_fids) > 1 and current_idx >= 0:
-                    ui.space()
                     if current_idx > 0:
                         prev_fid = sorted_fids[current_idx - 1]
                         ui.button(

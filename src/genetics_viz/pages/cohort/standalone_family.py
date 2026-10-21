@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 from nicegui import ui
 
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
+from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
 from genetics_viz.components.notes_loader import (
     delete_note,
@@ -112,13 +113,15 @@ async def standalone_family_page(family_id: str) -> None:
                 ui.label(f"Family: {family_id}").classes("font-semibold")
 
             # Family header
-            with ui.row().classes("items-center gap-4 mb-4"):
+            with ui.row().classes("w-full items-center gap-4 mb-4"):
                 ui.label(f"Family: {family_id}").classes(
                     "text-3xl font-bold text-blue-900"
                 )
                 if family:
                     ui.badge(f"{family.num_samples} members").props("color=blue")
                     ui.badge(f"{family.num_founders} founders").props("color=teal")
+                    ui.space()
+                    render_report_buttons(store.data_dir, family_id, family)
 
             # Data availability panel
             with ui.card().classes("w-full mb-4"):
