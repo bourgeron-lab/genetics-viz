@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.24.1] - 2026-10-21
 
 ### Fixed
 - **Family report: the findings table ran off the page.** An SNV's consequence was VEP's raw comma list (`downstream_gene_variant,missense_variant,…`), one unbreakable word. It now reads as words, most severe first, without up/downstream and other modifier terms when a coding one is there (`missense variant`). Every report table cell can also wrap now, so no long value widens a table past the page.
