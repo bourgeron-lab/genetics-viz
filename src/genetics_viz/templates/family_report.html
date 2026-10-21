@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ report.document_title }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 14mm 12mm 16mm 12mm;
+    @bottom-left {
+      content: "{{ report.cohort_name ~ ' · ' if report.cohort_name }}Family {{ report.family_id }} · Confidential";
+      font: 7pt Helvetica, Arial, sans-serif; color: #6b7280;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " / " counter(pages);
+      font: 7pt Helvetica, Arial, sans-serif; color: #6b7280;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0; padding: 16px; background: #e5e7eb;
+    font: 9.5pt/1.4 Helvetica, Arial, sans-serif; color: #111827;
+  }
+  .page { max-width: 186mm; margin: 0 auto; background: white; padding: 12mm; }
+  header { display: flex; justify-content: space-between; align-items: flex-start;
+           border-bottom: 2px solid #1e3a8a; padding-bottom: 6px; margin-bottom: 8px; }
+  header h1 { margin: 0; font-size: 16pt; color: #1e3a8a; }
+  header .subtitle { color: #4b5563; font-size: 9pt; }
+  header .meta { text-align: right; font-size: 8.5pt; color: #374151; }
+  header .meta .fid { font-size: 13pt; font-weight: bold; color: #111827; }
+  .audience { border: 1px solid #fca5a5; background: #fef2f2; color: #7f1d1d;
+              padding: 5px 8px; font-size: 8.5pt; margin-bottom: 8px; }
+  .conclusion { border-left: 4px solid #1e3a8a; background: #eff6ff; padding: 6px 10px;
+                margin: 8px 0; white-space: pre-wrap; }
+  .conclusion.empty { border-left-color: #9ca3af; background: #f9fafb; color: #6b7280;
+                      font-style: italic; }
+  .conclusion .by { display: block; white-space: normal; color: #4b5563;
+                    font-size: 8pt; margin-top: 4px; font-style: normal; }
+  h2 { font-size: 11.5pt; color: #1e3a8a; margin: 14px 0 4px;
+       border-bottom: 1px solid #c7d2fe; padding-bottom: 2px; }
+  h2 .flag { color: #b91c1c; font-size: 9pt; font-weight: normal; margin-left: 6px; }
+  section { break-inside: auto; }
+  /* A heading never ends a page: it travels with its note and the first
+     rows of its table (Chrome honours break-after only on block siblings). */
+  h2, section .head { break-after: avoid; break-inside: avoid; }
+  section .head + table, section .head + .plots { break-before: avoid; }
+  .note { margin: 2px 0 4px; color: #374151; }
+  .missing { color: #6b7280; font-style: italic; }
+  table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 8.5pt; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  th { text-align: left; background: #f3f4f6; border-bottom: 1px solid #d1d5db;
+       padding: 3px 4px; font-weight: 600; }
+  td { border-bottom: 1px solid #e5e7eb; padding: 3px 4px; vertical-align: top; }
+  tr.muted td { color: #9ca3af; }
+  tr.attention td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
+  .chip { display: inline-block; color: white; border-radius: 3px; padding: 0 4px;
+          font-size: 8pt; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+         margin-right: 4px; vertical-align: middle; }
+  .cell-note { display: block; color: #6b7280; font-size: 7.5pt; }
+  .plots { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 4px 0; }
+  .plot { break-inside: avoid; }
+  .plot .caption { font-weight: 600; font-size: 8.5pt; }
+  .plot .source { color: #6b7280; font-size: 7pt; max-width: 340px; }
+  .footnote { color: #4b5563; font-size: 8pt; margin: 2px 0; }
+  .glance { width: 100%; border-collapse: collapse; margin: 4px 0 6px; }
+  .glance td { border-bottom: 1px dotted #e5e7eb; padding: 2px 4px; }
+  .glance td.name { width: 30%; font-weight: 600; }
+  .methods p { margin: 3px 0 6px; text-align: justify; font-size: 8.5pt; }
+  .methods b { color: #1e3a8a; }
+  footer { margin-top: 14px; border-top: 1px solid #d1d5db; padding-top: 6px;
+           font-size: 7.5pt; color: #4b5563; }
+  footer .disclaimer { font-weight: 600; color: #7f1d1d; margin-bottom: 4px; }
+  @media print {
+    body { background: white; padding: 0; }
+    .page { max-width: none; padding: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <div>
+    <h1>{{ report.title }}</h1>
+    <div class="subtitle">{{ report.subtitle }}</div>
+  </div>
+  <div class="meta">
+    <div class="fid">Family {{ report.family_id }}</div>
+    {% if report.cohort_name %}<div>Cohort {{ report.cohort_name }}</div>{% endif %}
+    <div>Generated {{ report.generated_at }}{% if report.generated_by %} by {{ report.generated_by }}{% endif %}</div>
+  </div>
+</header>
+
+<div class="audience">{{ report.audience }}</div>
+
+{% macro cell(row, key) -%}
+  {%- set value = row.get(key, '') -%}
+  {%- set color = row.get('_' ~ key ~ '_color') -%}
+  {%- if color and value -%}
+    {%- if key in ('region', 'phenotype') -%}
+      <span class="dot" style="background: {{ color }}"></span>{{ value }}
+    {%- else -%}
+      <span class="chip" style="background: {{ color }}">{{ value }}</span>
+    {%- endif -%}
+  {%- else -%}{{ value }}{%- endif -%}
+  {%- if row.get('_' ~ key ~ '_note') -%}<span class="cell-note">{{ row['_' ~ key ~ '_note'] }}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro table(section) %}
+<table>
+  <thead><tr>{% for key, header in section.columns %}<th>{{ header }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for row in section.rows %}
+    <tr class="{{ 'muted' if row.get('_muted') }} {{ 'attention' if row.get('_attention') }}">
+      {% for key, header in section.columns %}<td>{{ cell(row, key) }}</td>{% endfor %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+{% set pedigree = report.section('pedigree') %}
+<section>
+  <div class="head"><h2>1. {{ pedigree.title }}</h2></div>
+  {% if pedigree.rows %}{{ table(pedigree) }}{% else %}<p class="missing">No pedigree for this family.</p>{% endif %}
+</section>
+
+<h2>Curator conclusion</h2>
+{% if report.summary %}
+<div class="conclusion">{{ report.summary.text }}<span class="by">{{ report.summary.user }}, {{ report.summary.date }}</span></div>
+{% else %}
+<div class="conclusion empty">No conclusion has been written for this family.</div>
+{% endif %}
+
+<h2>Results at a glance</h2>
+<table class="glance">
+{% for s in report.sections if s.key != 'pedigree' %}
+  <tr>
+    <td class="name"><span class="dot" style="background: {{ '#dc2626' if s.attention else ('#16a34a' if s.available else '#d1d5db') }}"></span>{{ s.title }}</td>
+    <td>{% if not s.available %}<span class="missing">{{ s.note }}</span>{% else %}{{ s.glance or s.note }}{% endif %}</td>
+  </tr>
+{% endfor %}
+</table>
+
+{% for s in report.sections if s.key != 'pedigree' %}
+<section>
+  <div class="head">
+    <h2>{{ loop.index + 1 }}. {{ s.title }}{% if s.attention %}<span class="flag">● needs attention</span>{% endif %}</h2>
+    {% if not s.available %}
+      <p class="missing">{{ s.note }}</p>
+    {% elif s.note %}
+      <p class="note">{{ s.note }}</p>
+    {% endif %}
+  </div>
+  {% if s.available %}
+    {% if s.rows %}{{ table(s) }}{% endif %}
+    {% if s.plots %}
+    <div class="plots">
+      {% for plot in s.plots %}
+      <div class="plot">
+        <div class="caption">{{ plot.caption }}</div>
+        {{ svg_of(plot) }}
+        {% if plot.note %}<div class="source">{{ plot.note }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% for f in s.footnotes %}<p class="footnote">{{ f }}</p>{% endfor %}
+  {% endif %}
+</section>
+{% endfor %}
+
+<section class="methods">
+  <div class="head"><h2>Methods</h2></div>
+  {% for title, text in report.methods %}
+  <p><b>{{ title }}.</b> {{ text }}</p>
+  {% endfor %}
+</section>
+
+<footer>
+  <div class="disclaimer">{{ report.disclaimer }}</div>
+  <div>Pipeline: {{ report.pipeline }}. Report: genetics-viz {{ report.app_version }}; methods as of {{ report.methods_source }}.</div>
+</footer>
+</div>
+</body>
+</html>

@@ -6,7 +6,7 @@ Project-level instructions for Claude Code.
 
 NiceGUI-based web application for genetics cohort data visualization. Uses TanStack tables for dataframes, Polars for data processing, and ECharts for plots. Managed with `uv`.
 
-Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS violins in `cohort_pgs_tab.py` and the cohort ROH violins in `cohort_roh_tab.py` use Plotly. ECharts has no violin or box series, and all three live as sibling tabs on the cohort page.
+Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS violins in `cohort_pgs_tab.py` and the cohort ROH violins in `cohort_roh_tab.py` use Plotly. ECharts has no violin or box series, and all three live as sibling tabs on the cohort page. The family report draws static SVG built in Python (`utils/report_svg.py`): it is printed, and a JS chart can miss the print.
 
 ## Commands
 
@@ -61,6 +61,7 @@ src/genetics_viz/
     diagnostic_dialog.py          # Diagnostic review dialog
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
     upd_dialog.py                 # UPD review: evidence, validation, diagnostic (ROH + Sample QC tabs)
+    family_report_dialog.py       # Family report: "See report"/"PDF" buttons, dialog, conclusion, print
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
     genetrek.yaml                 # GeneTrek refresh period, tier colours, default profile
@@ -68,6 +69,7 @@ src/genetics_viz/
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
     sample_qc.yaml                # Sample QC flag wording (curator/reader), categories, plot lines
     str.yaml                      # STR class/status colours, support codes, REViewer filename
+    report.yaml                   # Family report: wording, PGS traits, aneuploidy cut-off, methods
     clinvar_colors.yaml           # ClinVar significance term -> color
     cnv.yaml                      # CN mask/display, single-vs-split read view, read-evidence caps/colours
     column_names.yaml             # Column display names, groups, sorting, drop flags
@@ -131,6 +133,10 @@ src/genetics_viz/
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR/UPD) and their files
     diagnostic_labels.py          # Diagnostics panel wording: STR repeat counts, UPD origin
     upd.py                        # validations/upds.tsv (role-guarded), UPD key, flag/ROH evidence
+    family_report.py              # Family report sections (pure, off-thread): pedigree … diagnostics, methods
+    report_html.py                # Family report as one self-contained HTML document (Jinja2)
+    report_svg.py                 # Static SVG plots for the report: PGS normal curves, PCA scatter
+    report_summaries.py           # reports/family_summaries.tsv: curator conclusions (role-guarded)
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
     cnv_plots.py                  # ECharts builder for the copy-number panel
@@ -159,6 +165,8 @@ src/genetics_viz/
     sample_counts.py              # Cohort Wombat/WisecondorX files, per-sample counts, outlier flags
     view_presets.py               # View preset loading with reload support
     column_names.py               # Column name/group/sorting/schema utilities
+  templates/
+    family_report.html            # The family report document (inline CSS, A4 print rules)
   static/
     css/data_table.css            # TanStack table styles
     js/data_table.js              # TanStack table JS bridge
@@ -280,6 +288,18 @@ Config files (YAML) are loaded once at module level.
 - **Both tabs open `show_upd_dialog`** (`components/upd_dialog.py`), from an anchor outside their refreshable section: the ROH tab's "UPD candidates" strip, and the Sample QC Issues review action on a `UPD_CANDIDATE` flag (instead of the plain acknowledgement dialog). On close after a save, the page's `on_acks_changed` redraws the header badge, member icons and Diagnostics panel. The diagnostic's `Impact` is the evidence source (`ROH`, `Sample QC`, `ROH + Sample QC`).
 - **A standing `present`/`absent` UPD validation acknowledges the flag** (`confirmed`/`explained`; the last non-ignored row wins). It cannot be an `AckKey` (it does not know the parent), so `load_acks` returns an `Acks` object that matches it to the flag by family, child and chromosome. **Look flags up through it** — `acks.get(flag)`, `flag in acks` — never by `flag.ack_key`. Its cache key covers both files.
 - Test data: `datagen.add_upd_case(data_dir)` gives 1001's S3 a chr2 UPD (ROH and flag, family and cohort files). It is opt-in because it changes every flag count of 1001.
+
+### Family Report
+Curators send it to the referring clinician of each centre, who decides whether to recontact the family; it is not addressed to patients. "See report" and "PDF" sit at the right end of the title row of both family pages (`render_report_buttons`), for `can_write()` only, so it always uses the curator wording.
+- **One HTML string, two uses.** `build_family_report` (pure, blocking, `asyncio.to_thread`) → `render_report_html`. The dialog shows it in an `<iframe srcdoc>`, which keeps Quasar and Tailwind out, so the screen looks like the print. PDF writes it into a hidden iframe and calls the browser's print. The document `<title>` (`<cohort>_<family>_report_<date>`) is the PDF's default name. No server-side PDF library: the VM installs with `uvx`.
+- **Plots are SVG strings from `report_svg.py`**, escaped there and marked safe only in `render_report_html` (`svg_of`). `@page` margin boxes give the footer and page numbers (Chrome 131+).
+- **Order is the one asked for:** pedigree, ancestry, Sample QC, ROH, PGS, aneuploidy, UPD, diagnostics, with the curator conclusion and "Results at a glance" (`Section.glance`, else `note`) under the pedigree. Each `Section` is available with rows, or missing with a reason.
+- **Aneuploidy** is two sources: the QC karyotype for sex chromosomes; for autosomes, same-direction WisecondorX segments covering `aneuploidy_min_fraction` of a chromosome's assessable span (the q arm of an acrocentric one). The pipeline has no aneuploidy step.
+- **PGS percentile = Φ(z)**: the pipeline's z is already ancestry-matched (k-NN SD in PC space). The traits shown are `pgs_traits` in `report.yaml`.
+- **Diagnostics** keep `diagnostic_verdicts` (pathogenic, uncertain, conflicting) and add the standing validation and inheritance per sample.
+- **Methods text and tool versions are in `report.yaml`, hand-copied from ghfc-ngs** (`methods_source` names the commit). The run's own version and commit come from the run record. Update both when the pipeline changes a tool.
+- **Curator conclusions** live in `reports/family_summaries.tsv` (`FID Summary User Timestamp`), append-only, last row wins, empty clears. Line breaks are written `\n`. `save_family_summary` checks `can_write()` itself.
+- Test data: `datagen.add_report_case(data_dir)` adds the four report traits, a chr21 gain for S3 and diagnostics. It is opt-in because it changes the PGS tables other tests compare whole.
 
 ### Family Diagnostics Panel
 - One renderer, `components/diagnostics_panel.py`, for the cohort and standalone family pages; each page wraps it in its own refreshable.

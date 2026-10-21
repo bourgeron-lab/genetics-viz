@@ -1294,3 +1294,93 @@ def add_upd_case(data: Path, fid: str = "1001", chrom: str = "2") -> None:
                 cells[col] = chrom
                 lines[i] = "\t".join(cells)
         path.write_text("\n".join(lines) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Family report
+# ---------------------------------------------------------------------------
+
+#: The polygenic scores the family report shows (``config/report.yaml``).
+REPORT_TRAITS = (
+    "autism_grove2026", "adhd_demontis2023", "epilepsy_ILAE2023/all", "int_savage2018",
+)  # fmt: skip
+
+#: z-scores per sample, in ``REPORT_TRAITS`` order; S3's ADHD score is missing.
+REPORT_Z = {
+    "S1": (0.2, -0.4, 0.0, 1.1),
+    "S2": (-0.6, 0.3, 0.5, 0.4),
+    "S3": (2.4, "nan", 0.5, -1.2),
+}
+
+DIAGNOSTIC_COLUMNS = [
+    "FID", "Variant", "Gene", "Impact", "Sample", "User", "Timestamp", "Comment",
+    "Ignore", "Diagnostic",
+]  # fmt: skip
+
+#: (file, row): a pathogenic SNV and an uncertain SV in S3, a benign SNV and an
+#: ignored pathogenic one, which the report leaves out.
+REPORT_DIAGNOSTICS = [
+    ("snvs.tsv", ["1001", "chr22:50721500:G:A", "SHANK3", "stop_gained", "S3",
+                  "curator", "2026-10-01T10:00:00", "de novo, fits the phenotype",
+                  "0", "pathogenic"]),
+    ("svs.tsv", ["1001", "chr2:165114001-165316000:del", "SCN2A:exonic", "LOSS", "S3",
+                 "curator", "2026-10-02T10:00:00", "", "0", "uncertain"]),
+    ("snvs.tsv", ["1001", "chr1:1000:C:T", "PLAIN", "missense_variant", "S1",
+                  "curator", "2026-10-03T10:00:00", "", "0", "benign"]),
+    ("snvs.tsv", ["1001", "chr1:2000:C:T", "PLAIN", "missense_variant", "S2",
+                  "curator", "2026-10-04T10:00:00", "", "1", "pathogenic"]),
+]  # fmt: skip
+
+VALIDATION_COLUMNS = [
+    "FID", "Variant", "Sample", "User", "Inheritance", "Validation", "Comment",
+    "Ignore", "Timestamp",
+]  # fmt: skip
+
+
+def _add_columns(path: Path, names: Sequence[str], values: Dict[str, Sequence]) -> None:
+    """Append ``names`` to a TSV, the row's values looked up by its first cell."""
+    lines = path.read_text().splitlines()
+    out = ["\t".join([lines[0], *names])]
+    for line in lines[1:]:
+        iid = line.split("\t")[0]
+        extra = values.get(iid, ("nan",) * len(names))
+        out.append("\t".join([line, *(str(v) for v in extra)]))
+    path.write_text("\n".join(out) + "\n")
+
+
+def add_report_case(data: Path, fid: str = "1001") -> None:
+    """What the family report reads beyond the default data, for ``fid``.
+
+    - the report's four polygenic scores, in the family and cohort files;
+    - a whole-chromosome 21 gain for S3 in the family's WisecondorX calls;
+    - diagnostics (see :data:`REPORT_DIAGNOSTICS`) and the SNV's validation.
+
+    Opt-in, as :func:`add_upd_case`: it changes the PGS tables other tests
+    compare whole.
+    """
+    for path in [
+        *(family_dir(data, fid) / "ancestry").glob("*.pgs_zscore.tsv"),
+        *(data / "cohorts").glob("*/ancestry/*.pgs_zscore.tsv"),
+    ]:
+        _add_columns(path, REPORT_TRAITS, REPORT_Z)
+    wcx = (
+        family_dir(data, fid)
+        / "svs"
+        / "wisecondorx"
+        / f"{fid}_aberrations.annotated.bed"
+    )
+    with open(wcx, "a") as f:
+        f.write("\t".join(["chr21", "10500001", "46700000", "0.58", "12.0", "primary",
+                           "gain", "S3", "", "", "", "", fid]) + "\n")  # fmt: skip
+    for name, row in REPORT_DIAGNOSTICS:
+        path = data / "diagnostics" / name
+        if not path.exists():
+            write_tsv(path, DIAGNOSTIC_COLUMNS, [])
+        with open(path, "a") as f:
+            f.write("\t".join(row) + "\n")
+    write_tsv(
+        data / "validations" / "snvs.tsv",
+        VALIDATION_COLUMNS,
+        [[fid, "chr22:50721500:G:A", "S3", "curator", "de novo", "present", "", "0",
+          "2026-10-01T09:00:00"]],
+    )  # fmt: skip
