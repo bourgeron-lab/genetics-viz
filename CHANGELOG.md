@@ -5,6 +5,22 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-10-21
+
+### Added
+- **Family report for the referring clinician.** Both family pages have two new buttons at the end of the title row, for curators and administrators only:
+  - **See report** opens the report in a full-screen dialog;
+  - **PDF** opens the browser's print dialog. The default file name is `<cohort>_<family>_report_<date>`, and each A4 page carries a confidentiality footer and page numbers.
+
+  The report recaps the family in this order: the pedigree; the curator's conclusion; "Results at a glance"; ancestry, with PCA plots; Sample QC issues and their reviews; runs of homozygosity; four polygenic scores (autism, ADHD, epilepsy, intelligence), each a small distribution with every member's percentile; aneuploidy; UPD; and the curators' pathogenic and uncertain findings, with their validation and inheritance. It ends with short methods and the tool versions, and the pipeline version and commit of the run.
+  - Aneuploidy combines the Sample QC karyotype for the sex chromosomes with WisecondorX gains or losses covering most of an autosome.
+  - It is addressed to the clinician, not to patients, and says so on every page with a research-use disclaimer.
+- **Curator conclusion per family**, written in the report dialog and printed at the top of the report. Saved in `reports/family_summaries.tsv`, one row per save; the latest one counts.
+
+### Changed
+- On the cohort family page, the previous/next family arrows now sit at the right end of the title row, after the report buttons.
+- `jinja2` is now a direct dependency (it was already installed through NiceGUI).
+
 ## [0.23.0] - 2026-10-21
 
 ### Added
