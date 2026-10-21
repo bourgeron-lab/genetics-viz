@@ -125,7 +125,7 @@ def _gather_qc_headlines(
 
     Flags a curator acknowledged do not count.
     """
-    acknowledged = set(load_acks(data_dir))
+    acknowledged = load_acks(data_dir)
     out = {}
     for cohort in cohorts:
         counts = cohort_headline(cohort, acknowledged)

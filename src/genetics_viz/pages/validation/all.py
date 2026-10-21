@@ -594,9 +594,9 @@ async def validation_all_page() -> None:
                                 with page_client:
                                     refresh_table()
 
-                            if variant_type == "STR":
-                                # The STR dialog needs the family's genotype table:
-                                # it lives on the family page's STR tab.
+                            if variant_type in ("STR", "UPD"):
+                                # The STR and UPD dialogs need the family's own
+                                # tables: they live on the family page's tabs.
                                 ui.navigate.to(
                                     f"/cohort/{cohort_name}/family/{family_id}"
                                 )

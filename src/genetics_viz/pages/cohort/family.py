@@ -5,10 +5,7 @@ from typing import Any, Dict, List
 
 from nicegui import ui
 
-from genetics_viz.components.diagnostic_loader import (
-    format_diagnostic_contributors,
-    load_family_diagnostics,
-)
+from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.header import create_header
 from genetics_viz.components.notes_loader import (
     delete_note,
@@ -43,7 +40,6 @@ from genetics_viz.pages.cohort.components.wombat_tab import (
     probe_wombat_data,
     render_wombat_tab,
 )
-from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.sample_qc import (
     count_by_severity,
@@ -51,40 +47,6 @@ from genetics_viz.utils.sample_qc import (
     severity_info,
     severity_summary,
 )
-from genetics_viz.utils.gene_scoring import (
-    GeneScorer,
-    build_gene_badges,
-    gene_badges_html,
-    get_gene_scorer,
-    split_genes,
-)
-
-
-def _parse_sv_cytoband(variant: str) -> str:
-    """Extract cytoband range from an SV variant key like 'chr1:1000-2000:dup'."""
-    try:
-        # Strip trailing :dup/:del if present
-        parts = variant.split(":")
-        if len(parts) >= 2:
-            chrom = parts[0]
-            range_part = parts[1]
-            if "-" in range_part:
-                start_str, end_str = range_part.split("-", 1)
-                return get_cytoband_range(chrom, int(start_str), int(end_str))
-    except (ValueError, IndexError):
-        pass
-    return ""
-
-
-def _render_sv_gene_badges(gene_str: str, gene_scorer: GeneScorer) -> None:
-    """Render the gene badges of a diagnostic entry, best tier first.
-
-    Takes SV ``SYMBOL:type`` lists as well as plain symbols. Shows up to six
-    genes, then a "+N genes" badge linking to all of them in GeneTrek.
-    """
-    symbols = [part.split(":")[0].strip() for part in split_genes(gene_str, ",")]
-    badges = build_gene_badges([s for s in symbols if s and s != "-"], gene_scorer)
-    ui.html(gene_badges_html(badges), sanitize=False)
 
 
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
@@ -221,11 +183,18 @@ def family_page(cohort_name: str, family_id: str) -> None:
                     qc_acked=flags_by_sample(qc_acked),
                 )
 
+                # After a QC review or a UPD validation/diagnostic (ROH and
+                # Sample QC tabs): the header badge, the member icons and the
+                # Diagnostics panel follow.
+                diagnostics_refresh: Dict[str, Any] = {"fn": None}
+
                 def on_acks_changed() -> None:
                     qc["summary"] = family_qc_summary(store, family_id)
                     _, active, acked = qc["summary"]
                     qc_badge.refresh()
                     update_qc_icons(flags_by_sample(active), flags_by_sample(acked))
+                    if diagnostics_refresh["fn"] is not None:
+                        diagnostics_refresh["fn"]()
 
                 # ---- Right column: tabbed info panel ----
                 with ui.column().classes("flex-1").style("gap: 0.5rem; min-width: 0"):
@@ -352,77 +321,14 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
                             @ui.refreshable
                             def render_diagnostics_panel():
-                                entries = load_family_diagnostics(
+                                render_family_diagnostics(
                                     store.data_dir,
                                     family_id,
                                     selected_members["value"],
                                 )
 
-                                if not entries:
-                                    ui.label(
-                                        "No diagnostics recorded for selected members"
-                                    ).classes("text-gray-500 text-sm italic")
-                                    return
-
-                                # Build display rows
-                                _DIAG_COLORS: Dict[str, str] = {
-                                    "pathogenic": "red",
-                                    "uncertain": "orange",
-                                    "benign": "green",
-                                    "conflicting": "amber",
-                                }
-                                gene_scorer = get_gene_scorer()
-
-                                for entry in entries:
-                                    diag = entry.get("Diagnostic", "")
-                                    color = _DIAG_COLORS.get(diag, "grey")
-                                    is_sv = entry.get("_source") == "sv"
-                                    with ui.row().classes(
-                                        "items-center gap-2 w-full px-2 py-1 border-b border-gray-100"
-                                    ):
-                                        ui.badge(
-                                            diag.upper()[:3] if diag else "?",
-                                            color=color,
-                                        ).classes("text-xs")
-
-                                        # Variant + cytoband for SVs
-                                        variant = entry.get("Variant", "")
-                                        if is_sv and variant:
-                                            ui.label(variant).classes(
-                                                "text-xs font-mono"
-                                            )
-                                            cytoband = _parse_sv_cytoband(variant)
-                                            if cytoband:
-                                                ui.label(cytoband).classes(
-                                                    "text-xs text-purple-600 italic"
-                                                )
-                                        else:
-                                            ui.label(variant).classes(
-                                                "text-xs font-mono"
-                                            )
-
-                                        # Gene display: badges for SVs, plain label for SNVs
-                                        gene_str = entry.get("Gene", "")
-                                        if gene_str:
-                                            _render_sv_gene_badges(
-                                                gene_str, gene_scorer
-                                            )
-
-                                        ui.space()
-                                        ui.label(entry.get("Sample", "")).classes(
-                                            "text-xs text-gray-600"
-                                        )
-                                        # One row can merge several curators, so
-                                        # spell out who recorded what on hover.
-                                        user_label = ui.label(
-                                            entry.get("User", "")
-                                        ).classes("text-xs text-gray-400")
-                                        if len(entry.get("_entries", [])) > 1:
-                                            user_label.tooltip(
-                                                format_diagnostic_contributors(entry)
-                                            )
-
                             render_diagnostics_panel()
+                            diagnostics_refresh["fn"] = render_diagnostics_panel.refresh
                             data_table_refreshers.append(
                                 render_diagnostics_panel.refresh
                             )
@@ -644,6 +550,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                 cohort_name=cohort_name,
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                on_acks_changed=on_acks_changed,
                             )
                         else:
                             with ui.column().classes(

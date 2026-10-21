@@ -49,7 +49,7 @@ def test_last_row_wins_and_withdrawn_removes(data_dir):
 
 def test_no_file_means_no_acknowledgement(tmp_path):
     assert acks.read_acks(tmp_path) == {}
-    assert acks.load_acks(tmp_path) == {}
+    assert len(acks.load_acks(tmp_path)) == 0
 
 
 def test_save_writes_the_header_once_and_cleans_the_note(tmp_path, curator):
@@ -101,11 +101,11 @@ def test_viewers_and_bad_values_are_refused(tmp_path, monkeypatch):
 
 
 def test_cache_picks_up_an_append(tmp_path, curator):
-    assert acks.load_acks(tmp_path) == {}
+    assert len(acks.load_acks(tmp_path)) == 0
     acks.save_flag_ack(tmp_path, _flag(), user="a", status="explained")
     assert len(acks.load_acks(tmp_path)) == 1
     acks.withdraw_flag_ack(tmp_path, _flag(), user="a")
-    assert acks.load_acks(tmp_path) == {}
+    assert len(acks.load_acks(tmp_path)) == 0
 
 
 def test_split_keeps_the_order(data_dir):
@@ -117,7 +117,7 @@ def test_split_keeps_the_order(data_dir):
         "CONSANGUINITY",
     ]
     assert active == [f for f in flags if f not in acked]
-    assert acks.active_flags(flags, {}) == flags
+    assert acks.active_flags(flags, acks.Acks()) == flags
 
 
 def test_note_wording_follows_the_role(data_dir):
@@ -129,11 +129,11 @@ def test_note_wording_follows_the_role(data_dir):
     assert acks.note_visible(sex, False)
     assert not acks.note_visible(_flag("KARYOTYPE_XXY", b=None), False)
     assert (
-        acks.ack_summary(cross, standing[cross.ack_key], True)
+        acks.ack_summary(cross, standing[cross], True)
         == "Explained by curator, 2026-09-03: Known first cousins: their mothers"
         " are sisters"
     )
-    assert acks.ack_summary(cross, standing[cross.ack_key], False) == (
+    assert acks.ack_summary(cross, standing[cross], False) == (
         "Explained by curator, 2026-09-03 (note)"
     )
 
@@ -160,7 +160,7 @@ def test_acknowledged_badges_are_grey(data_dir):
 def test_cohort_headline_leaves_out_acknowledged_flags(data_dir):
     cohort = Cohort(data_dir)
     assert qc.cohort_headline(cohort)["high"] == 5
-    counts = qc.cohort_headline(cohort, set(acks.load_acks(data_dir)))
+    counts = qc.cohort_headline(cohort, acks.load_acks(data_dir))
     # S1, S3 (NOT_PARENT) and S5 (XXY); S2 and S6 had only acknowledged flags.
     assert counts["high"] == 3
 

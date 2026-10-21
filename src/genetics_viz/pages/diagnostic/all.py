@@ -14,7 +14,11 @@ from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
-from genetics_viz.utils.diagnostic_files import DIAGNOSTIC_TYPES, diagnostic_paths
+from genetics_viz.utils.diagnostic_files import (
+    DIAGNOSTIC_TYPES,
+    TYPE_COLORS,
+    diagnostic_paths,
+)
 from genetics_viz.utils.gene_scoring import (
     build_gene_badges,
     get_gene_scorer,
@@ -182,6 +186,11 @@ async def diagnostic_all_page() -> None:
                             info = status_info(impact_str)
                             row["ImpactBadges"] = [
                                 {"label": info["label"], "color": info["color"]}
+                            ]
+                        elif row_type == "UPD":
+                            # UPD: which pipeline step pointed at it
+                            row["ImpactBadges"] = [
+                                {"label": impact_str, "color": TYPE_COLORS["UPD"]}
                             ]
                         else:
                             # SNV: VEP consequence badges
@@ -497,7 +506,7 @@ async def diagnostic_all_page() -> None:
                 with table_container:
                     # Show count
                     active_filters = []
-                    if filter_types["value"] != ["SNV", "SV"]:
+                    if filter_types["value"] != DIAGNOSTIC_TYPES:
                         active_filters.append(
                             f"Type: {', '.join(filter_types['value'])}"
                         )

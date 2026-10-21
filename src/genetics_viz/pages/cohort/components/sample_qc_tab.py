@@ -31,6 +31,7 @@ from nicegui import ui
 
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.components.upd_dialog import show_upd_dialog
 from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.export import export_filename, people_from_family, rows_to_tsv
 from genetics_viz.utils.roh import to_float
@@ -66,7 +67,7 @@ from genetics_viz.utils.sample_qc import (
 from genetics_viz.utils.sample_qc_acks import (
     STATUSES,
     Ack,
-    AckKey,
+    Acks,
     ack_summary,
     acknowledged_badges,
     load_acks,
@@ -77,6 +78,7 @@ from genetics_viz.utils.sample_qc_acks import (
     split_acknowledged,
     withdraw_flag_ack,
 )
+from genetics_viz.utils.upd import child_of, chrom_from_evidence, is_upd_flag
 from genetics_viz.utils.sample_qc_export import (
     flags_export,
     pairs_export,
@@ -112,7 +114,7 @@ def _table_box() -> ui.element:
 
 
 def _badges(
-    flags: List[FlagRow], acks: Dict[AckKey, Ack], show_detail: bool
+    flags: List[FlagRow], acks: Acks, show_detail: bool
 ) -> List[Dict[str, str]]:
     """The flags' badges, the acknowledged ones greyed after the others."""
     active, acked = split_acknowledged(flags, acks)
@@ -220,7 +222,7 @@ def _open_ack_dialog(
 
 def _render_issues(
     flags: List[FlagRow],
-    acks: Dict[AckKey, Ack],
+    acks: Acks,
     family_id: str,
     cohort_name: str,
     show_detail: bool,
@@ -243,7 +245,7 @@ def _render_issues(
         for i, f in enumerate(flags):
             sev = severity_info(f.severity)
             other = f.other_family(family_id)
-            ack = acks.get(f.ack_key)
+            ack = acks.get(f)
             color = muted_color() if ack else sev["color"]
             tooltip = flag_tooltip(f, show_detail)
             if ack:
@@ -538,7 +540,7 @@ def _render_relationships(
 def _render_sex(
     rows: List[Dict[str, Any]],
     by_sample: Dict[str, List[FlagRow]],
-    acks: Dict[AckKey, Ack],
+    acks: Acks,
     background: List[Tuple[float, float]],
     background_het: List[Tuple[float, float]],
     show_detail: bool,
@@ -574,7 +576,7 @@ def _render_sex(
             }
         )
         point = sample_point(r)
-        point["flagged"] = any(f.ack_key not in acks for f in flags)
+        point["flagged"] = any(f not in acks for f in flags)
         if not show_detail:
             point["inferred_sex"] = point["karyotype"] = None
         points.append(point)
@@ -653,7 +655,7 @@ def _render_sex(
 def _render_quality(
     rows: List[Dict[str, Any]],
     by_sample: Dict[str, List[FlagRow]],
-    acks: Dict[AckKey, Ack],
+    acks: Acks,
     cohort_rows: List[Dict[str, Any]],
     member_set: Set[str],
     show_detail: bool,
@@ -971,12 +973,26 @@ def render_sample_qc_tab(
     def review(flag: FlagRow) -> None:
         if not show_detail:
             return
+        if is_upd_flag(flag):
+            # A UPD is reviewed by validating it: the validation acknowledges
+            # the flag, and the ROH tab opens the same record.
+            chrom = chrom_from_evidence(flag)
+            if chrom is not None:
+                show_upd_dialog(
+                    dialog_anchor,
+                    store.data_dir,
+                    family_id,
+                    child_of(flag),
+                    chrom,
+                    on_saved=acks_saved,
+                )
+                return
         acks = load_acks(store.data_dir)
         _open_ack_dialog(
             dialog_anchor,
             store.data_dir,
             flag,
-            acks.get(flag.ack_key),
+            acks.get(flag),
             acks_saved,
         )
 
@@ -1001,7 +1017,7 @@ def render_sample_qc_tab(
         ]
         hidden_acked = 0
         if not state["show_acked"]:
-            active = [f for f in flags if f.ack_key not in acks]
+            active = [f for f in flags if f not in acks]
             hidden_acked = len(flags) - len(active)
             flags = active
         by_sample = flags_by_sample(flags)

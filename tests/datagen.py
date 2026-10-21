@@ -1249,3 +1249,48 @@ QC_ACKS = [
 def build_qc_acks(data: Path) -> None:
     """Curator acknowledgements of sample QC flags, as the app appends them."""
     write_tsv(data / "validations" / "sampleqc.tsv", QC_ACK_COLUMNS, QC_ACKS)
+
+
+# ---------------------------------------------------------------------------
+# Uniparental disomy (opt-in: it would change every flag count of 1001)
+# ---------------------------------------------------------------------------
+
+#: A UPD_CANDIDATE row as ``sampleqc_classify`` words it: S2 (the mother) and
+#: S3 are opposite homozygotes on chr2, so S3 has two paternal copies.
+UPD_FLAG = (
+    "S2", "S3", "UPD_CANDIDATE", "high",
+    "96 of the 100 opposite homozygotes of S2 and S3 lie on chr2, between 0.1 and"
+    " 39.7 Mb; S3 is heterozygous at 0.004 of its 812 sites there (0.310"
+    " genome-wide), at 1.00 of its mean depth: uniparental isodisomy: both copies"
+    " from S3's other parent",
+)  # fmt: skip
+
+
+def add_upd_case(data: Path, fid: str = "1001", chrom: str = "2") -> None:
+    """Give 1001's S3 a UPD of ``chrom``: the ROH ``upd_candidate_chrom`` and
+    the Sample QC flag, in the family files and the cohort's."""
+    a, b, code, severity, evidence = UPD_FLAG
+    evidence = evidence.replace("chr2", f"chr{chrom}")
+    for path in [
+        *(family_dir(data, fid) / "qc").glob(f"{fid}.{QC_LABEL}.flags.tsv"),
+        *(data / "cohorts").glob(f"*/qc/*.{QC_LABEL}.flags.tsv"),
+    ]:
+        if path.name.startswith(f"{fid}.") or f"\t{fid}\t" in path.read_text():
+            with open(path, "a") as f:
+                f.write(
+                    "\t".join(["family", fid, a, b, code, severity, evidence]) + "\n"
+                )
+    for path in [
+        *(family_dir(data, fid) / "roh").glob("*.froh.tsv"),
+        *(data / "cohorts").glob("*/roh/*.froh.tsv"),
+    ]:
+        lines = path.read_text().splitlines()
+        header = lines[0].split("\t")
+        col, iid = header.index("upd_candidate_chrom"), header.index("IID")
+        fam = header.index("family_id") if "family_id" in header else None
+        for i, line in enumerate(lines[1:], 1):
+            cells = line.split("\t")
+            if cells[iid] == b and (fam is None or cells[fam] == fid):
+                cells[col] = chrom
+                lines[i] = "\t".join(cells)
+        path.write_text("\n".join(lines) + "\n")

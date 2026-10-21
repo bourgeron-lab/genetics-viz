@@ -6,10 +6,7 @@ from typing import Any, Dict, List
 
 from nicegui import ui
 
-from genetics_viz.components.diagnostic_loader import (
-    format_diagnostic_contributors,
-    load_family_diagnostics,
-)
+from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.header import create_header
 from genetics_viz.components.notes_loader import (
     delete_note,
@@ -41,14 +38,9 @@ from genetics_viz.pages.cohort.components.sample_qc_tab import (
 from genetics_viz.pages.cohort.components.str_tab import probe_eh_data, render_str_tab
 from genetics_viz.pages.cohort.components.svs_tab import render_svs_tab
 from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
-from genetics_viz.pages.cohort.family import (
-    _parse_sv_cytoband,
-    _render_sv_gene_badges,
-)
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.data_availability import check_family_availability
-from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.pedigree import load_family_object, load_family_pedigree
 from genetics_viz.utils.sample_qc import flags_by_sample
 from genetics_viz.utils.sharding import get_family_path
@@ -191,10 +183,15 @@ async def standalone_family_page(family_id: str) -> None:
             # Redraws the member QC icons after a review in the Sample QC tab.
             qc_icons: Dict[str, Any] = {"update": None}
 
+            # Also after a UPD validation/diagnostic: the Diagnostics panel follows.
+            diagnostics_refresh: Dict[str, Any] = {"fn": None}
+
             def on_acks_changed() -> None:
                 if qc_icons["update"] is not None:
                     _, active, acked = family_qc_summary(store, family_id)
                     qc_icons["update"](flags_by_sample(active), flags_by_sample(acked))
+                if diagnostics_refresh["fn"] is not None:
+                    diagnostics_refresh["fn"]()
 
             if members_data:
                 qc_data, qc_active, qc_acked = family_qc_summary(store, family_id)
@@ -335,69 +332,14 @@ async def standalone_family_page(family_id: str) -> None:
 
                             @ui.refreshable
                             def render_diagnostics():
-                                entries = load_family_diagnostics(
+                                render_family_diagnostics(
                                     store.data_dir,
                                     family_id,
                                     selected_members["value"],
                                 )
-                                if not entries:
-                                    ui.label(
-                                        "No diagnostics recorded for selected members"
-                                    ).classes("text-gray-500 text-sm italic")
-                                    return
-
-                                _DIAG_COLORS: Dict[str, str] = {
-                                    "pathogenic": "red",
-                                    "uncertain": "orange",
-                                    "benign": "green",
-                                    "conflicting": "amber",
-                                }
-                                gene_scorer = get_gene_scorer()
-                                for entry in entries:
-                                    diag = entry.get("Diagnostic", "")
-                                    color = _DIAG_COLORS.get(diag, "grey")
-                                    is_sv = entry.get("_source") == "sv"
-                                    with ui.row().classes(
-                                        "items-center gap-2 w-full px-2 py-1 border-b border-gray-100"
-                                    ):
-                                        ui.badge(
-                                            diag.upper()[:3] if diag else "?",
-                                            color=color,
-                                        ).classes("text-xs")
-                                        variant = entry.get("Variant", "")
-                                        if is_sv and variant:
-                                            ui.label(variant).classes(
-                                                "text-xs font-mono"
-                                            )
-                                            cytoband = _parse_sv_cytoband(variant)
-                                            if cytoband:
-                                                ui.label(cytoband).classes(
-                                                    "text-xs text-purple-600 italic"
-                                                )
-                                        else:
-                                            ui.label(variant).classes(
-                                                "text-xs font-mono"
-                                            )
-                                        gene_str = entry.get("Gene", "")
-                                        if gene_str:
-                                            _render_sv_gene_badges(
-                                                gene_str, gene_scorer
-                                            )
-                                        ui.space()
-                                        ui.label(entry.get("Sample", "")).classes(
-                                            "text-xs text-gray-600"
-                                        )
-                                        # One row can merge several curators, so
-                                        # spell out who recorded what on hover.
-                                        user_label = ui.label(
-                                            entry.get("User", "")
-                                        ).classes("text-xs text-gray-400")
-                                        if len(entry.get("_entries", [])) > 1:
-                                            user_label.tooltip(
-                                                format_diagnostic_contributors(entry)
-                                            )
 
                             render_diagnostics()
+                            diagnostics_refresh["fn"] = render_diagnostics.refresh
                             data_table_refreshers.append(render_diagnostics.refresh)
 
             # Analysis tabs
@@ -564,6 +506,7 @@ async def standalone_family_page(family_id: str) -> None:
                                 cohort_name="",
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                on_acks_changed=on_acks_changed,
                             )
                         else:
                             with ui.column().classes(

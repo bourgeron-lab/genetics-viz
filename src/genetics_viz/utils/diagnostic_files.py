@@ -23,13 +23,14 @@ DIAGNOSTIC_KINDS: List[Tuple[str, str]] = [
     ("SNV", "snvs.tsv"),
     ("SV", "svs.tsv"),
     ("STR", "strs.tsv"),
+    ("UPD", "upds.tsv"),
 ]
 
 DIAGNOSTIC_TYPES: List[str] = [label for label, _ in DIAGNOSTIC_KINDS]
 
 
 def diagnostic_path(data_dir: Path, dtype: str) -> Path:
-    """``<data_dir>/diagnostics/<file>`` for a type label (``SNV``, ``SV``, ``STR``)."""
+    """``<data_dir>/diagnostics/<file>`` for a type label (``SNV``, ``SV``, ``STR``, ``UPD``)."""
     name = dict(DIAGNOSTIC_KINDS)[dtype]
     return data_dir / "diagnostics" / name
 

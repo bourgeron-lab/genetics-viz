@@ -24,6 +24,7 @@ from nicegui import ui
 
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.components.upd_dialog import show_upd_dialog, status_chips, upd_status
 from genetics_viz.utils.export import (
     export_filename,
     frame_to_tsv,
@@ -179,6 +180,47 @@ def _render_summary(rows: List[Dict], show_relationship: bool) -> None:
             "Percentile: among unrelated reference genomes of the same ancestry region."
             " Pattern: the person against that region (hover for details). "
             + GRADE_HELP
+        ).classes("text-xs text-gray-500")
+
+
+def _render_upd_candidates(
+    data_dir: Any,
+    family_id: str,
+    rows: List[Dict],
+    anchor: ui.element,
+    on_saved: Callable[[], None],
+) -> None:
+    """One line per UPD candidate chromosome: its review status and the review."""
+    candidates = [
+        (r["IID"], r["upd_candidate_chrom"])
+        for r in rows
+        if r.get("upd_candidate_chrom")
+    ]
+    if not candidates:
+        return
+    with ui.card().classes("w-full").mark("roh-upd-candidates"):
+        ui.label("UPD candidates").classes("text-base font-semibold text-blue-700")
+        for iid, chrom in candidates:
+            with ui.row().classes("items-center gap-2"):
+                ui.label(f"{iid} · chr{chrom}").classes("text-sm font-medium")
+                status_chips(upd_status(data_dir, family_id, iid, chrom))
+
+                def make_open(iid: str, chrom: str) -> Callable[[], None]:
+                    def handler() -> None:
+                        show_upd_dialog(
+                            anchor, data_dir, family_id, iid, chrom, on_saved=on_saved
+                        )
+
+                    return handler
+
+                ui.button(
+                    "Validate / diagnose" if can_write() else "Review",
+                    icon="rate_review",
+                    on_click=make_open(iid, chrom),
+                ).props("flat dense no-caps").mark(f"roh-upd-review-{iid}")
+        ui.label(
+            "A validated UPD (present or absent) also acknowledges the matching"
+            " Sample QC flag."
         ).classes("text-xs text-gray-500")
 
 
@@ -574,6 +616,7 @@ def render_roh_tab(
     cohort_name: str,
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
+    on_acks_changed: Optional[Callable[[], None]] = None,
 ) -> None:
     """Render the ROH tab panel content.
 
@@ -583,6 +626,8 @@ def render_roh_tab(
         cohort_name: Cohort name
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
+        on_acks_changed: Called after a UPD validation or diagnostic, which
+            may acknowledge a Sample QC flag, so the page header follows
     """
     roh_dir = get_roh_dir(store.data_dir, family_id)
     files = find_roh_files(store.data_dir, family_id)
@@ -641,6 +686,15 @@ def render_roh_tab(
             on_change=on_variant,
         ).props("outlined dense").classes("w-64 mb-2")
 
+    # Outside the refreshable section: a UPD save redraws it, which would
+    # otherwise delete the review dialog.
+    upd_anchor = ui.element("div")
+
+    def upd_saved() -> None:
+        render_roh_content.refresh()
+        if on_acks_changed is not None:
+            on_acks_changed()
+
     @ui.refreshable
     def render_roh_content() -> None:
         tables = state["tables"]
@@ -667,6 +721,7 @@ def render_roh_tab(
             return
 
         _render_summary(rows, show_relationship)
+        _render_upd_candidates(store.data_dir, family_id, rows, upd_anchor, upd_saved)
 
         _section(
             "Compared with the reference",

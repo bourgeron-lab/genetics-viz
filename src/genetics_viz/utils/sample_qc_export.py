@@ -23,27 +23,25 @@ from .sample_qc import (
     is_typical_karyotype,
     severity_info,
 )
-from .sample_qc_acks import Ack, AckKey, note_visible, split_acknowledged
+from .sample_qc_acks import Acks, note_visible, split_acknowledged
 
 Key = Tuple[str, str]
 Table = Tuple[List[Dict[str, Any]], List[str]]
 
 
 def _flag_texts(
-    flags: Iterable[FlagRow], acks: Dict[AckKey, Ack], show_detail: bool
+    flags: Iterable[FlagRow], acks: Acks, show_detail: bool
 ) -> Tuple[str, str]:
     """``(still counting, acknowledged)``: titles ``"; "``-joined, each once."""
     active, acked = split_acknowledged(flags, acks)
     counting = dict.fromkeys(flag_title(f, show_detail) for f in active)
     reviewed = dict.fromkeys(
-        f"{flag_title(f, show_detail)} ({acks[f.ack_key].label.lower()})" for f in acked
+        f"{flag_title(f, show_detail)} ({acks[f].label.lower()})" for f in acked
     )
     return "; ".join(counting), "; ".join(reviewed)
 
 
-def flags_export(
-    flags: Iterable[FlagRow], acks: Dict[AckKey, Ack], show_detail: bool
-) -> Table:
+def flags_export(flags: Iterable[FlagRow], acks: Acks, show_detail: bool) -> Table:
     """One row per flag, most severe first, acknowledged ones after."""
     columns = ["level", "FID", "sample_a", "sample_b", "code", "issue", "category",
                "severity"]  # fmt: skip
@@ -53,7 +51,7 @@ def flags_export(
     active, acked = split_acknowledged(flags, acks)
     rows = []
     for f in active + acked:
-        ack = acks.get(f.ack_key)
+        ack = acks.get(f)
         rows.append(
             {
                 "level": f.level,
@@ -91,7 +89,7 @@ def samples_export(
     sample_rows: Iterable[Dict[str, Any]],
     people: Dict[Key, Dict[str, Any]],
     flags: Iterable[FlagRow],
-    acks: Dict[AckKey, Ack],
+    acks: Acks,
     show_detail: bool,
 ) -> Table:
     """One row per checked person: sex, karyotype, quality, then their flags.
@@ -151,7 +149,7 @@ def _declared(row: Dict[str, Any]) -> bool:
 def pairs_export(
     pair_rows: Iterable[Dict[str, Any]],
     flags: Iterable[FlagRow],
-    acks: Dict[AckKey, Ack],
+    acks: Acks,
     show_detail: bool,
     first_family: Optional[str] = None,
 ) -> Table:

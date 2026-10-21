@@ -5,6 +5,23 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **UPD validation and diagnostic.** A uniparental disomy is reviewed from the family ROH tab (a new "UPD candidates" strip under the summary) or from the Sample QC Issues table (the review action on a `UPD_CANDIDATE` flag). Both open the same dialog:
+  - the ROH and Sample QC evidence for the child's chromosome;
+  - the validation history, and for curators a form: present / absent / uncertain, parental origin (pre-filled from the flag), comment;
+  - the diagnostic, through the shared diagnostic dialog.
+
+  Records are keyed by family, child and chromosome (`chr2:UPD`), in `validations/upds.tsv` and `diagnostics/upds.tsv`. UPD is a validation and diagnostic kind, so the All and Statistics pages list it.
+- **A validated UPD acknowledges its Sample QC flag**: present as confirmed, absent as explained; uncertain leaves it counting. The header badge, member icons, cohort column and panel, home card and exports follow.
+
+### Changed
+- **Family Diagnostics panel: STR and UPD lines say what was found.** An STR reads as its gene badge, an `STR` tag and the repeat count: the curated count when a validation recorded one, otherwise `~` and ExpansionHunter's longer allele. A UPD reads `UPD chr2 · paternal`. The raw key, motif and per-member genotypes are in the tooltip. The cohort and standalone family pages now share one panel.
+
+### Fixed
+- Diagnostic All always showed a "Type" filter note, even with every type selected.
+
 ## [0.22.0] - 2026-10-20
 
 ### Changed

@@ -13,16 +13,22 @@ VALIDATION_KINDS: List[Tuple[str, str]] = [
     ("SNV", "snvs.tsv"),
     ("SV", "svs.tsv"),
     ("STR", "strs.tsv"),
+    ("UPD", "upds.tsv"),
 ]
 
 VALIDATION_TYPES: List[str] = [label for label, _ in VALIDATION_KINDS]
 
 #: Chart colour per type.
-TYPE_COLORS: Dict[str, str] = {"SNV": "#3b82f6", "SV": "#8b5cf6", "STR": "#0d9488"}
+TYPE_COLORS: Dict[str, str] = {
+    "SNV": "#3b82f6",
+    "SV": "#8b5cf6",
+    "STR": "#0d9488",
+    "UPD": "#5d4037",
+}
 
 
 def validation_path(data_dir: Path, vtype: str) -> Path:
-    """``<data_dir>/validations/<file>`` for a type label (``SNV``, ``SV``, ``STR``)."""
+    """``<data_dir>/validations/<file>`` for a type label (``SNV``, ``SV``, ``STR``, ``UPD``)."""
     name = dict(VALIDATION_KINDS)[vtype]
     return data_dir / "validations" / name
 
