@@ -11,6 +11,7 @@ from genetics_viz.models import DataStore
 from genetics_viz.utils import report_summaries
 from genetics_viz.utils.family_report import (
     build_family_report,
+    consequence_text,
     whole_chromosome_events,
 )
 from genetics_viz.utils.report_html import render_report_html
@@ -213,3 +214,28 @@ def test_summaries_role_guard_and_last_row_wins(tmp_path, curator, monkeypatch):
     monkeypatch.setattr(report_summaries, "can_write", lambda: False)
     with pytest.raises(PermissionError):
         report_summaries.save_family_summary(tmp_path, "F1", "x", user="c")
+
+
+def test_consequences_are_words_most_severe_first():
+    raw = "downstream_gene_variant,missense_variant,upstream_gene_variant"
+    assert consequence_text(raw) == "missense variant"
+    both = "splice_region_variant&intron_variant,stop_gained"
+    assert consequence_text(both) == "stop gained, splice region variant"
+    assert consequence_text("intron_variant,upstream_gene_variant") == (
+        "intron variant, upstream gene variant"
+    )
+    assert consequence_text("") == ""
+
+
+def test_long_cells_wrap_in_the_report(store, data_dir):
+    datagen.add_report_case(data_dir)
+    path = data_dir / "diagnostics" / "snvs.tsv"
+    path.write_text(
+        path.read_text().replace(
+            "\tstop_gained\t",
+            "\tdownstream_gene_variant,stop_gained,upstream_gene_variant\t",
+        )
+    )
+    section = _report(store).section("diagnostics")
+    assert section.rows[0]["impact"] == "stop gained"
+    assert "overflow-wrap: anywhere" in render_report_html(_report(store))

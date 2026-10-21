@@ -65,6 +65,7 @@ from .sample_qc_acks import ack_summary, load_acks, split_acknowledged
 from .sharding import get_family_path
 from .str_eh import find_eh_labels, get_family_eh_dir
 from .validation_files import validation_path
+from .vep import get_consequence_impact, get_consequence_priority
 from .wisecondorx import parse_wisecondorx_bed
 
 logger = logging.getLogger(__name__)
@@ -824,6 +825,27 @@ def _upd(
     )
 
 
+def consequence_text(impact: str) -> str:
+    """VEP's ``a,b&c`` consequence list as words, most severe first.
+
+    A diagnostic stores every consequence across transcripts, without spaces
+    (``downstream_gene_variant,missense_variant,…``): one unbreakable word that
+    pushed the table off the page. Modifier terms (up/downstream, intronic…)
+    are dropped when a coding or splice term is there.
+    """
+    terms = {
+        t.strip()
+        for part in (impact or "").split(",")
+        for t in part.split("&")
+        if t.strip()
+    }
+    if not terms:
+        return ""
+    meaningful = {t for t in terms if get_consequence_impact(t) != "MODIFIER"}
+    shown = sorted(meaningful or terms, key=get_consequence_priority)
+    return ", ".join(t.replace("_", " ") for t in shown)
+
+
 def _genes(gene_str: str, limit: int = 8) -> str:
     symbols = [
         g.split(":")[0].strip()
@@ -892,6 +914,12 @@ def _diagnostics(
                     f"{sample}: {status}" + (f" ({inheritance})" if inheritance else "")
                 )
         verdict = e.get("Diagnostic", "")
+        # SNV: VEP's consequences; SV: GAIN/LOSS; STR and UPD: an evidence source.
+        impact = e.get("Impact", "")
+        if source == "snv":
+            impact = consequence_text(impact)
+        elif source != "sv":
+            impact = ""
         rows.append(
             {
                 "verdict": verdicts[verdict].get("label", verdict),
@@ -900,7 +928,7 @@ def _diagnostics(
                 "kind": kind,
                 "finding": finding,
                 "genes": _genes(e.get("Gene", "")) if source != "str" else "",
-                "impact": e.get("Impact", "") if source in ("snv", "sv") else "",
+                "impact": impact,
                 "samples": e.get("Sample", ""),
                 "validation": "; ".join(validations) or "not validated",
                 "curators": e.get("User", ""),
