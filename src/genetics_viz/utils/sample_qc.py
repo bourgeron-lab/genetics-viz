@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     Any,
-    Collection,
+    Container,
     Dict,
     FrozenSet,
     Iterable,
@@ -782,11 +782,11 @@ def worst_by_individual(flags: Iterable[FlagRow]) -> Dict[str, int]:
 
 
 def cohort_headline(
-    cohort: Any, acknowledged: Collection[Tuple[str, str, str, str]] = ()
+    cohort: Any, acknowledged: Container["FlagRow"] = ()
 ) -> Optional[Dict[str, int]]:
     """Individuals by worst severity, for the home card; ``None`` when QC has not run.
 
-    Flags whose :attr:`FlagRow.ack_key` is in ``acknowledged`` do not count.
+    Flags in ``acknowledged`` (a ``sample_qc_acks.Acks``) do not count.
     Blocking I/O - call it through ``asyncio.to_thread``.
     """
     try:
@@ -796,7 +796,7 @@ def cohort_headline(
         return None
     if qc is None:
         return None
-    return worst_by_individual(f for f in qc.flags if f.ack_key not in acknowledged)
+    return worst_by_individual(f for f in qc.flags if f not in acknowledged)
 
 
 #: Categories a sex / karyotype plot marks as flagged.

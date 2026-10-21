@@ -29,8 +29,8 @@ def _save(data_dir, **kw):
     str_validation.save_str_validation(data_dir, **args)
 
 
-def test_kinds_include_str(tmp_path):
-    assert VALIDATION_TYPES == ["SNV", "SV", "STR"]
+def test_kinds_include_str_and_upd(tmp_path):
+    assert VALIDATION_TYPES == ["SNV", "SV", "STR", "UPD"]
     assert validation_path(tmp_path, "STR") == tmp_path / "validations" / "strs.tsv"
 
 

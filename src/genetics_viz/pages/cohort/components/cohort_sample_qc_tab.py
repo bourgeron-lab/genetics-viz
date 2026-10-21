@@ -59,8 +59,7 @@ from genetics_viz.utils.sample_qc import (
     severity_info,
 )
 from genetics_viz.utils.sample_qc_acks import (
-    Ack,
-    AckKey,
+    Acks,
     acknowledged_badges,
     load_acks,
     split_acknowledged,
@@ -153,7 +152,7 @@ def _render_flagged(
     cross_counts: Dict[Key, int],
     cohort_name: str,
     show_detail: bool,
-    acks: Dict[AckKey, Ack],
+    acks: Acks,
 ) -> None:
     rows = []
     for key in keys:

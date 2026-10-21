@@ -132,7 +132,7 @@ def _render_denovo_qc_warning(
         for f in denovo_risk(
             qc.flags, [r.get("sample") or "" for r in qc.sample_rows()]
         )
-        if f.ack_key not in acks or acks[f.ack_key].status != "explained"
+        if f not in acks or acks[f].status != "explained"
     ]
     if not risky:
         return
@@ -152,7 +152,7 @@ def _render_denovo_qc_warning(
             ).classes("font-semibold text-amber-900")
             if show_detail:
                 for f in risky:
-                    ack = acks.get(f.ack_key)
+                    ack = acks.get(f)
                     ui.label(
                         f"{flag_title(f, True)} — {' – '.join(f.samples)}"
                         + (f": {f.evidence}" if f.evidence else "")

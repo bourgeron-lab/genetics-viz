@@ -25,8 +25,8 @@ def _save(data_dir, dtype, variant, sample="S3", verdict="pathogenic", ts="t1"):
     )  # fmt: skip
 
 
-def test_kinds_include_str(tmp_path):
-    assert DIAGNOSTIC_TYPES == ["SNV", "SV", "STR"]
+def test_kinds_include_str_and_upd(tmp_path):
+    assert DIAGNOSTIC_TYPES == ["SNV", "SV", "STR", "UPD"]
     assert diagnostic_path(tmp_path, "STR") == tmp_path / "diagnostics" / "strs.tsv"
     assert [t for t, _ in diagnostic_paths(tmp_path)] == DIAGNOSTIC_TYPES
 
