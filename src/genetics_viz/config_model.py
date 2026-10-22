@@ -2,6 +2,7 @@
 
 import fcntl
 import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,7 +29,7 @@ class UserConfig:
     """A single user entry from the YAML config."""
 
     username: str
-    password: str  # sha512 hex digest
+    password: str  # scrypt hash (legacy: unsalted sha512 hex digest)
     role: str  # "reader" | "curator" | "administrator"
 
 
@@ -76,14 +77,56 @@ def get_config_path() -> Path:
 # ---------------------------------------------------------------------------
 
 
+#: scrypt cost: N = 2**15, r = 8 takes 32 MiB and about 50 ms per hash. The
+#: parameters are stored in each hash, so raising them later leaves existing
+#: hashes verifiable (and ``needs_rehash`` upgrades them at the next login).
+SCRYPT_N = 2**15
+SCRYPT_R = 8
+SCRYPT_P = 1
+_SCRYPT_MAXMEM = 64 * 2**20
+_SCRYPT_PREFIX = "scrypt$"
+
+
+def _scrypt(plain: str, salt: bytes, n: int, r: int, p: int) -> bytes:
+    return hashlib.scrypt(
+        plain.encode(), salt=salt, n=n, r=r, p=p, maxmem=_SCRYPT_MAXMEM, dklen=64
+    )
+
+
 def hash_password(plain: str) -> str:
-    """Hash a plaintext password to a sha512 hex digest."""
-    return hashlib.sha512(plain.encode()).hexdigest()
+    """Hash a plaintext password with salted scrypt.
+
+    Format: ``scrypt$<N>$<r>$<p>$<salt hex>$<hash hex>``.
+    """
+    salt = secrets.token_bytes(16)
+    digest = _scrypt(plain, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P)
+    return (
+        f"{_SCRYPT_PREFIX}{SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt.hex()}${digest.hex()}"
+    )
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Verify a plaintext password against a sha512 hex digest."""
-    return hashlib.sha512(plain.encode()).hexdigest() == hashed
+    """Verify a plaintext password against a scrypt hash or a legacy SHA-512 one.
+
+    Legacy hashes are unsalted SHA-512 hex digests, from before scrypt. They
+    still verify, so nobody needs a reset; ``needs_rehash`` tells the login to
+    replace them.
+    """
+    if hashed.startswith(_SCRYPT_PREFIX):
+        try:
+            n, r, p, salt, digest = hashed[len(_SCRYPT_PREFIX) :].split("$")
+            computed = _scrypt(plain, bytes.fromhex(salt), int(n), int(r), int(p))
+        except ValueError:
+            return False
+        return hmac.compare_digest(computed.hex(), digest)
+    legacy = hashlib.sha512(plain.encode()).hexdigest()
+    return bool(hashed) and hmac.compare_digest(legacy, hashed)
+
+
+def needs_rehash(hashed: str) -> bool:
+    """Return True for a legacy SHA-512 hash or scrypt with older parameters."""
+    current = f"{_SCRYPT_PREFIX}{SCRYPT_N}${SCRYPT_R}${SCRYPT_P}$"
+    return not hashed.startswith(current)
 
 
 def generate_random_password() -> str:

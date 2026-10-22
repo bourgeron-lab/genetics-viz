@@ -21,7 +21,7 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
 ## Tests and CI
 
 - `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
-- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache and the per-user gene scorers. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers and the login throttle. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
 - An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
 - **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
   - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
@@ -144,7 +144,8 @@ src/genetics_viz/
     sv_reads.py                   # pysam: read pairs/split reads classed by orientation
     sv_breakpoints.py             # Suggested breakpoints: clips/splits, pair interval, CN check
     sv_read_plots.py              # ECharts builder for the read-evidence panel
-    auth.py                       # Auth helpers: check_auth, can_write, get_current_user
+    auth.py                       # Auth helpers: check_auth, is_authenticated, can_write, get_current_user
+    login_throttle.py             # Login backoff per client address and per username (in memory)
     clinvar.py                    # ClinVar color/display utilities (from YAML)
     cohort_state.py               # .ghfc-ngs.state.json parsing, drift, step rows
     cytobands.py                  # Cytoband, chromosome, ideogram constants
@@ -204,12 +205,15 @@ Config files (YAML) are loaded once at module level.
 - `get_current_user()` / `get_current_role()` read from `app.storage.user`.
 - `can_write()` returns `True` if role is `"curator"` or `"administrator"`.
 - `is_admin()` returns `True` if role is `"administrator"`.
+- **Passwords are salted scrypt** (`scrypt$N$r$p$salt$hash`, `config_model.hash_password`). Legacy unsalted SHA-512 hex digests still verify; the login rehashes them (`needs_rehash`) and saves the config, so no reset is needed. The test config writes SHA-512 on purpose, so every UI login exercises the migration.
+- **The login backs off** (`utils/login_throttle.py`): 5 free failures per username, 20 per client address, then a doubling wait capped at 15 min. Unknown usernames are counted and hashed like real ones. The address is what uvicorn sees: behind a proxy it is the proxy's unless uvicorn trusts its forwarded headers (`FORWARDED_ALLOW_IPS`). The check, the hash and the recorded failure run on the event loop without an await, so parallel attempts cannot all pass the check.
+- **Saves record `get_current_user()`**, never the readonly User box: the browser can still send any value for it.
 - Write operations (save validation/diagnostic) are gated with `can_write()` both at UI level (hide save button) and backend level (guard in save function).
 
 ### Multi-Data-Directory
 - `get_data_store()` reads `app.storage.user['data_dir']` for per-user data directory selection. Same signature as before — all calling files work unchanged.
 - `get_static_prefix()` returns the per-user URL prefix (e.g., `/data-0`) for IGV static file URLs.
-- Static files are registered centrally in `app.py` via `nicegui_app.add_static_files()` — NOT in individual pages.
+- Data directories are served centrally through `data.mount_data_files()` (from `app.py` and `add_data_store`) — NOT in individual pages, and never with `nicegui_app.add_static_files()`, whose route checks nothing. The route answers 401 without a logged-in session, 404 once the directory is removed, supports Range requests (igv.js) and sends `Cache-Control: private`.
 
 ### Sharded Directories
 - `samples/` and `families/` directories may use two-level sharding: `samples/<shard1>/<shard2>/<id>/`.
@@ -234,7 +238,7 @@ Config files (YAML) are loaded once at module level.
 - **Read through `read_roh_table`.** It forces the ID columns to strings. Left to inference, `family_id` comes out as an integer from numeric first rows and the read then fails on `AU-ANG-FER-MPX3`. It also strips the `chr` prefix, because the reference hotspots and the cytobands carry none.
 - **Reference first, fixed thresholds second.** Each person is compared with unrelated reference genomes of their `ref_group` (a region, or `ALL` = pooled), read from `v<bundle>/bundle/roh/reference_froh.tsv.gz` under `ancestry_reference_dir`, next to `hotspots.tsv.gz`. The fixed 0.03 line is crossed by 150 of 682 unrelated CSA reference genomes, so a threshold-only display would mislabel whole populations. A missing tier is a degraded state, as for the PCA panel.
 - **Thresholds and wording live only in `config/roh.yaml`.** They mirror ancestry-pgs constants (`roh.py`), which assign `froh_category` and `homozygosity_pattern` themselves; the app only words and draws them.
-- **Wording is role-dependent (`can_write()`).** Viewers get neutral grades and only pedigree-declared kinship pairs. Curators also get the relationship reading, the parents' kinship / expected F, and every pair. This is presentation only: the data directory is served statically without an auth check.
+- **Wording is role-dependent (`can_write()`).** Viewers get neutral grades and only pedigree-declared kinship pairs. Curators also get the relationship reading, the parents' kinship / expected F, and every pair. This is presentation only: any logged-in user, reader included, can fetch the raw files under the data prefix.
 - The cohort tab reads only `froh` (and `roh_windows` on demand, off-thread). The cohort `roh` and `roh_genes` tables are 31 and 93 MB.
 - Some pedigrees repeat a row, and a sample can sit in two families: key cohort rows by `(family_id, IID)`.
 - `DataTable` does not reorder its initial rows to match `initial_sorting` — sort the rows in Python as well.

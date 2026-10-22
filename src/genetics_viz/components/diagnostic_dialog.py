@@ -208,13 +208,10 @@ def show_diagnostic_dialog(
                 if not can_write():
                     ui.notify("Permission denied", type="negative")
                     return
-                user = user_input.value.strip()
+                user = get_current_user()
                 diag_value = diagnostic_select.value
                 comment = comment_input.value.strip() if comment_input.value else ""
 
-                if not user:
-                    ui.notify("Please enter a username", type="warning")
-                    return
                 if not diag_value:
                     ui.notify("Please select a diagnostic", type="warning")
                     return

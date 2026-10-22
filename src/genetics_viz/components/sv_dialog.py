@@ -1791,7 +1791,7 @@ def show_sv_dialog(
                         if not can_write():
                             ui.notify("Permission denied", type="negative")
                             return
-                        user = user_input.value.strip()
+                        user = get_current_user()
                         inheritance = inheritance_select.value
                         validation_status = validation_select.value
                         curated_start = (
@@ -1807,10 +1807,6 @@ def show_sv_dialog(
                         comment = clean_tsv_field(
                             comment_input.value.strip() if comment_input.value else ""
                         )
-
-                        if not user:
-                            ui.notify("Please enter a username", type="warning")
-                            return
 
                         timestamp = datetime.now().isoformat()
 

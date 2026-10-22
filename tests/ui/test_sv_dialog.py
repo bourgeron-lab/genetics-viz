@@ -101,3 +101,21 @@ async def test_without_coverage_the_igv_view_stays(user, monkeypatch):
     await _open_sv(user, monkeypatch, "chr2:199000000-201000000", "S6")
     await user.should_see("CNV Coverage View", retries=30)
     await user.should_not_see("Copy Number View")
+
+
+async def test_validation_author_is_the_session_user(user, monkeypatch, data_dir):
+    """The User box is readonly in the page, but the browser can still send a
+    value for it. The saved author must come from the session."""
+    await _open_sv(user, monkeypatch, "chr2:165000000-165500000", "S3")
+    await user.should_see("SV Validation", retries=30)
+    box = next(iter(user.find(kind=ui.input, content="Username").elements))
+    with user.client:
+        box.set_value("mallory")
+    user.find(kind=ui.button, content="Save Validation").click()
+    saved = data_dir / "validations" / "svs.tsv"
+    for _ in range(100):
+        if saved.exists():
+            break
+        await asyncio.sleep(0.05)
+    authors = {line.split("\t")[3] for line in saved.read_text().splitlines()[1:]}
+    assert authors == {"curator"}

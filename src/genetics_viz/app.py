@@ -20,7 +20,11 @@ from nicegui import ui
 
 from genetics_viz.config_model import load_config
 from genetics_viz.utils.change_monitor import start_polling, stop_polling
-from genetics_viz.utils.data import get_static_prefix_map, init_all_data_stores
+from genetics_viz.utils.data import (
+    get_static_prefix_map,
+    init_all_data_stores,
+    mount_data_files,
+)
 from genetics_viz.utils.genetrek import start_refresh, stop_refresh
 
 # Import pages to register routes — this triggers all @ui.page decorators.
@@ -94,9 +98,9 @@ def _init_from_config(config_file: Path) -> None:
     config = load_config(config_file)
     init_all_data_stores(config.data_directories)
 
-    # Register static file routes for each data directory
+    # Serve each data directory's files, to logged-in users only
     for path_str, prefix in get_static_prefix_map().items():
-        nicegui_app.add_static_files(prefix, path_str)
+        mount_data_files(prefix, path_str)
 
     nicegui_app.on_startup(lambda: start_polling(interval=config.poll_interval))
     nicegui_app.on_shutdown(stop_polling)

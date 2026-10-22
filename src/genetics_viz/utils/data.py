@@ -16,7 +16,8 @@ _static_prefix_map: dict[str, str] = {}  # path_str -> "/data-0", …
 _default_data_dir: str = ""
 _dir_descriptions: dict[str, str] = {}  # path_str -> description
 #: Next ``/data-N`` index. Never reused: a static route cannot be unmounted, so
-#: a prefix freed by removing a directory still serves that directory.
+#: a prefix freed by removing a directory stays bound to that directory (it
+#: answers 404 once the directory is out of the registry).
 _next_prefix_index: int = 0
 
 
@@ -127,6 +128,37 @@ def get_static_prefix_map() -> dict[str, str]:
     return _static_prefix_map
 
 
+def mount_data_files(prefix: str, path_str: str) -> None:
+    """Serve a data directory's files under ``prefix``, to logged-in users only.
+
+    Not ``app.add_static_files``: its route checks nothing, and the directory
+    holds patient genomes. Starlette's ``StaticFiles`` still does the serving,
+    so Range requests (igv.js reading CRAMs and tabix files) work as before.
+    Anonymous requests get 401, not a redirect to the login page, since they
+    come from igv.js, ``<img>`` tags and links rather than page navigation.
+    """
+    from fastapi import HTTPException, Request
+    from fastapi.responses import Response
+    from nicegui import app as nicegui_app
+    from starlette.staticfiles import StaticFiles
+
+    from genetics_viz.utils.auth import is_authenticated
+
+    # check_dir=False: a missing directory is a degraded state, as in the registry.
+    files = StaticFiles(directory=path_str, check_dir=False)
+
+    @nicegui_app.get(prefix + "/{path:path}")
+    async def data_file(request: Request, path: str = "") -> Response:
+        if not is_authenticated():
+            raise HTTPException(status_code=401)
+        if _static_prefix_map.get(path_str) != prefix:
+            raise HTTPException(status_code=404)
+        response = await files.get_response(path, request.scope)
+        # private: the F5 and any other shared cache must not keep patient data.
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
+
+
 def get_all_data_stores() -> dict[str, DataStore]:
     """Return the full {path_str: DataStore} mapping (read-only access for the poller)."""
     return _data_stores
@@ -158,10 +190,7 @@ def add_data_store(path: str, description: str = "") -> str:
     _dir_descriptions[path_str] = description
     clear_sharding_cache()
 
-    # Register static files
-    from nicegui import app as nicegui_app
-
-    nicegui_app.add_static_files(prefix, path_str)
+    mount_data_files(prefix, path_str)
 
     return prefix
 
