@@ -45,7 +45,9 @@ async def diagnostic_statistics_page() -> None:
                     if not path.exists():
                         continue
                     with open(path, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
+                        reader = csv.DictReader(
+                            f, delimiter="\t", quoting=csv.QUOTE_NONE
+                        )
                         for row in reader:
                             row_dict = dict(row)
                             row_dict["Type"] = dtype

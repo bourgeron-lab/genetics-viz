@@ -70,7 +70,9 @@ async def validation_all_page() -> None:
                     if not path.exists():
                         continue
                     with open(path, "r") as f:
-                        for row in csv.DictReader(f, delimiter="\t"):
+                        for row in csv.DictReader(
+                            f, delimiter="\t", quoting=csv.QUOTE_NONE
+                        ):
                             row_dict = dict(row)
                             row_dict["Type"] = vtype
                             row_dict["OriginalVariant"] = row.get("Variant", "")

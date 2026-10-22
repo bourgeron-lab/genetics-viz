@@ -32,7 +32,7 @@ def test_diagnostic_file_is_created_with_header(tmp_path):
     path = tmp_path / "diagnostics" / "snvs.tsv"
     save_diag(path)
     lines = path.read_text().splitlines()
-    assert lines[0] + "\n" == dl.DIAGNOSTIC_HEADER and len(lines) == 2
+    assert lines[0].split("\t") == dl.DIAGNOSTIC_HEADER and len(lines) == 2
 
 
 def test_multiline_diagnostic_comment_keeps_one_record_per_line(tmp_path):
@@ -106,13 +106,73 @@ def test_notes_round_trip(tmp_path):
     assert [n["Message"] for n in nl.load_family_notes(path, "F1")] == ["later"]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="csv.DictReader quoting strips a message's leading quotes"
-)
 def test_note_starting_with_a_quote_survives(tmp_path):
     path = tmp_path / "notes.tsv"
     nl.save_note(path, "F1", "S1", '"quoted" start', "u", "t")
     assert nl.load_family_notes(path, "F1")[0]["Message"] == '"quoted" start'
+
+
+def test_deleting_a_note_leaves_the_others_unquoted(tmp_path):
+    path = tmp_path / "notes.tsv"
+    nl.save_note(path, "F1", "S1", 'say "hi"', "u", "t1")
+    nl.save_note(path, "F1", "S1", "gone", "u", "t2")
+    assert nl.delete_note(path, "F1", "t2", "u")
+    assert [n["Message"] for n in nl.load_family_notes(path, "F1")] == ['say "hi"']
+    assert '"""' not in path.read_text()
+
+
+def test_quoted_diagnostic_comment_survives_an_ignore_toggle(tmp_path):
+    path = tmp_path / "snvs.tsv"
+    save_diag(path, comment='"likely" pathogenic')
+    assert dl.update_diagnostic_ignore_status(
+        path, "F1", "chr1:1:A:T", "S1", "2026-01-01T10:00:00", "1"
+    )
+    [entry] = dl.load_diagnostic_map(path)[("chr1:1:A:T", "S1")]
+    assert entry[3] == '"likely" pathogenic'
+
+
+PARENTS = {"father": "P1", "mother": "P2"}
+
+
+@pytest.mark.parametrize(
+    "inheritance, modes, expected",
+    [
+        ("maternal", ("either",), ["P2"]),
+        ("paternal", ("either",), ["P1"]),
+        ("either", ("either",), ["P2", "P1"]),
+        ("homozygous", ("either",), []),
+        ("homozygous", ("either", "homozygous"), ["P2", "P1"]),
+        ("de novo", ("either",), []),
+    ],
+)
+def test_parents_to_validate(inheritance, modes, expected):
+    assert vl.parents_to_validate(inheritance, PARENTS, set(), modes) == expected
+
+
+def test_parents_already_validated_or_missing_are_skipped():
+    assert vl.parents_to_validate("either", PARENTS, {"P2"}) == ["P1"]
+    assert (
+        vl.parents_to_validate("maternal", {"father": "P1", "mother": None}, set())
+        == []
+    )
+
+
+def test_validated_samples(tmp_path):
+    path = tmp_path / "snvs.tsv"
+    assert vl.validated_samples(path, "F1", "v") == set()
+    path.write_text(
+        "\t".join(vl.SNV_VALIDATION_HEADER)
+        + "\n"
+        + "".join(
+            "\t".join([fid, var, sample, "u", "", "present", "", "0", "t"]) + "\n"
+            for fid, var, sample in [
+                ("F1", "v", "S1"),
+                ("F1", "w", "S2"),
+                ("F2", "v", "S3"),
+            ]
+        )
+    )
+    assert vl.validated_samples(path, "F1", "v") == {"S1"}
 
 
 VALIDATION_HEADER = (

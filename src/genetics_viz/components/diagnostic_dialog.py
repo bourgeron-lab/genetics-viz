@@ -108,7 +108,9 @@ def show_diagnostic_dialog(
 
                 if diagnostic_file.exists():
                     with open(diagnostic_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
+                        reader = csv.DictReader(
+                            f, delimiter="\t", quoting=csv.QUOTE_NONE
+                        )
                         for row in reader:
                             if (
                                 row.get("FID") == family_id

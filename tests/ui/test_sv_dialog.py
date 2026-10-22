@@ -111,11 +111,20 @@ async def test_validation_author_is_the_session_user(user, monkeypatch, data_dir
     box = next(iter(user.find(kind=ui.input, content="Username").elements))
     with user.client:
         box.set_value("mallory")
+        inheritance = next(
+            e
+            for e in user.find(kind=ui.select).elements
+            if "de novo" in getattr(e, "options", [])
+        )
+        inheritance.set_value("either")
     user.find(kind=ui.button, content="Save Validation").click()
     saved = data_dir / "validations" / "svs.tsv"
     for _ in range(100):
         if saved.exists():
             break
         await asyncio.sleep(0.05)
-    authors = {line.split("\t")[3] for line in saved.read_text().splitlines()[1:]}
-    assert authors == {"curator"}
+    rows = [line.split("\t") for line in saved.read_text().splitlines()[1:]]
+    assert {r[3] for r in rows} == {"curator"}
+    # "either" also records both parents as carriers, in the same write.
+    assert [r[2] for r in rows] == ["S3", "S2", "S1"]
+    assert rows[1][8] == "(inherited from S3)"

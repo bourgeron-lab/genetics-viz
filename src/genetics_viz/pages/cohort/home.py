@@ -76,7 +76,7 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
         if not diag_file.exists():
             continue
         with open(diag_file, "r") as f:
-            reader = csv.DictReader(f, delimiter="\t")
+            reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
             for row in reader:
                 if row.get("Ignore", "0") == "1":
                     continue

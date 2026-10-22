@@ -44,7 +44,9 @@ async def validation_statistics_page() -> None:
                     if not path.exists():
                         continue
                     with open(path, "r") as f:
-                        for row in csv.DictReader(f, delimiter="\t"):
+                        for row in csv.DictReader(
+                            f, delimiter="\t", quoting=csv.QUOTE_NONE
+                        ):
                             row_dict = dict(row)
                             row_dict["Type"] = vtype
                             if row.get("Ignore", "0") == "1":

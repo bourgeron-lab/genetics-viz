@@ -1,30 +1,27 @@
 """Shared diagnostic data loading utilities."""
 
 import csv
-import fcntl
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
-from genetics_viz.utils.tsv import clean_tsv_field
+from genetics_viz.utils.tsv import append_tsv_row, append_tsv_rows, set_ignore
 
 # Verdict used when curators disagree on the same variant for the same sample.
 CONFLICTING_DIAGNOSTIC = "conflicting"
 
 # TSV header for diagnostics files
-DIAGNOSTIC_HEADER = (
-    "FID\tVariant\tGene\tImpact\tSample\tUser\tTimestamp\tComment\tIgnore\tDiagnostic\n"
-)
+DIAGNOSTIC_HEADER = [
+    "FID", "Variant", "Gene", "Impact", "Sample",
+    "User", "Timestamp", "Comment", "Ignore", "Diagnostic",
+]  # fmt: skip
 
 
 def ensure_diagnostic_file(file_path: Path) -> None:
     """Create the diagnostics file with header if it doesn't exist."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    if not file_path.exists():
-        with open(file_path, "w") as f:
-            f.write(DIAGNOSTIC_HEADER)
+    append_tsv_rows(file_path, DIAGNOSTIC_HEADER, [])
 
 
 def load_diagnostic_map(
@@ -46,7 +43,7 @@ def load_diagnostic_map(
         return diagnostic_map
 
     with open(diagnostic_file_path, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
+        reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
         for row in reader:
             fid = row.get("FID")
             variant_key = row.get("Variant")
@@ -132,16 +129,12 @@ def save_diagnostic_entry(
     """
     if not can_write():
         raise PermissionError("Only curators and administrators record diagnostics.")
-    ensure_diagnostic_file(diagnostic_file)
-    with open(diagnostic_file, "a") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            f.write(
-                f"{family_id}\t{variant_key}\t{gene}\t{impact}\t{sample}\t"
-                f"{user}\t{timestamp}\t{clean_tsv_field(comment)}\t0\t{diagnostic}\n"
-            )
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    append_tsv_row(
+        diagnostic_file,
+        DIAGNOSTIC_HEADER,
+        [family_id, variant_key, gene, impact, sample]
+        + [user, timestamp, comment, "0", diagnostic],
+    )
 
 
 def update_diagnostic_ignore_status(
@@ -154,8 +147,6 @@ def update_diagnostic_ignore_status(
 ) -> bool:
     """Update the Ignore status for a specific diagnostic row.
 
-    Uses read-all, modify, write-back pattern with file locking.
-
     Returns:
         True if update was successful, False otherwise
 
@@ -163,42 +154,9 @@ def update_diagnostic_ignore_status(
     """
     if not can_write():
         raise PermissionError("Only curators and administrators edit diagnostics.")
-    if not diagnostic_file.exists():
-        return False
-
-    rows = []
-    fieldnames: list[str] = []
-    with open(diagnostic_file, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        fieldnames = list(reader.fieldnames or [])
-        for row in reader:
-            rows.append(row)
-
-    updated = False
-    for row in rows:
-        if (
-            row.get("FID") == family_id
-            and row.get("Variant") == variant_key
-            and row.get("Sample") == sample
-            and row.get("Timestamp") == timestamp
-        ):
-            row["Ignore"] = ignore_value
-            updated = True
-            break
-
-    if not updated:
-        return False
-
-    with open(diagnostic_file, "w") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
-            writer.writeheader()
-            writer.writerows(rows)
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
-    return True
+    return set_ignore(
+        diagnostic_file, family_id, variant_key, sample, timestamp, ignore_value
+    )
 
 
 def load_family_diagnostics(
@@ -237,7 +195,7 @@ def load_family_diagnostics(
             continue
         source = dtype.lower()
         with open(diag_file, "r") as f:
-            reader = csv.DictReader(f, delimiter="\t")
+            reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
             for row in reader:
                 if (
                     row.get("FID") == family_id

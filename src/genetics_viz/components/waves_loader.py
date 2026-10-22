@@ -1,9 +1,12 @@
 """Shared waves validation data loading utilities."""
 
 import csv
-import fcntl
 from pathlib import Path
 from typing import Dict, List
+
+from genetics_viz.utils.tsv import append_tsv_row
+
+WAVES_HEADER = ["sample", "user", "timestamp", "wave"]
 
 
 def load_waves_validations(validation_file_path: Path) -> Dict[str, List[int]]:
@@ -21,7 +24,7 @@ def load_waves_validations(validation_file_path: Path) -> Dict[str, List[int]]:
         return waves_map
 
     with open(validation_file_path, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
+        reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
         for row in reader:
             sample_id = row.get("sample")
             wave_str = row.get("wave")
@@ -56,7 +59,7 @@ def load_waves_validations_full(validation_file_path: Path) -> Dict[str, List[Di
         return waves_map
 
     with open(validation_file_path, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
+        reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
         for row in reader:
             sample_id = row.get("sample")
             wave_str = row.get("wave")
@@ -97,35 +100,9 @@ def save_wave_validation(
         wave: Wave score (0, 1, 2, or 3)
         timestamp: ISO timestamp string
     """
-    # Ensure the validations directory exists
-    validation_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Check if file exists and has header
-    file_exists = validation_file_path.exists()
-    needs_header = not file_exists
-
-    if file_exists:
-        # Check if file is empty or has no header
-        with open(validation_file_path, "r") as f:
-            first_line = f.readline().strip()
-            if not first_line or first_line != "sample\tuser\ttimestamp\twave":
-                needs_header = True
-
-    # Open file for appending with exclusive lock
-    with open(validation_file_path, "a") as f:
-        # Acquire exclusive lock
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-
-        try:
-            # Write header if needed
-            if needs_header:
-                f.write("sample\tuser\ttimestamp\twave\n")
-
-            # Write the validation record
-            f.write(f"{sample_id}\t{user}\t{timestamp}\t{wave}\n")
-        finally:
-            # Release lock
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    append_tsv_row(
+        validation_file_path, WAVES_HEADER, [sample_id, user, timestamp, wave]
+    )
 
 
 def get_wave_category(waves: List[int] | None) -> str:
