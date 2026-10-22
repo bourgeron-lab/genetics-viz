@@ -1,191 +1,74 @@
-"""Shared component for SV visualization in a dialog with IGV.js."""
+"""Shared component for SV visualization in a dialog with IGV.js.
 
-import csv
-from genetics_viz.utils.auth import can_write, get_current_user
-import json
-import re
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+``show_sv_dialog`` builds the dialog and wires its panels together:
 
-import yaml
+- the samples shown (carrier, parents, others added);
+- SV details and suggested positions (``sv_details.py``);
+- Read Evidence (``sv_read_panel.py``), then the Copy Number View
+  (``sv_cn_panel.py``) or its bedgraph fallback, the VAF and read-level views
+  (``sv_igv_views.py``);
+- the validation form (``sv_validation_panel.py``).
+
+The views share one ``SVViewState``. Its ``bounds`` dict is the SV's current
+position: every curated change moves it, and the read views follow.
+"""
+
+from typing import Any, Dict, List, Optional, Tuple
+
 from nicegui import ui
 
 from genetics_viz.components.sv_cn_panel import CopyNumberPanel
+from genetics_viz.components.sv_details import (
+    build_sv_suggestions,
+    render_suggestions,
+    render_sv_details,
+)
+from genetics_viz.components.sv_igv_views import (
+    ReadLevelView,
+    SVViewState,
+    coverage_view,
+    has_bedgraph,
+    update_roi_js,
+    vaf_view,
+)
 from genetics_viz.components.sv_read_panel import ReadEvidencePanel
+from genetics_viz.components.sv_validation_panel import (
+    SVValidationForm,
+    render_sv_validation,
+)
 from genetics_viz.utils.cnv_coverage import CNRequest, find_sample_coverage
-from genetics_viz.utils.data import get_data_store, get_static_prefix
+from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.pipeline_params import load_params
-from genetics_viz.utils.gene_scoring import (
-    build_gene_badges,
-    gene_badges_html,
-    get_gene_scorer,
-    split_genes,
-    tier_legend_html,
-)
-from genetics_viz.utils.genetrek import search_url
-from genetics_viz.components.validation_loader import (
-    SV_VALIDATION_HEADER,
-    parents_to_validate,
-    validated_samples,
-)
-from genetics_viz.utils.tsv import append_tsv_rows, clean_tsv_field
-from genetics_viz.utils.sharding import get_sample_path, get_sample_url
-from genetics_viz.utils.sv_view import read_view_windows, visibility_window_bp
 from genetics_viz.utils.wisecondorx import infer_sv_type
 
-
-# Load WisecondorX thresholds and colors from YAML
-#: SV columns holding genes, rendered as badges (exonic ones bordered).
-_GENE_COLUMNS = ("genic_symbol", "exonic_symbol", "genic_ensg", "exonic_ensg")
+_PARENT_MISSING = ("-", "0")
 
 
-def _load_wisecondorx_config():
-    config_path = (
-        Path(__file__).parent.parent / "config" / "wisecondorx_thresholds.yaml"
-    )
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+def _expanded_locus(chrom: str, start: int, end: int) -> str:
+    """The locus 1.6 times as long as the SV, centred on it."""
+    center = (start + end) // 2
+    expanded_length = int((end - start) * 1.6)
+    expanded_start = max(0, center - (expanded_length // 2))
+    return f"{chrom}:{expanded_start}-{center + (expanded_length // 2)}"
 
 
-WISECONDORX_CONFIG = _load_wisecondorx_config()
+def _curated_position(
+    validations: List[Tuple],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Curated start and end of the newest present validation that has one.
 
-
-_SV_KEY_PATTERN = re.compile(r"^(chr[^:]+):(\d+)-(\d+):(\w+)$")
-
-# Priority constants for suggestion sorting
-_PRIORITY_PARENT = 0
-_PRIORITY_FAMILY = 1
-_PRIORITY_COHORT = 2
-
-
-def _build_sv_suggestions(
-    all_validation_map: Dict,
-    chrom: str,
-    start_pos: int,
-    end_pos: int,
-    current_sample: str,
-    sample_parents: Dict[str, Optional[str]],
-    family_members: List[str],
-    max_suggestions: int = 5,
-) -> List[Dict[str, Any]]:
-    """Build a list of suggested curated coordinates from overlapping validated SVs.
-
-    Scans all validations for SVs on the same chromosome that overlap with
-    the current SV.  Returns suggestions sorted by priority (parents first,
-    then family, then cohort) and overlap percentage.
+    Keep original coordinates for the title and validation lookups; curated
+    ones are only for the ROI and the IGV locus.
     """
-    _missing = {"", "0", "-9", "-", None}
-    father_id = sample_parents.get("father")
-    mother_id = sample_parents.get("mother")
-    family_set = set(family_members)
-    current_length = end_pos - start_pos
-
-    if current_length <= 0:
-        return []
-
-    # coord_key -> suggestion dict
-    merged: Dict[tuple, Dict[str, Any]] = {}
-
-    for (variant_key, sample_id), validations in all_validation_map.items():
-        m = _SV_KEY_PATTERN.match(variant_key)
-        if not m:
-            continue
-        other_chrom, other_start_s, other_end_s, _other_type = m.groups()
-        if other_chrom != chrom:
-            continue
-        other_start = int(other_start_s)
-        other_end = int(other_end_s)
-
-        # Filter to "present" or "different", non-ignored validations
-        good = [
-            v for v in validations if v[0] in ("present", "different") and v[3] != "1"
-        ]
-        if not good:
-            continue
-
-        # Get suggested coordinates: prefer curated, fall back to original
-        # Use the most recent validation with curated coords
-        curated = [v for v in good if v[4] or v[5]]
-        if curated:
-            curated.sort(key=lambda v: v[6], reverse=True)
-            best = curated[0]
-            sug_start = int(best[4]) if best[4] else other_start
-            sug_end = int(best[5]) if best[5] else other_end
-        else:
-            sug_start = other_start
-            sug_end = other_end
-
-        # Check overlap between suggested coords and current SV
-        overlap_start = max(start_pos, sug_start)
-        overlap_end = min(end_pos, sug_end)
-        if overlap_start >= overlap_end:
-            continue
-        overlap_length = overlap_end - overlap_start
-        sug_length = sug_end - sug_start
-        if sug_length <= 0:
-            continue
-        # Overlap as % of current SV and as % of suggested SV
-        overlap_pct_current = overlap_length / current_length * 100
-        overlap_pct_suggested = overlap_length / sug_length * 100
-
-        # Skip exact same coordinates as current SV (not useful)
-        if sug_start == start_pos and sug_end == end_pos:
-            continue
-
-        # Classify sample priority and relationship
-        if sample_id == father_id and father_id not in _missing:
-            priority = _PRIORITY_PARENT
-            relationship = "father"
-        elif sample_id == mother_id and mother_id not in _missing:
-            priority = _PRIORITY_PARENT
-            relationship = "mother"
-        elif sample_id in family_set:
-            priority = _PRIORITY_FAMILY
-            relationship = "family"
-        else:
-            priority = _PRIORITY_COHORT
-            relationship = "cohort"
-
-        coord_key = (sug_start, sug_end)
-        if coord_key not in merged:
-            merged[coord_key] = {
-                "start": sug_start,
-                "end": sug_end,
-                "overlap_pct_current": overlap_pct_current,
-                "overlap_pct_suggested": overlap_pct_suggested,
-                "samples": [],
-                "priority": priority,
-                "inheritance": "unknown",
-            }
-        entry = merged[coord_key]
-        # Update priority to best (lowest) seen
-        entry["priority"] = min(entry["priority"], priority)
-        # Update overlap to max seen
-        entry["overlap_pct_current"] = max(
-            entry["overlap_pct_current"], overlap_pct_current
-        )
-        entry["overlap_pct_suggested"] = max(
-            entry["overlap_pct_suggested"], overlap_pct_suggested
-        )
-        # Set inheritance from parent relationship
-        if relationship == "father" and entry["inheritance"] == "unknown":
-            entry["inheritance"] = "paternal"
-        elif relationship == "mother" and entry["inheritance"] == "unknown":
-            entry["inheritance"] = "maternal"
-        # Add sample if not already listed
-        if sample_id not in {s["id"] for s in entry["samples"]}:
-            entry["samples"].append({"id": sample_id, "priority": priority})
-
-    # Sort: by priority (parent < family < cohort), then overlap % desc
-    suggestions = sorted(
-        merged.values(),
-        key=lambda s: (
-            s["priority"],
-            -min(s["overlap_pct_current"], s["overlap_pct_suggested"]),
-        ),
-    )
-    return suggestions[:max_suggestions]
+    present_with_curated = [
+        v for v in validations if v[0] == "present" and v[3] != "1" and (v[4] or v[5])
+    ]
+    if not present_with_curated:
+        return None, None
+    present_with_curated.sort(key=lambda v: v[6], reverse=True)
+    most_recent = present_with_curated[0]
+    return most_recent[4] or None, most_recent[5] or None
 
 
 def show_sv_dialog(
@@ -215,21 +98,9 @@ def show_sv_dialog(
         sample_parents_override: Optional pre-computed parent IDs (for standalone pages)
     """
     store = get_data_store()
-
-    # Calculate expanded locus (x1.6 centered on original)
     start_pos = int(start)
     end_pos = int(end)
-    center = (start_pos + end_pos) // 2
-    original_length = end_pos - start_pos
-    expanded_length = int(original_length * 1.6)
-    expanded_start = center - (expanded_length // 2)
-    expanded_end = center + (expanded_length // 2)
-
-    # Ensure non-negative positions
-    expanded_start = max(0, expanded_start)
-
     locus = f"{chrom}:{start}-{end}"
-    expanded_locus = f"{chrom}:{expanded_start}-{expanded_end}"
 
     # Check for curated boundaries from validations
     from genetics_viz.components.validation_loader import load_validation_map
@@ -238,57 +109,20 @@ def show_sv_dialog(
     validation_map = load_validation_map(validation_file, family_id)
     all_validation_map = load_validation_map(validation_file, family_id=None)
 
-    # Determine SV type for variant key
+    # Determine SV type for variant key (dup for gain, del for loss)
     sv_type = infer_sv_type(sv_data)
     variant_key = f"{chrom}:{start}-{end}:{sv_type}"
-    map_key = (variant_key, sample)
 
-    # Look for present validations with curated boundaries
-    # Keep original coordinates for title and validation lookups
-    # Use curated coordinates only for ROI display and IGV locus
-    curated_start = None
-    curated_end = None
+    curated_start, curated_end = _curated_position(
+        validation_map.get((variant_key, sample), [])
+    )
     curated_locus = None
-    curated_expanded_locus = None
-    if map_key in validation_map:
-        validations = validation_map[map_key]
-        present_with_curated = [
-            v
-            for v in validations
-            if v[0] == "present" and v[3] != "1" and (v[4] or v[5])
-        ]
-        if present_with_curated:
-            # Sort by timestamp (most recent first)
-            present_with_curated.sort(key=lambda v: v[6], reverse=True)
-            most_recent = present_with_curated[0]
-            if most_recent[4]:  # CuratedStart
-                curated_start = most_recent[4]
-            if most_recent[5]:  # CuratedEnd
-                curated_end = most_recent[5]
-
-            # Build curated locus string if any curated boundaries exist
-            if curated_start or curated_end:
-                display_start = curated_start if curated_start else start
-                display_end = curated_end if curated_end else end
-                curated_locus = f"{chrom}:{display_start}-{display_end}"
-
-                # Calculate expanded locus based on curated boundaries
-                curated_start_pos = int(display_start)
-                curated_end_pos = int(display_end)
-                curated_center = (curated_start_pos + curated_end_pos) // 2
-                curated_length = curated_end_pos - curated_start_pos
-                curated_expanded_length = int(curated_length * 1.6)
-                curated_expanded_start = curated_center - (curated_expanded_length // 2)
-                curated_expanded_end = curated_center + (curated_expanded_length // 2)
-                curated_expanded_start = max(0, curated_expanded_start)
-                curated_expanded_locus = (
-                    f"{chrom}:{curated_expanded_start}-{curated_expanded_end}"
-                )
-
-    # Use curated coordinates for IGV display if available
-    igv_locus = curated_expanded_locus if curated_expanded_locus else expanded_locus
-    roi_start_coord = curated_start if curated_start else start
-    roi_end_coord = curated_end if curated_end else end
+    igv_locus = _expanded_locus(chrom, start_pos, end_pos)
+    if curated_start or curated_end:
+        display_start = curated_start or start
+        display_end = curated_end or end
+        curated_locus = f"{chrom}:{display_start}-{display_end}"
+        igv_locus = _expanded_locus(chrom, int(display_start), int(display_end))
 
     with (
         ui.dialog().props("maximized") as dialog,
@@ -332,19 +166,9 @@ def show_sv_dialog(
                                 sample_parents["mother"] = member.get("Mother")
                                 break
 
-            # Track additional samples
-            additional_samples: Dict[str, List[str]] = {"value": []}
-
-            def has_bedgraph(sample_id: str) -> bool:
-                return (
-                    get_sample_path(store.data_dir, sample_id)
-                    / "sequences"
-                    / f"{sample_id}.by1000.bedgraph.gz"
-                ).exists()
-
             def has_coverage(sample_id: str) -> bool:
                 """A coverage track can be drawn: bigWig or by1000 bedgraph."""
-                return has_bedgraph(sample_id) or bool(
+                return has_bedgraph(store.data_dir, sample_id) or bool(
                     find_sample_coverage(store.data_dir, sample_id)
                 )
 
@@ -356,17 +180,6 @@ def show_sv_dialog(
                         if member is not None:
                             return CNRequest(sample_id, fam.family_id, member.sex)
                 return CNRequest(sample_id, family_id, None)
-
-            # Automatically add parents if available
-            for parent_type, parent_id in sample_parents.items():
-                if (
-                    parent_id
-                    and parent_id != "-"
-                    and parent_id != "0"
-                    and parent_id != sample
-                ):
-                    if has_coverage(parent_id):
-                        additional_samples["value"].append(parent_id)
 
             def get_relationship_label(sample_id: str) -> str:
                 """Get relationship label for a sample."""
@@ -390,15 +203,37 @@ def show_sv_dialog(
                                 and member_mother == sample_parents["mother"]
                                 and member_father
                                 and member_mother
-                                and member_father != "-"
-                                and member_father != "0"
-                                and member_mother != "-"
-                                and member_mother != "0"
+                                and member_father not in _PARENT_MISSING
+                                and member_mother not in _PARENT_MISSING
                             ):
                                 return "(sibling)"
                             break
 
                 return ""
+
+            state = SVViewState(
+                data_dir=store.data_dir,
+                chrom=chrom,
+                start=start,
+                end=end,
+                sample=sample,
+                sv_type=sv_type,
+                call=sv_data.get("call", ""),
+                igv_locus=igv_locus,
+                roi_start=curated_start or start,
+                roi_end=curated_end or end,
+                label_for=get_relationship_label,
+            )
+
+            # Automatically add parents if available
+            for parent_id in sample_parents.values():
+                if (
+                    parent_id
+                    and parent_id not in _PARENT_MISSING
+                    and parent_id != sample
+                    and has_coverage(parent_id)
+                ):
+                    state.additional.append(parent_id)
 
             # Additional samples section with add menu
             with ui.row().classes("items-center gap-4 mb-2"):
@@ -426,36 +261,47 @@ def show_sv_dialog(
             def refresh_additional_samples():
                 additional_samples_container.clear()
                 with additional_samples_container:
-                    if additional_samples["value"]:
+                    if state.additional:
                         ui.label("Additional Samples:").classes(
                             "text-sm font-semibold text-gray-700"
                         )
-                        for add_sample_id in additional_samples["value"]:
+                        for add_sample_id in state.additional:
                             with ui.row().classes("items-center gap-2"):
-                                label_text = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
-                                ui.label(label_text).classes("text-sm text-gray-600")
-
-                                def make_remove_handler(sid: str):
-                                    return lambda: remove_sample(sid)
-
+                                ui.label(state.label(add_sample_id)).classes(
+                                    "text-sm text-gray-600"
+                                )
                                 ui.button(
                                     icon="delete",
-                                    on_click=make_remove_handler(add_sample_id),
+                                    on_click=lambda _, sid=add_sample_id: remove_sample(
+                                        sid
+                                    ),
                                 ).props("flat dense size=xs color=red")
+
+            def samples_changed():
+                refresh_additional_samples()
+                refresh_igv()
+                vaf.refresh()
+                read_level.refresh()
+                refresh_read_evidence()
+
+            def add_new(candidates: List[str]) -> List[str]:
+                """Add the candidates not shown yet that have coverage."""
+                added = []
+                for sid in candidates:
+                    if sid not in state.additional and sid != sample:
+                        if has_coverage(sid):
+                            state.additional.append(sid)
+                            added.append(sid)
+                return added
 
             def add_sample(sample_id: str):
                 if (
                     sample_id
-                    and sample_id not in additional_samples["value"]
+                    and sample_id not in state.additional
                     and sample_id != sample
                 ):
-                    if has_coverage(sample_id):
-                        additional_samples["value"].append(sample_id)
-                        refresh_additional_samples()
-                        refresh_igv()
-                        refresh_igv_vaf()
-                        refresh_igv_cram()
-                        refresh_read_evidence()
+                    if add_new([sample_id]):
+                        samples_changed()
                     else:
                         ui.notify(
                             f"No coverage file found for sample: {sample_id}",
@@ -463,596 +309,71 @@ def show_sv_dialog(
                         )
 
             def add_parents():
-                added = []
-                for parent_type, parent_id in sample_parents.items():
-                    if parent_id and parent_id != "-" and parent_id != "0":
-                        if (
-                            parent_id not in additional_samples["value"]
-                            and parent_id != sample
-                        ):
-                            if has_coverage(parent_id):
-                                additional_samples["value"].append(parent_id)
-                                added.append(parent_id)
+                added = add_new(
+                    [
+                        p
+                        for p in sample_parents.values()
+                        if p and p not in _PARENT_MISSING
+                    ]
+                )
                 if added:
-                    refresh_additional_samples()
-                    refresh_igv()
-                    refresh_igv_vaf()
-                    refresh_igv_cram()
-                    refresh_read_evidence()
+                    samples_changed()
                     ui.notify(f"Added parents: {', '.join(added)}", type="positive")
                 else:
                     ui.notify("No parents to add or files not found", type="warning")
 
             def add_family():
-                added = []
-                for member_id in family_members:
-                    if (
-                        member_id not in additional_samples["value"]
-                        and member_id != sample
-                    ):
-                        if has_coverage(member_id):
-                            additional_samples["value"].append(member_id)
-                            added.append(member_id)
+                added = add_new(family_members)
                 if added:
-                    refresh_additional_samples()
-                    refresh_igv()
-                    refresh_igv_vaf()
-                    refresh_igv_cram()
-                    refresh_read_evidence()
+                    samples_changed()
                     ui.notify(f"Added {len(added)} family members", type="positive")
                 else:
                     ui.notify("No additional family members to add", type="warning")
 
             def remove_sample(sample_id: str):
-                if sample_id in additional_samples["value"]:
-                    additional_samples["value"].remove(sample_id)
-                    refresh_additional_samples()
-                    refresh_igv()
-                    refresh_igv_vaf()
-                    refresh_igv_cram()
-                    refresh_read_evidence()
+                if sample_id in state.additional:
+                    state.additional.remove(sample_id)
+                    samples_changed()
 
             refresh_additional_samples()
 
-            # Helper function to render gene badges with color coding
-            gene_scorer = get_gene_scorer()
+            render_sv_details(sv_data, locus, get_gene_scorer())
 
-            def render_sv_gene_badges(gene_value_str: str):
-                """Render gene badges with color coding and exonic border."""
-                if not gene_value_str or str(gene_value_str) in ["-", ""]:
-                    return ui.label("-").classes("text-base text-gray-900 font-medium")
+            # Filled once the validation form is built, further down.
+            form: Dict[str, Optional[SVValidationForm]] = {"value": None}
 
-                symbols, exonic = [], set()
-                for item in split_genes(gene_value_str, ","):
-                    gene_name, _, gene_type = item.partition(":")
-                    symbols.append(gene_name.strip())
-                    if gene_type.strip() == "exonic":
-                        exonic.add(gene_name.strip())
-                badges = build_gene_badges(
-                    symbols, gene_scorer, cap=None, bordered=exonic
+            def set_curated(key: str, value: int) -> None:
+                state.bounds[key] = int(value)
+                if form["value"] is not None:
+                    form["value"].curated_input(key).value = str(value)
+
+            def apply_suggestion(s: Dict[str, Any]) -> None:
+                set_curated("start", s["start"])
+                set_curated("end", s["end"])
+                update_roi()
+                # Preselect inheritance from parent relationship
+                inh = s.get("inheritance", "unknown")
+                if inh != "unknown" and form["value"] is not None:
+                    form["value"].inheritance.value = inh
+                ui.notify(
+                    f"Curated position set to {chrom}:{s['start']}-{s['end']}",
+                    type="positive",
                 )
-                ui.html(gene_badges_html(badges), sanitize=False)
-
-            def render_gene_column(value, exonic: bool):
-                """A genic/exonic symbol or ENSG column as badges."""
-                idents = [g for g in split_genes(value, ",") if g != "-"]
-                if not idents:
-                    ui.label("-").classes("text-sm text-gray-800 break-all")
-                    return
-                badges = build_gene_badges(
-                    idents,
-                    gene_scorer,
-                    cap=None,
-                    sort=False,
-                    bordered=idents if exonic else (),
-                )
-                ui.html(gene_badges_html(badges), sanitize=False)
-
-            # SV details card
-            ui.label("SV Details").classes("text-xl font-semibold mb-2")
-
-            with ui.card().classes("w-full mb-4"):
-                with ui.column().classes("p-4 gap-4"):
-                    # Legends
-                    with ui.row().classes("gap-4 items-center flex-wrap"):
-                        # Gene badge legend: the user's tiers, exonic border
-                        ui.html(
-                            tier_legend_html(gene_scorer, exonic_border=True),
-                            sanitize=False,
-                        )
-                        ui.link(
-                            "Region in GeneTrek",
-                            search_url([locus]),
-                            new_tab=True,
-                        ).classes("text-xs").tooltip(
-                            "Open GeneTrek's table filtered to the genes this SV overlaps"
-                        )
-
-                        ui.separator().props("vertical").classes("mx-2")
-
-                        # CNV call legend (from config)
-                        robust_loss = WISECONDORX_CONFIG["robust_loss"]
-                        permissive_loss = WISECONDORX_CONFIG["permissive_loss"]
-                        robust_gain = WISECONDORX_CONFIG["robust_gain"]
-                        permissive_gain = WISECONDORX_CONFIG["permissive_gain"]
-
-                        with ui.row().classes("gap-2 items-center"):
-                            ui.label("CNV calls:").classes("text-xs font-semibold")
-                            ui.html(
-                                f'<span class="q-badge" style="background-color: {robust_loss["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{robust_loss["label"]}</span>',
-                                sanitize=False,
-                            )
-                            ui.html(
-                                f'<span class="q-badge" style="background-color: {permissive_loss["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{permissive_loss["label"]}</span>',
-                                sanitize=False,
-                            )
-                            ui.html(
-                                f'<span class="q-badge" style="background-color: {robust_gain["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{robust_gain["label"]}</span>',
-                                sanitize=False,
-                            )
-                            ui.html(
-                                f'<span class="q-badge" style="background-color: {permissive_gain["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{permissive_gain["label"]}</span>',
-                                sanitize=False,
-                            )
-
-                    ui.separator()
-
-                    # Primary fields with badge styling
-                    primary_fields = [
-                        "sample",
-                        "ratio",
-                        "zscore",
-                        "type",
-                        "call",
-                        "gene",
-                    ]
-
-                    with ui.row().classes("gap-6 flex-wrap items-center"):
-                        for key in primary_fields:
-                            if key in sv_data:
-                                value = sv_data[key]
-                                with ui.column().classes("gap-0"):
-                                    ui.label(key).classes(
-                                        "text-xs font-semibold text-gray-500"
-                                    )
-
-                                    # Special rendering for specific fields
-                                    if key == "call":
-                                        # CNV call badge (from config)
-                                        call_value = str(value) if value else "-"
-                                        robust_loss = WISECONDORX_CONFIG["robust_loss"]
-                                        permissive_loss = WISECONDORX_CONFIG[
-                                            "permissive_loss"
-                                        ]
-                                        robust_gain = WISECONDORX_CONFIG["robust_gain"]
-                                        permissive_gain = WISECONDORX_CONFIG[
-                                            "permissive_gain"
-                                        ]
-
-                                        if call_value == robust_loss["label"]:
-                                            ui.html(
-                                                f'<span class="q-badge" style="background-color: {robust_loss["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{call_value}</span>',
-                                                sanitize=False,
-                                            )
-                                        elif call_value == permissive_loss["label"]:
-                                            ui.html(
-                                                f'<span class="q-badge" style="background-color: {permissive_loss["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{call_value}</span>',
-                                                sanitize=False,
-                                            )
-                                        elif call_value == robust_gain["label"]:
-                                            ui.html(
-                                                f'<span class="q-badge" style="background-color: {robust_gain["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{call_value}</span>',
-                                                sanitize=False,
-                                            )
-                                        elif call_value == permissive_gain["label"]:
-                                            ui.html(
-                                                f'<span class="q-badge" style="background-color: {permissive_gain["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{call_value}</span>',
-                                                sanitize=False,
-                                            )
-                                        else:
-                                            ui.label(call_value).classes(
-                                                "text-base text-gray-600 font-medium"
-                                            )
-
-                                    elif key == "ratio":
-                                        # Colored ratio value (from config)
-                                        try:
-                                            r = float(value) if value else 0
-                                            robust_loss = WISECONDORX_CONFIG[
-                                                "robust_loss"
-                                            ]
-                                            permissive_loss = WISECONDORX_CONFIG[
-                                                "permissive_loss"
-                                            ]
-                                            robust_gain = WISECONDORX_CONFIG[
-                                                "robust_gain"
-                                            ]
-                                            permissive_gain = WISECONDORX_CONFIG[
-                                                "permissive_gain"
-                                            ]
-
-                                            if r <= robust_loss["ratio_threshold"]:
-                                                ui.label(str(value)).style(
-                                                    f"color: {robust_loss['color']}; font-weight: bold"
-                                                )
-                                            elif (
-                                                r <= permissive_loss["ratio_threshold"]
-                                            ):
-                                                ui.label(str(value)).style(
-                                                    f"color: {permissive_loss['color']}; font-weight: 600"
-                                                )
-                                            elif r >= robust_gain["ratio_threshold"]:
-                                                ui.label(str(value)).style(
-                                                    f"color: {robust_gain['color']}; font-weight: bold"
-                                                )
-                                            elif (
-                                                r >= permissive_gain["ratio_threshold"]
-                                            ):
-                                                ui.label(str(value)).style(
-                                                    f"color: {permissive_gain['color']}; font-weight: 600"
-                                                )
-                                            else:
-                                                ui.label(str(value)).classes(
-                                                    "text-base text-gray-900 font-medium"
-                                                )
-                                        except (TypeError, ValueError):
-                                            ui.label(
-                                                str(value) if value is not None else "-"
-                                            ).classes(
-                                                "text-base text-gray-900 font-medium"
-                                            )
-
-                                    elif key == "zscore":
-                                        # Colored zscore value (from config)
-                                        try:
-                                            z = float(value) if value else 0
-                                            robust_loss = WISECONDORX_CONFIG[
-                                                "robust_loss"
-                                            ]
-                                            permissive_loss = WISECONDORX_CONFIG[
-                                                "permissive_loss"
-                                            ]
-                                            robust_gain = WISECONDORX_CONFIG[
-                                                "robust_gain"
-                                            ]
-                                            permissive_gain = WISECONDORX_CONFIG[
-                                                "permissive_gain"
-                                            ]
-
-                                            if z <= robust_loss["zscore_threshold"]:
-                                                ui.label(str(value)).style(
-                                                    f"color: {robust_loss['color']}; font-weight: bold"
-                                                )
-                                            elif (
-                                                z <= permissive_loss["zscore_threshold"]
-                                            ):
-                                                ui.label(str(value)).style(
-                                                    f"color: {permissive_loss['color']}; font-weight: 600"
-                                                )
-                                            elif z >= robust_gain["zscore_threshold"]:
-                                                ui.label(str(value)).style(
-                                                    f"color: {robust_gain['color']}; font-weight: bold"
-                                                )
-                                            elif (
-                                                z >= permissive_gain["zscore_threshold"]
-                                            ):
-                                                ui.label(str(value)).style(
-                                                    f"color: {permissive_gain['color']}; font-weight: 600"
-                                                )
-                                            else:
-                                                ui.label(str(value)).classes(
-                                                    "text-base text-gray-900 font-medium"
-                                                )
-                                        except (TypeError, ValueError):
-                                            ui.label(
-                                                str(value) if value is not None else "-"
-                                            ).classes(
-                                                "text-base text-gray-900 font-medium"
-                                            )
-
-                                    elif key == "gene":
-                                        # Gene badges with color coding and border for exonic
-                                        render_sv_gene_badges(value)
-
-                                    else:
-                                        # Default rendering
-                                        ui.label(
-                                            str(value) if value is not None else "-"
-                                        ).classes("text-base text-gray-900 font-medium")
-
-                    # See more / see less section for gene annotation details
-                    gene_annotation_fields = [
-                        "genic_symbol",
-                        "exonic_symbol",
-                        "genic_ensg",
-                        "exonic_ensg",
-                    ]
-                    other_fields = {
-                        k: v
-                        for k, v in sv_data.items()
-                        if k not in primary_fields
-                        and k not in ["chr:start-end"]
-                        and k in gene_annotation_fields
-                    }
-
-                    if other_fields:
-                        ui.separator()
-
-                        show_more = {"value": False}
-
-                        def toggle_more():
-                            show_more["value"] = not show_more["value"]
-                            more_button.text = (
-                                "See less ▲" if show_more["value"] else "See more ▼"
-                            )
-                            details_container.set_visibility(show_more["value"])
-
-                        more_button = (
-                            ui.button("See more ▼", on_click=toggle_more)
-                            .props("flat dense")
-                            .classes("text-sm text-blue-600")
-                        )
-
-                        with ui.column().classes("gap-2 mt-2") as details_container:
-                            with ui.element("div").classes("grid grid-cols-2 gap-4"):
-                                for key, value in other_fields.items():
-                                    with ui.column().classes("gap-0"):
-                                        ui.label(key).classes(
-                                            "text-xs font-semibold text-gray-500"
-                                        )
-                                        # Render gene/symbol fields with color-coded badges
-                                        if key in _GENE_COLUMNS:
-                                            render_gene_column(
-                                                value, key.startswith("exonic")
-                                            )
-                                        else:
-                                            # Default rendering for other fields
-                                            ui.label(
-                                                str(value) if value is not None else "-"
-                                            ).classes("text-sm text-gray-800 break-all")
-
-                        details_container.set_visibility(False)
-
-            # Calculate dynamic height for IGV containers
-            def calculate_igv_height():
-                """Calculate height based on number of tracks: 200px base + (tracks * 100px) + 50px buffer."""
-                num_tracks = 1 + len(additional_samples["value"])
-                return 200 + (num_tracks * 100) + 50
-
-            def calculate_vaf_height():
-                """Calculate height based on number of tracks: 200px base + (tracks * 100px) + 50px buffer."""
-                num_tracks = 1 + len(additional_samples["value"])
-                return 200 + (num_tracks * 100) + 50
-
-            def calculate_cram_height():
-                """Calculate height for CRAM tracks: 200px base + (tracks * 250px) + 50px buffer."""
-                num_tracks = 1 + len(additional_samples["value"])
-                return 200 + (num_tracks * 250) + 50
-
-            # Build IGV tracks function for bedgraph
-            def build_igv_tracks():
-                tracks = []
-
-                # Main sample track
-                if has_bedgraph(sample):
-                    sample_url_seg = get_sample_url(store.data_dir, sample)
-                    main_label = f"{sample} {get_relationship_label(sample)}".strip()
-                    tracks.append(
-                        {
-                            "name": main_label,
-                            "type": "wig",
-                            "format": "bedgraph",
-                            "url": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.by1000.bedgraph.gz",
-                            "indexURL": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.by1000.bedgraph.gz.tbi",
-                            "height": 100,
-                            "autoscaleGroup": "cnv",
-                        }
-                    )
-
-                # Additional samples tracks
-                for add_sample_id in additional_samples["value"]:
-                    if has_bedgraph(add_sample_id):
-                        add_url_seg = get_sample_url(store.data_dir, add_sample_id)
-                        add_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
-                        tracks.append(
-                            {
-                                "name": add_label,
-                                "type": "wig",
-                                "format": "bedgraph",
-                                "url": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.by1000.bedgraph.gz",
-                                "indexURL": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.by1000.bedgraph.gz.tbi",
-                                "height": 100,
-                                "autoscaleGroup": "cnv",
-                            }
-                        )
-
-                return tracks
-
-            # Build IGV tracks function for VAF bedgraph
-            def build_vaf_tracks():
-                tracks = []
-
-                # Main sample track
-                vaf_file = (
-                    get_sample_path(store.data_dir, sample)
-                    / "sequences"
-                    / f"{sample}.vaf.bedgraph.gz"
-                )
-                if vaf_file.exists():
-                    sample_url_seg = get_sample_url(store.data_dir, sample)
-                    main_label = f"{sample} {get_relationship_label(sample)}".strip()
-                    tracks.append(
-                        {
-                            "name": main_label,
-                            "type": "wig",
-                            "format": "bedgraph",
-                            "graphType": "points",
-                            "url": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.vaf.bedgraph.gz",
-                            "indexURL": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.vaf.bedgraph.gz.tbi",
-                            "height": 100,
-                            "min": 0,
-                            "max": 1,
-                            "autoscale": False,
-                        }
-                    )
-
-                # Additional samples tracks
-                for add_sample_id in additional_samples["value"]:
-                    vaf_file = (
-                        get_sample_path(store.data_dir, add_sample_id)
-                        / "sequences"
-                        / f"{add_sample_id}.vaf.bedgraph.gz"
-                    )
-                    if vaf_file.exists():
-                        add_url_seg = get_sample_url(store.data_dir, add_sample_id)
-                        add_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
-                        tracks.append(
-                            {
-                                "name": add_label,
-                                "type": "wig",
-                                "format": "bedgraph",
-                                "graphType": "points",
-                                "url": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.vaf.bedgraph.gz",
-                                "indexURL": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.vaf.bedgraph.gz.tbi",
-                                "height": 100,
-                                "min": 0,
-                                "max": 1,
-                                "autoscale": False,
-                            }
-                        )
-
-                return tracks
-
-            # Build CRAM tracks function for read-level view
-            def build_cram_tracks():
-                tracks = []
-
-                # Main sample CRAM track
-                cram_file = (
-                    get_sample_path(store.data_dir, sample)
-                    / "sequences"
-                    / f"{sample}.GRCh38_GIABv3.cram"
-                )
-                if cram_file.exists():
-                    sample_url_seg = get_sample_url(store.data_dir, sample)
-                    main_label = f"{sample} {get_relationship_label(sample)}".strip()
-                    tracks.append(
-                        {
-                            "name": main_label,
-                            "type": "alignment",
-                            "format": "cram",
-                            "url": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.GRCh38_GIABv3.cram",
-                            "indexURL": f"{get_static_prefix()}/{sample_url_seg}/sequences/{sample}.GRCh38_GIABv3.cram.crai",
-                            "height": 250,
-                            "displayMode": "SQUISHED",
-                            "viewAsPairs": True,
-                            "visibilityWindow": visibility_window_bp(),
-                            "autoscale": False,
-                            "autoscaleGroup": "cram",
-                        }
-                    )
-
-                # Additional samples CRAM tracks
-                for add_sample_id in additional_samples["value"]:
-                    cram_file = (
-                        get_sample_path(store.data_dir, add_sample_id)
-                        / "sequences"
-                        / f"{add_sample_id}.GRCh38_GIABv3.cram"
-                    )
-                    if cram_file.exists():
-                        add_url_seg = get_sample_url(store.data_dir, add_sample_id)
-                        add_label = f"{add_sample_id} {get_relationship_label(add_sample_id)}".strip()
-                        tracks.append(
-                            {
-                                "name": add_label,
-                                "type": "alignment",
-                                "format": "cram",
-                                "url": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.GRCh38_GIABv3.cram",
-                                "indexURL": f"{get_static_prefix()}/{add_url_seg}/sequences/{add_sample_id}.GRCh38_GIABv3.cram.crai",
-                                "height": 250,
-                                "displayMode": "SQUISHED",
-                                "viewAsPairs": True,
-                                "visibilityWindow": visibility_window_bp(),
-                                "autoscale": False,
-                                "autoscaleGroup": "cram",
-                            }
-                        )
-
-                return tracks
 
             # Suggested coordinates from overlapping validated SVs
-            suggestions = _build_sv_suggestions(
-                all_validation_map=all_validation_map,
-                chrom=chrom,
-                start_pos=start_pos,
-                end_pos=end_pos,
-                current_sample=sample,
-                sample_parents=sample_parents,
-                family_members=family_members,
+            render_suggestions(
+                build_sv_suggestions(
+                    all_validation_map=all_validation_map,
+                    chrom=chrom,
+                    start_pos=start_pos,
+                    end_pos=end_pos,
+                    current_sample=sample,
+                    sample_parents=sample_parents,
+                    family_members=family_members,
+                ),
+                chrom,
+                apply_suggestion,
             )
-
-            if suggestions:
-                _PRIORITY_COLORS = {
-                    _PRIORITY_PARENT: "green",
-                    _PRIORITY_FAMILY: "blue",
-                    _PRIORITY_COHORT: "grey",
-                }
-                _PRIORITY_LABELS = {
-                    _PRIORITY_PARENT: "parent",
-                    _PRIORITY_FAMILY: "family",
-                    _PRIORITY_COHORT: "cohort",
-                }
-
-                with ui.row().classes("w-full mt-4 items-center gap-2 flex-wrap"):
-                    ui.icon("lightbulb", color="amber").classes("text-lg")
-                    ui.label("Suggested Coordinates").classes(
-                        "text-sm font-semibold text-gray-600"
-                    )
-                    for sug in suggestions:
-                        sample_labels = []
-                        for s in sorted(sug["samples"], key=lambda x: x["priority"]):
-                            sample_labels.append(s["id"])
-                        samples_text = ", ".join(sample_labels)
-                        pct_cur = sug["overlap_pct_current"]
-                        pct_sug = sug["overlap_pct_suggested"]
-                        label = (
-                            f"{chrom}:{sug['start']}-{sug['end']}"
-                            f"  ({pct_cur:.0f}% ours | {pct_sug:.0f}% theirs)"
-                        )
-                        tooltip_text = (
-                            f"{samples_text} [{_PRIORITY_LABELS[sug['priority']]}]"
-                        )
-                        color = _PRIORITY_COLORS[sug["priority"]]
-
-                        def make_apply(s):
-                            def on_click():
-                                curated_inputs["start"].value = str(s["start"])
-                                curated_inputs["end"].value = str(s["end"])
-                                roi_coords["start"] = s["start"]
-                                roi_coords["end"] = s["end"]
-                                _update_roi()
-                                # Preselect inheritance from parent relationship
-                                inh = s.get("inheritance", "unknown")
-                                if (
-                                    inh != "unknown"
-                                    and inheritance_ref["select"] is not None
-                                ):
-                                    inheritance_ref["select"].value = inh
-                                ui.notify(
-                                    f"Curated position set to"
-                                    f" {chrom}:{s['start']}-{s['end']}",
-                                    type="positive",
-                                )
-
-                            return on_click
-
-                        ui.button(
-                            label,
-                            on_click=make_apply(sug),
-                            icon="content_paste",
-                        ).props(f"dense outline color={color} size=sm no-caps").tooltip(
-                            tooltip_text
-                        )
 
             cohort_params = (
                 load_params(cohort.params_file) if cohort and cohort.params_file else {}
@@ -1061,7 +382,6 @@ def show_sv_dialog(
             # windows are defined, into this slot.
             read_slot = ui.column().classes("w-full gap-0")
 
-            # IGV.js viewer container for bedgraph (CNV view)
             # The carrier's normalised coverage bigWig, divided by the cohort's
             # control panel, replaces the by1000 bedgraph in IGV when present.
             # Folded then: Read Evidence already draws the copy number.
@@ -1086,7 +406,7 @@ def show_sv_dialog(
                         cohort_name=cohort_name,
                         params=cohort_params,
                         chrom=chrom,
-                        roi=(int(roi_start_coord), int(roi_end_coord)),
+                        roi=(int(state.roi_start), int(state.roi_end)),
                         call=str(sv_data.get("call", "")),
                         label_for=get_relationship_label,
                     )
@@ -1100,91 +420,12 @@ def show_sv_dialog(
                         cn_state["loaded"] = bool(cnv_expansion.value)
                         if not cn_state["loaded"]:
                             return
-                        cn_panel.refresh(
-                            [
-                                cn_request(sid)
-                                for sid in [sample, *additional_samples["value"]]
-                            ]
-                        )
-
-                    refresh_igv()
+                        cn_panel.refresh([cn_request(sid) for sid in state.samples()])
                 else:
-                    igv_container = (
-                        ui.element("div")
-                        .props('id="igv-div"')
-                        .classes("w-full border border-gray-300 rounded-lg")
-                        .style(f"height: {calculate_igv_height()}px")
-                    )
+                    coverage = coverage_view(state)
+                    refresh_igv = coverage.refresh
 
-                    @ui.refreshable
-                    def refresh_igv():
-                        """Refresh IGV viewer with current tracks."""
-                        igv_container.clear()
-
-                        # Update container height
-                        try:
-                            new_height = calculate_igv_height()
-                            igv_container.style(f"height: {new_height}px")
-                        except RuntimeError:
-                            pass
-
-                        tracks = build_igv_tracks()
-
-                        # Determine ROI color based on call type
-                        call_value = sv_data.get("call", "")
-                        roi_color = "rgba(255,0,0,0.2)"  # Default red for loss
-                        if "GAIN" in str(call_value).upper():
-                            roi_color = "rgba(0,128,0,0.2)"  # Green for gain
-
-                        # Create ROI description
-                        roi_description = f"{chrom}:{start}-{end} - {call_value}"
-
-                        # IGV.js initialization script
-                        igv_script = f"""
-                        (async function() {{
-                            const igvDiv = document.getElementById("igv-div");
-                            if (!igvDiv) return;
-
-                            // Clear any existing IGV instance
-                            if (window.igvBrowser) {{
-                                igv.removeBrowser(window.igvBrowser);
-                            }}
-
-                            const roiConfig = [
-                                {{
-                                    name: "{roi_description}",
-                                    color: "{roi_color}",
-                                    features: [
-                                        {{
-                                            chr: "{chrom}",
-                                            start: {roi_start_coord},
-                                            end: {roi_end_coord},
-                                            name: "{call_value}"
-                                        }}
-                                    ]
-                                }}
-                            ];
-                            const options = {{
-                                genome: "hg38",
-                                locus: "{igv_locus}",
-                                tracks: {json.dumps(tracks)},
-                                roi: roiConfig,
-                            }};
-
-                            window.igvBrowser = await igv.createBrowser(igvDiv, options);
-
-                            // Trigger resize to ensure proper width
-                            setTimeout(() => {{
-                                if (window.igvBrowser && window.igvBrowser.visibilityChange) {{
-                                    window.igvBrowser.visibilityChange();
-                                }}
-                            }}, 100);
-                        }})();
-                        """
-
-                        ui.run_javascript(igv_script, timeout=10.0)
-
-                    refresh_igv()
+                refresh_igv()
 
             # Handle expansion panel opening to resize IGV
             def on_cnv_expansion_change(e):
@@ -1201,385 +442,46 @@ def show_sv_dialog(
 
             cnv_expansion.on_value_change(on_cnv_expansion_change)
 
-            # IGV.js viewer container for VAF bedgraph
             vaf_expansion = (
                 ui.expansion("VAF View", icon="water_drop", value=False)
                 .classes("w-full mt-4 border border-gray-400 rounded-lg")
                 .props("header-class='text-lg font-bold bg-gray-100'")
             )
-
             with vaf_expansion:
-                igv_vaf_container = (
-                    ui.element("div")
-                    .props('id="igv-vaf-div"')
-                    .classes("w-full border border-gray-300 rounded-lg")
-                    .style(f"height: {calculate_vaf_height()}px")
-                )
+                vaf = vaf_view(state)
+                vaf.refresh()
+            vaf_expansion.on_value_change(lambda e: vaf.resize() if e.value else None)
 
-                @ui.refreshable
-                def refresh_igv_vaf():
-                    """Refresh VAF IGV viewer with current tracks."""
-                    igv_vaf_container.clear()
-
-                    # Update container height
-                    try:
-                        new_height = calculate_vaf_height()
-                        igv_vaf_container.style(f"height: {new_height}px")
-                    except RuntimeError:
-                        pass
-
-                    tracks = build_vaf_tracks()
-
-                    # Determine ROI color based on call type
-                    call_value = sv_data.get("call", "")
-                    roi_color = "rgba(255,0,0,0.2)"  # Default red for loss
-                    if "GAIN" in str(call_value).upper():
-                        roi_color = "rgba(0,128,0,0.2)"  # Green for gain
-
-                    # Create ROI description
-                    roi_description = f"{chrom}:{start}-{end} - {call_value}"
-
-                    # IGV.js initialization script
-                    igv_vaf_script = f"""
-                    (async function() {{
-                        const igvDiv = document.getElementById("igv-vaf-div");
-                        if (!igvDiv) return;
-
-                        // Clear any existing IGV instance
-                        if (window.igvVafBrowser) {{
-                            igv.removeBrowser(window.igvVafBrowser);
-                        }}
-
-                        const options = {{
-                            genome: "hg38",
-                            locus: "{igv_locus}",
-                            tracks: {json.dumps(tracks)},
-                            roi: [
-                                {{
-                                    name: "{roi_description}",
-                                    color: "{roi_color}",
-                                    features: [
-                                        {{
-                                            chr: "{chrom}",
-                                            start: {roi_start_coord},
-                                            end: {roi_end_coord},
-                                            name: "{call_value}"
-                                        }}
-                                    ]
-                                }}
-                            ]
-                        }};
-
-                        window.igvVafBrowser = await igv.createBrowser(igvDiv, options);
-
-                        // Trigger resize to ensure proper width
-                        setTimeout(() => {{
-                            if (window.igvVafBrowser && window.igvVafBrowser.visibilityChange) {{
-                                window.igvVafBrowser.visibilityChange();
-                            }}
-                        }}, 100);
-                    }})();
-                    """
-
-                    ui.run_javascript(igv_vaf_script, timeout=10.0)
-
-                refresh_igv_vaf()
-
-            # Handle expansion panel opening to resize IGV
-            def on_vaf_expansion_change(e):
-                if e.value:  # Panel was opened
-                    ui.run_javascript("""
-                        setTimeout(() => {
-                            if (window.igvVafBrowser && window.igvVafBrowser.visibilityChange) {
-                                window.igvVafBrowser.visibilityChange();
-                            }
-                        }, 100);
-                    """)
-
-            vaf_expansion.on_value_change(on_vaf_expansion_change)
-
-            # Second IGV.js viewer container for CRAM (read-level split view)
+            # Read-level view: the CRAMs in the read windows (split view)
             cram_expansion = (
                 ui.expansion("Read-Level View", icon="dna")
                 .classes("w-full mt-6 border border-gray-400 rounded-lg")
                 .props("default-opened header-class='text-lg font-bold bg-gray-100'")
             )
 
-            # One window around a short SV, one per breakpoint for a long one
-            # (utils/sv_view.py). Shared by the IGV reads and the read panel.
-            read_mode: Dict[str, str] = {"value": "auto"}
-            read_low_mapq: Dict[str, bool] = {"value": False}
-            # The SV's current bounds: curated when set, and updated by every
-            # curated-position change (_update_roi works on the same dict).
-            read_bounds = {"start": int(roi_start_coord), "end": int(roi_end_coord)}
-
-            def current_read_windows():
-                # WisecondorX breakpoints sit on 1 kb bins: wider windows.
-                return read_view_windows(
-                    sv_type,
-                    chrom,
-                    read_bounds["start"],
-                    read_bounds["end"],
-                    mode=read_mode["value"],
-                    precise=False,
-                )
-
-            def on_read_mode_change(e):
-                read_mode["value"] = e.value
-                refresh_igv_cram()
-                refresh_read_evidence()
-
-            def describe_read_mode(used_mode: str) -> str:
-                return (
-                    f"{'auto: ' if read_mode['value'] == 'auto' else ''}"
-                    + (
-                        "one window"
-                        if used_mode == "single"
-                        else "one window per breakpoint"
-                    )
-                    + f" (single up to {visibility_window_bp() // 1000} kb shown)"
-                )
+            def on_pick(key: str, position: int) -> None:
+                set_curated(key, position)
+                update_roi()
 
             with cram_expansion:
-                read_mode_label = ui.label().classes("text-sm text-gray-500 px-2 pb-2")
-                igv_cram_container = (
-                    ui.element("div")
-                    .props('id="igv-cram-div"')
-                    .classes("w-full border border-gray-300 rounded-lg")
-                    .style(f"height: {calculate_cram_height()}px")
-                )
+                read_level = ReadLevelView(state, on_pick)
+            cram_expansion.on_value_change(
+                lambda e: read_level.resize() if e.value else None
+            )
 
-                @ui.refreshable
-                def refresh_igv_cram():
-                    """Refresh CRAM IGV viewer with current tracks."""
-                    igv_cram_container.clear()
+            def update_roi():
+                """Move every view to the current bounds."""
+                ui.run_javascript(update_roi_js(state))
+                refresh_read_evidence()
+                if use_cn:
+                    cn_panel.set_roi((state.bounds["start"], state.bounds["end"]))
+                    if cn_state["loaded"]:
+                        refresh_igv()
 
-                    # Update container height
-                    try:
-                        new_height = calculate_cram_height()
-                        igv_cram_container.style(f"height: {new_height}px")
-                    except RuntimeError:
-                        pass
-
-                    cram_tracks = build_cram_tracks()
-
-                    # Curated coordinates when available; a space-separated
-                    # locus list is igv.js's multi-locus (split) view.
-                    used_mode, windows = current_read_windows()
-                    split_locus = " ".join(w.locus for w in windows)
-                    read_mode_label.text = describe_read_mode(used_mode)
-
-                    # Determine ROI color based on call type (same as CNV view)
-                    call_value = sv_data.get("call", "")
-                    roi_color = "rgba(255,0,0,0.2)"  # Default red for loss
-                    if "GAIN" in str(call_value).upper():
-                        roi_color = "rgba(0,128,0,0.2)"  # Green for gain
-
-                    # Create ROI description
-                    roi_description = f"{chrom}:{start}-{end} - {call_value}"
-
-                    # IGV.js initialization script for CRAM viewer
-                    igv_cram_script = f"""
-                    (async function() {{
-                        const igvDiv = document.getElementById("igv-cram-div");
-                        if (!igvDiv) return;
-
-                        // Clear any existing IGV instance
-                        if (window.igvCramBrowser) {{
-                            igv.removeBrowser(window.igvCramBrowser);
-                        }}
-
-                        const roiConfig = [
-                            {{
-                                name: "{roi_description}",
-                                color: "{roi_color}",
-                                features: [
-                                    {{
-                                        chr: "{chrom}",
-                                        start: {roi_start_coord},
-                                        end: {roi_end_coord},
-                                        name: "{call_value}"
-                                    }}
-                                ]
-                            }}
-                        ];
-                        const options = {{
-                            genome: "hg38",
-                            locus: "{split_locus}",
-                            showCenterGuide: true,
-                            tracks: {json.dumps(cram_tracks)},
-                            roi: roiConfig,
-                        }};
-
-                        window.igvCramBrowser = await igv.createBrowser(igvDiv, options);
-
-                        // Trigger resize to ensure proper width
-                        setTimeout(() => {{
-                            if (window.igvCramBrowser && window.igvCramBrowser.visibilityChange) {{
-                                window.igvCramBrowser.visibilityChange();
-                            }}
-                        }}, 100);
-                    }})();
-                    """
-
-                    ui.run_javascript(igv_cram_script, timeout=10.0)
-
-                refresh_igv_cram()
-
-                # Store references to curated input fields (will be set later)
-                curated_inputs = {"start": None, "end": None}
-                # Forward reference to inheritance dropdown (will be set later)
-                inheritance_ref = {"select": None}
-
-                # Store current ROI coordinates - use curated boundaries if available
-                # The same dict as read_bounds, so the read views follow it.
-                roi_coords = read_bounds
-
-                def _update_roi():
-                    """Update ROI in both IGV instances from roi_coords."""
-                    call_value = sv_data.get("call", "")
-                    roi_color = (
-                        "rgba(255,0,0,0.2)"
-                        if "GAIN" not in str(call_value).upper()
-                        else "rgba(0,128,0,0.2)"
-                    )
-                    roi_description = f"{chrom}:{roi_coords['start']}-{roi_coords['end']} - {call_value}"
-                    read_locus = " ".join(w.locus for w in current_read_windows()[1])
-                    update_roi_script = f"""
-                    const roiConfig = [
-                        {{
-                            name: "{roi_description}",
-                            color: "{roi_color}",
-                            features: [
-                                {{
-                                    chr: "{chrom}",
-                                    start: {roi_coords["start"]},
-                                    end: {roi_coords["end"]},
-                                    name: "{call_value}"
-                                }}
-                            ]
-                        }}
-                    ];
-                    if (window.igvBrowser) {{
-                        window.igvBrowser.clearROIs();
-                        window.igvBrowser.loadROI(roiConfig);
-                    }}
-                    if (window.igvCramBrowser) {{
-                        window.igvCramBrowser.clearROIs();
-                        window.igvCramBrowser.loadROI(roiConfig);
-                        // Re-center the read windows on the new boundaries
-                        window.igvCramBrowser.search("{read_locus}");
-                    }}
-                    """
-                    ui.run_javascript(update_roi_script)
-                    refresh_read_evidence()
-                    if use_cn:
-                        cn_panel.set_roi((roi_coords["start"], roi_coords["end"]))
-                        if cn_state["loaded"]:
-                            refresh_igv()
-
-                # Buttons for new start/end positions
-                async def on_new_start_click():
-                    """Handle New Start button click - show current loci."""
-                    loci = await ui.run_javascript(
-                        """
-                        return window.igvCramBrowser ? window.igvCramBrowser.currentLoci() : null;
-                    """,
-                        timeout=2.0,
-                    )
-                    if loci and isinstance(loci, list) and len(loci) > 0:
-                        # Parse locus string: chr:start-end
-                        locus_str = loci[0]
-                        try:
-                            # Split by ':' to get chr and range
-                            parts = locus_str.split(":")
-                            if len(parts) == 2:
-                                # Split range by '-' to get start and end
-                                range_parts = parts[1].split("-")
-                                if len(range_parts) == 2:
-                                    start_pos = float(range_parts[0])
-                                    end_pos = float(range_parts[1])
-                                    mean_pos = round((start_pos + end_pos) / 2)
-
-                                    # Update curated start input
-                                    if curated_inputs["start"]:
-                                        curated_inputs["start"].value = str(mean_pos)
-
-                                    # Update ROI in both IGV instances
-                                    roi_coords["start"] = mean_pos
-                                    _update_roi()
-
-                                    ui.notify(f"New Start - {mean_pos}", type="info")
-                                else:
-                                    ui.notify(f"New Start - {locus_str}", type="info")
-                            else:
-                                ui.notify(f"New Start - {locus_str}", type="info")
-                        except (ValueError, IndexError):
-                            ui.notify(f"New Start - {locus_str}", type="info")
-                    else:
-                        ui.notify("IGV browser not initialized", type="warning")
-
-                async def on_new_end_click():
-                    """Handle New End button click - show current loci."""
-                    loci = await ui.run_javascript(
-                        """
-                        return window.igvCramBrowser ? window.igvCramBrowser.currentLoci() : null;
-                    """,
-                        timeout=2.0,
-                    )
-                    if loci and isinstance(loci, list) and len(loci) > 1:
-                        # Parse locus string: chr:start-end
-                        locus_str = loci[1]
-                        try:
-                            # Split by ':' to get chr and range
-                            parts = locus_str.split(":")
-                            if len(parts) == 2:
-                                # Split range by '-' to get start and end
-                                range_parts = parts[1].split("-")
-                                if len(range_parts) == 2:
-                                    start_pos = float(range_parts[0])
-                                    end_pos = float(range_parts[1])
-                                    mean_pos = round((start_pos + end_pos) / 2)
-
-                                    # Update curated end input
-                                    if curated_inputs["end"]:
-                                        curated_inputs["end"].value = str(mean_pos)
-
-                                    # Update ROI in both IGV instances
-                                    roi_coords["end"] = mean_pos
-                                    _update_roi()
-
-                                    ui.notify(f"New End - {mean_pos}", type="info")
-                                else:
-                                    ui.notify(f"New End - {locus_str}", type="info")
-                            else:
-                                ui.notify(f"New End - {locus_str}", type="info")
-                        except (ValueError, IndexError):
-                            ui.notify(f"New End - {locus_str}", type="info")
-                    else:
-                        ui.notify("IGV browser not initialized", type="warning")
-
-                with ui.row().classes("w-full items-center justify-center gap-0 mt-4"):
-                    ui.button("New Start", on_click=on_new_start_click).props(
-                        "color=primary"
-                    )
-                    ui.element("div").classes("w-[40%]")  # 40% spacer
-                    ui.button("New End", on_click=on_new_end_click).props(
-                        "color=primary"
-                    )
-
-            # Handle expansion panel opening to resize IGV
-            def on_cram_expansion_change(e):
-                if e.value:  # Panel was opened
-                    ui.run_javascript("""
-                        setTimeout(() => {
-                            if (window.igvCramBrowser && window.igvCramBrowser.visibilityChange) {
-                                window.igvCramBrowser.visibilityChange();
-                            }
-                        }, 100);
-                    """)
-
-            cram_expansion.on_value_change(on_cram_expansion_change)
+            def on_read_mode_change(e):
+                state.read_mode = e.value
+                read_level.refresh()
+                refresh_read_evidence()
 
             # Samplot-like view of the same windows: discordant pairs at their
             # insert size, split reads, soft clips and the copy number. Shown
@@ -1606,7 +508,7 @@ def show_sv_dialog(
                         )
 
                         def on_low_mapq_change(e):
-                            read_low_mapq["value"] = bool(e.value)
+                            state.low_mapq = bool(e.value)
                             refresh_read_evidence()
 
                         ui.checkbox(
@@ -1626,28 +528,25 @@ def show_sv_dialog(
                     )
 
             def refresh_read_evidence():
-                used_mode, windows = current_read_windows()
-                read_evidence_label.text = describe_read_mode(used_mode)
+                used_mode, windows = state.read_windows()
+                read_evidence_label.text = state.describe_read_mode(used_mode)
                 read_panel.refresh(
-                    [cn_request(sid) for sid in [sample, *additional_samples["value"]]],
+                    [cn_request(sid) for sid in state.samples()],
                     windows,
-                    [read_bounds["start"], read_bounds["end"]],
-                    include_low_mapq=read_low_mapq["value"],
+                    [state.bounds["start"], state.bounds["end"]],
+                    include_low_mapq=state.low_mapq,
                     sv_type=sv_type,
                 )
 
             def use_read_breakpoints(new_start, new_end, approximate=False):
                 """Take the suggested breakpoints as the curated position."""
                 for key, value in (("start", new_start), ("end", new_end)):
-                    if value is None:
-                        continue
-                    read_bounds[key] = int(value)
-                    if curated_inputs[key] is not None:
-                        curated_inputs[key].value = str(value)
-                _update_roi()
+                    if value is not None:
+                        set_curated(key, value)
+                update_roi()
                 ui.notify(
-                    f"Curated position set to {chrom}:{read_bounds['start']}"
-                    f"-{read_bounds['end']}"
+                    f"Curated position set to {chrom}:{state.bounds['start']}"
+                    f"-{state.bounds['end']}"
                     + (
                         " (approximate, from the coverage: check it)"
                         if approximate
@@ -1658,294 +557,24 @@ def show_sv_dialog(
 
             refresh_read_evidence()
 
-            # SV Validation section
-            # Determine SV type for variant key (dup for gain, del for loss)
-            sv_type = infer_sv_type(sv_data)
-            variant_key = f"{chrom}:{start}-{end}:{sv_type}"
+            def on_saved():
+                # Call the callback if provided, then close dialog
+                if on_validation_saved:
+                    on_validation_saved()
+                dialog.close()
 
-            validation_file = store.data_dir / "validations" / "svs.tsv"
-
-            ui.label("SV Validation").classes("text-xl font-semibold mb-2 mt-4")
-
-            with ui.card().classes("w-full p-4 mb-4"):
-                with ui.column().classes("gap-4"):
-                    with ui.row().classes("items-center gap-4 w-full flex-wrap"):
-                        ui.label("User:").classes("font-semibold")
-                        user_input = (
-                            ui.input("Username")
-                            .props("outlined dense readonly")
-                            .classes("w-48")
-                        )
-                        user_input.value = get_current_user()
-
-                        ui.label("Inheritance:").classes("font-semibold ml-4")
-                        inheritance_select = (
-                            ui.select(
-                                [
-                                    "unknown",
-                                    "de novo",
-                                    "paternal",
-                                    "maternal",
-                                    "not paternal",
-                                    "not maternal",
-                                    "either",
-                                    "homozygous",
-                                ],
-                                value="unknown",
-                            )
-                            .props("outlined dense")
-                            .classes("w-40")
-                        )
-                        inheritance_ref["select"] = inheritance_select
-
-                        ui.label("Validation:").classes("font-semibold ml-4")
-                        validation_select = (
-                            ui.select(
-                                [
-                                    "present",
-                                    "absent",
-                                    "uncertain",
-                                    "different",
-                                ],
-                                value="present",
-                            )
-                            .props("outlined dense")
-                            .classes("w-40")
-                        )
-
-                        ui.label("Curated Position:").classes("font-semibold")
-                        curated_start_input = (
-                            ui.input("Curated start")
-                            .props("outlined dense")
-                            .classes("w-48")
-                        )
-                        curated_inputs["start"] = curated_start_input
-
-                        ui.label("-").classes("font-semibold ml-4")
-                        curated_end_input = (
-                            ui.input("Curated end")
-                            .props("outlined dense")
-                            .classes("w-48")
-                        )
-                        curated_inputs["end"] = curated_end_input
-
-                        def _refresh_roi_from_curated():
-                            """Update ROI from curated position inputs."""
-                            new_start = (
-                                curated_start_input.value.strip()
-                                if curated_start_input.value
-                                else ""
-                            )
-                            new_end = (
-                                curated_end_input.value.strip()
-                                if curated_end_input.value
-                                else ""
-                            )
-                            if not new_start and not new_end:
-                                ui.notify(
-                                    "Enter curated start and/or end first",
-                                    type="warning",
-                                )
-                                return
-                            try:
-                                if new_start:
-                                    roi_coords["start"] = int(new_start)
-                                if new_end:
-                                    roi_coords["end"] = int(new_end)
-                            except ValueError:
-                                ui.notify(
-                                    "Curated positions must be integers",
-                                    type="warning",
-                                )
-                                return
-                            _update_roi()
-                            ui.notify(
-                                f"ROI updated: {chrom}:{roi_coords['start']}-{roi_coords['end']}",
-                                type="positive",
-                            )
-
-                        ui.button(
-                            icon="refresh",
-                            on_click=_refresh_roi_from_curated,
-                        ).props("flat round dense size=sm color=blue").tooltip(
-                            "Refresh IGV ROI to curated coordinates"
-                        )
-
-                    with ui.row().classes("items-center gap-4 w-full"):
-                        ui.label("Comment:").classes("font-semibold")
-                        comment_input = (
-                            ui.input("Optional comment")
-                            .props("outlined dense")
-                            .classes("flex-grow")
-                        )
-
-                        if can_write():
-                            ui.button(
-                                "Save Validation",
-                                icon="save",
-                                on_click=lambda: save_sv_validation(),
-                            ).props("color=blue")
-                        else:
-                            ui.label("Read-only access").classes(
-                                "text-sm text-gray-400 italic"
-                            )
-
-                    def save_sv_validation():
-                        """Save an SV validation."""
-                        if not can_write():
-                            ui.notify("Permission denied", type="negative")
-                            return
-                        user = get_current_user()
-                        inheritance = inheritance_select.value
-                        validation_status = validation_select.value
-                        curated_start = (
-                            curated_start_input.value.strip()
-                            if curated_start_input.value
-                            else ""
-                        )
-                        curated_end = (
-                            curated_end_input.value.strip()
-                            if curated_end_input.value
-                            else ""
-                        )
-                        comment = clean_tsv_field(
-                            comment_input.value.strip() if comment_input.value else ""
-                        )
-
-                        timestamp = datetime.now().isoformat()
-
-                        try:
-                            # A validated present call names the parent(s) it
-                            # came from: record them as carriers too, unless
-                            # they are validated already. One locked write.
-                            parent_samples_added = []
-                            if validation_status == "present":
-                                parent_samples_added = parents_to_validate(
-                                    inheritance,
-                                    sample_parents,
-                                    validated_samples(
-                                        validation_file, family_id, variant_key
-                                    ),
-                                )
-                            curated = [curated_start, curated_end]
-                            rows = [
-                                [family_id, variant_key, sample, user, inheritance]
-                                + [validation_status, *curated, comment, "0"]
-                                + [timestamp]
-                            ] + [
-                                [family_id, variant_key, parent_id, user, "unknown"]
-                                + ["present", *curated, f"(inherited from {sample})"]
-                                + ["0", timestamp]
-                                for parent_id in parent_samples_added
-                            ]
-                            append_tsv_rows(validation_file, SV_VALIDATION_HEADER, rows)
-
-                            # Notify user about saved validations
-                            notify_message = f"SV validation saved: {validation_status}"
-                            if parent_samples_added:
-                                notify_message += f" (also saved for {', '.join(parent_samples_added)})"
-                            ui.notify(notify_message, type="positive")
-
-                            # Reload validation history
-                            load_sv_validation_history()
-
-                            # Call the callback if provided, then close dialog
-                            if on_validation_saved:
-                                on_validation_saved()
-                            dialog.close()
-
-                        except Exception as e:
-                            ui.notify(f"Error saving validation: {e}", type="negative")
-                            import traceback
-
-                            print(traceback.format_exc())
-
-            # Validation history container
-            validation_history_container = ui.column().classes("w-full mb-4")
-
-            def load_sv_validation_history():
-                """Load and display SV validation history."""
-                validations = []
-
-                if validation_file.exists():
-                    with open(validation_file, "r") as f:
-                        reader = csv.DictReader(
-                            f, delimiter="\t", quoting=csv.QUOTE_NONE
-                        )
-                        for row in reader:
-                            if (
-                                row.get("FID") == family_id
-                                and row.get("Variant") == variant_key
-                                and row.get("Sample") == sample
-                            ):
-                                validations.append(row)
-
-                validation_history_container.clear()
-
-                with validation_history_container:
-                    ui.label("Previous validations:").classes("font-semibold mb-2")
-                    if not validations:
-                        ui.label("No validations recorded yet").classes(
-                            "text-gray-500 text-sm italic"
-                        )
-                    else:
-                        with ui.card().classes("w-full p-2"):
-                            with ui.column().classes("gap-2"):
-                                for validation in validations:
-                                    val_status = validation.get("Validation", "")
-                                    user = validation.get("User", "")
-                                    timestamp = validation.get("Timestamp", "")
-                                    comment = validation.get("Comment", "")
-                                    curated_start = validation.get("CuratedStart", "")
-                                    curated_end = validation.get("CuratedEnd", "")
-                                    is_ignored = validation.get("Ignore", "0") == "1"
-
-                                    # Format timestamp
-                                    try:
-                                        dt = datetime.fromisoformat(timestamp)
-                                        formatted_time = dt.strftime(
-                                            "%Y-%m-%d %H:%M:%S"
-                                        )
-                                    except Exception:
-                                        formatted_time = timestamp
-
-                                    # Color based on status
-                                    if is_ignored:
-                                        badge_color = "bg-gray-400"
-                                    elif val_status == "present":
-                                        badge_color = "bg-green-600"
-                                    elif val_status == "absent":
-                                        badge_color = "bg-red-600"
-                                    elif val_status == "uncertain":
-                                        badge_color = "bg-yellow-600"
-                                    elif val_status == "different":
-                                        badge_color = "bg-orange-600"
-                                    else:
-                                        badge_color = "bg-gray-500"
-
-                                    with ui.row().classes(
-                                        "items-center gap-2 p-2 w-full"
-                                    ):
-                                        ui.badge(val_status).classes(
-                                            f"{badge_color} text-xs"
-                                        )
-                                        ui.label(user).classes("text-sm font-semibold")
-                                        ui.label(formatted_time).classes(
-                                            "text-xs text-gray-500"
-                                        )
-                                        if curated_start or curated_end:
-                                            ui.label(
-                                                f"Curated: {curated_start or start}-{curated_end or end}"
-                                            ).classes("text-xs text-blue-600")
-                                        if comment:
-                                            ui.label(f'"{comment}"').classes(
-                                                "text-sm text-gray-600 italic"
-                                            )
-                                        if is_ignored:
-                                            ui.badge("IGNORED").classes(
-                                                "bg-gray-400 text-xs"
-                                            )
-
-            load_sv_validation_history()
+            form["value"] = render_sv_validation(
+                validation_file=validation_file,
+                family_id=family_id,
+                variant_key=variant_key,
+                chrom=chrom,
+                start=start,
+                end=end,
+                sample=sample,
+                sample_parents=sample_parents,
+                bounds=state.bounds,
+                on_bounds_changed=update_roi,
+                on_saved=on_saved,
+            )
 
         dialog.open()

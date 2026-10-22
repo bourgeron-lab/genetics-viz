@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Set, Tuple
 
 from nicegui import ui
 
 from genetics_viz.components.icons import get_validation_icon
+from genetics_viz.utils.vep import VEP_CONSEQUENCES, format_consequence_display
 
 if TYPE_CHECKING:
     from genetics_viz.utils.genesets import GenesetSource
@@ -108,6 +109,131 @@ def create_validation_filter_menu(
                         ).classes("text-sm")
 
     return validation_checkboxes
+
+
+def notify_unknown_terms(consequences: Set[str], clinvar: Set[str]) -> None:
+    """Warn about VEP consequences and ClinVar terms the YAML colour maps lack.
+
+    Collected by ``variant_rows.add_vep_badges``; such terms get a grey badge
+    and no impact level, so the consequence filter cannot select them.
+    """
+    if consequences:
+        ui.notify(
+            f"⚠️ Unknown VEP consequence terms found: {', '.join(sorted(consequences))}. "
+            "Please add to vep_consequences.yaml",
+            type="warning",
+            timeout=10000,
+            position="top",
+        )
+    if clinvar:
+        ui.notify(
+            f"⚠️ Unknown ClinVar terms found: {', '.join(sorted(clinvar))}. "
+            "Please add to clinvar_colors.yaml",
+            type="warning",
+            timeout=10000,
+            position="top",
+        )
+
+
+#: VEP impact levels, in menu order, with their quick-select button colour.
+IMPACT_LEVELS: Dict[str, str] = {
+    "HIGH": "red",
+    "MODERATE": "orange",
+    "LOW": "yellow-8",
+    "MODIFIER": "grey",
+}
+
+
+def create_consequence_filter_menu(
+    selected: Dict[str, List[str]],
+    on_change: Callable[[], Any] | None = None,
+    button_props: str = "",
+) -> None:
+    """An "Impacts" button whose menu selects VEP consequences, by impact level.
+
+    ``selected["value"]`` holds the selected consequence terms; filter rows
+    with ``variant_rows.consequences_selected``. The button turns orange while
+    the selection is not every consequence. "HIGH" … "MODIFIER" select one
+    level only.
+    """
+    checkboxes: Dict[str, Any] = {}
+    # Set while set_selection ticks the boxes, so their change events do
+    # not each refresh the table.
+    bulk = {"on": False}
+    button = ui.button("Impacts", icon="filter_list").props(
+        f"outline {button_props}".strip()
+    )
+
+    def sync_button() -> None:
+        if len(selected["value"]) == len(VEP_CONSEQUENCES):
+            button.props(remove="unelevated color=orange", add="outline")
+        else:
+            button.props(remove="outline", add="unelevated color=orange")
+        button.update()
+
+    def changed() -> None:
+        sync_button()
+        if on_change is not None:
+            on_change()
+
+    def set_selection(terms: List[str]) -> None:
+        selected["value"] = list(terms)
+        bulk["on"] = True
+        try:
+            for term, cb in checkboxes.items():
+                cb.value = term in selected["value"]
+        finally:
+            bulk["on"] = False
+        changed()
+
+    def toggle(term: str, value: bool) -> None:
+        if bulk["on"]:
+            return
+        if value and term not in selected["value"]:
+            selected["value"].append(term)
+        elif not value and term in selected["value"]:
+            selected["value"].remove(term)
+        changed()
+
+    by_level = {
+        level: sorted(c for c, (imp, _) in VEP_CONSEQUENCES.items() if imp == level)
+        for level in IMPACT_LEVELS
+    }
+
+    with button:
+        with ui.menu():
+            ui.label("Select Impact Types:").classes("px-4 py-2 font-semibold text-sm")
+            ui.separator()
+            with ui.column().classes("p-2"):
+                with ui.row().classes("gap-2 mb-2 flex-wrap"):
+                    ui.button(
+                        "All", on_click=lambda: set_selection(list(VEP_CONSEQUENCES))
+                    ).props("size=sm flat dense").classes("text-xs")
+                    ui.button("None", on_click=lambda: set_selection([])).props(
+                        "size=sm flat dense"
+                    ).classes("text-xs")
+                    for level, color in IMPACT_LEVELS.items():
+                        ui.button(
+                            level,
+                            on_click=lambda _, terms=by_level[level]: set_selection(
+                                terms
+                            ),
+                        ).props(f"size=sm flat dense color={color}").classes("text-xs")
+                ui.separator()
+                with ui.column().classes("gap-1"):
+                    for level, terms in by_level.items():
+                        if not terms:
+                            continue
+                        ui.label(f"{level}:").classes(
+                            "text-xs font-bold text-gray-600 mt-2"
+                        )
+                        for term in terms:
+                            checkboxes[term] = ui.checkbox(
+                                format_consequence_display(term),
+                                value=term in selected["value"],
+                                on_change=lambda e, t=term: toggle(t, e.value),
+                            ).classes("text-sm")
+    sync_button()
 
 
 def create_geneset_filter_menu(

@@ -1,201 +1,56 @@
-"""Search page for cohort-wide variant search."""
+"""Search page for cohort-wide variant search.
+
+The page is three parts: the form (``search_form.py``) edits the source
+components and individual filters; :func:`_run_search` turns them into rows
+with the logic in ``utils/search_rows.py``; the results (``search_results.py``)
+show the table.
+"""
 
 import asyncio
-import re
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
+from typing import Any, Dict, List
 
 import polars as pl
 from nicegui import context, ui
 
-from genetics_viz.components.column_selector import build_column_selector
-from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
-from genetics_viz.components.diagnostic_loader import (
-    add_diagnostic_status_to_row,
-    load_diagnostic_map,
-)
-from genetics_viz.components.search_stats import show_stats_dialog
-from genetics_viz.components.filters import (
-    create_geneset_filter_menu,
-    create_validation_filter_menu,
-)
-from genetics_viz.utils.export import is_export_column, rows_to_tsv
+from genetics_viz.components.filters import notify_unknown_terms
+from genetics_viz.components.header import create_header
+from genetics_viz.pages.search_form import SearchForm, render_search_form
+from genetics_viz.pages.search_results import SearchResults, render_results
+from genetics_viz.utils.auth import check_auth
+from genetics_viz.utils.column_names import reorder_columns_by_group
+from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.gene_scoring import get_gene_scorer
+from genetics_viz.utils.genesets import geneset_sources
+from genetics_viz.utils.genetrek import get_snapshot
+from genetics_viz.utils.inheritance import annotate_moi
 from genetics_viz.utils.locus import (
     filter_bed_dataframe,
     filter_dataframe,
     parse_locus_query,
 )
-from genetics_viz.utils.wisecondorx import (
-    WISECONDORX_CONFIG,
-    build_call_colors,
-    infer_sv_type,
-    parse_wisecondorx_bed,
+from genetics_viz.utils.sample_counts import MissingHeaderError
+from genetics_viz.utils.search_rows import (
+    DEFAULT_VISIBLE,
+    PED_MISSING,
+    CurationMaps,
+    apply_geneset_filter,
+    build_wcx_rows,
+    build_wombat_rows,
+    combine_wcx,
+    combine_wombat,
+    filter_individuals,
+    filter_wcx_calls,
+    find_source,
+    find_sources,
+    initial_preset,
+    load_wombat_source,
+    missing_query,
+    moi_pedigree,
+    pedigree_data_from_cohort,
+    result_columns,
 )
-from genetics_viz.components.header import create_header
-from genetics_viz.components.tanstack_table import DataTable
-from genetics_viz.utils.auth import can_write, check_auth
-from genetics_viz.components.validation_loader import (
-    add_validation_status_to_row,
-    load_validation_map,
-)
-from genetics_viz.components.sv_dialog import show_sv_dialog
-from genetics_viz.components.variant_dialog import show_variant_dialog
-from genetics_viz.utils.view_presets import VIEW_PRESETS, select_preset_for_config
-from genetics_viz.utils.column_names import (
-    apply_width_constraints,
-    get_column_group,
-    get_column_sorting,
-    get_column_type,
-    get_display_label,
-    get_dropped_columns,
-    get_schema_overrides,
-    reorder_columns_by_group,
-)
-from genetics_viz.utils.data import get_data_store
-from genetics_viz.utils.genetrek import get_snapshot, search_url
-from genetics_viz.utils.inheritance import annotate_moi
-from genetics_viz.utils.genesets import (
-    geneset_filter_expr,
-    geneset_sources,
-    selected_symbols,
-)
-from genetics_viz.utils.gene_scoring import (
-    badge_labels,
-    build_gene_badges,
-    get_gene_scorer,
-    split_genes,
-)
-from genetics_viz.utils.score_colors import get_score_color
-from genetics_viz.utils.clinvar import (
-    CLINVAR_COLORS,
-    format_clinvar_display,
-    get_clinvar_color,
-)
-from genetics_viz.utils.sample_counts import (
-    MissingHeaderError,
-    cohort_wcx_file,
-    cohort_wombat_sources,
-    family_header_sources,
-    read_cohort_wombat,
-)
-from genetics_viz.utils.wombat import aggregate_by_variant
-from genetics_viz.utils.vep import (
-    VEP_CONSEQUENCES,
-    format_consequence_display,
-    get_consequence_color,
-)
-
-
-def _apply_curated_coordinates(
-    row: Dict[str, Any],
-    validation_map: Dict,
-    sv_variant_key: str,
-    sample_id: str,
-) -> None:
-    """Apply curated coordinate bounds from validation data to a WCX row.
-
-    If a 'present' validation with curated start/end exists, updates
-    chr:start-end and Variant with curated values, sets IsCurated=True,
-    and adds a tooltip showing original vs curated coordinates.
-    """
-    row["IsCurated"] = False
-    row["_curated_tooltip"] = ""
-    map_key = (sv_variant_key, sample_id)
-    if map_key not in validation_map:
-        return
-    validations = validation_map[map_key]
-    present_with_curated = [
-        v for v in validations if v[0] == "present" and v[3] != "1" and (v[4] or v[5])
-    ]
-    if not present_with_curated:
-        return
-    present_with_curated.sort(key=lambda v: v[6], reverse=True)
-    most_recent = present_with_curated[0]
-    curated_start = most_recent[4]
-    curated_end = most_recent[5]
-
-    original_locus = row.get("_original_locus", row.get("chr:start-end", ""))
-    parts = original_locus.split(":")
-    if len(parts) != 2:
-        return
-    chrom = parts[0]
-    range_parts = parts[1].split("-")
-    if len(range_parts) != 2:
-        return
-    orig_start = range_parts[0]
-    orig_end = range_parts[1]
-    new_start = curated_start if curated_start else orig_start
-    new_end = curated_end if curated_end else orig_end
-    row["chr:start-end"] = f"{chrom}:{new_start}-{new_end}"
-    row["Variant"] = row["chr:start-end"]
-    row["IsCurated"] = True
-    row["_curated_tooltip"] = (
-        f"Original: {original_locus}\nCurated: {row['chr:start-end']}"
-    )
-    # Recompute svlen from curated boundaries
-    try:
-        row["svlen"] = int(new_end) - int(new_start)
-    except (ValueError, TypeError):
-        pass
-
-
-def _sv_variant_key(row: Dict[str, Any]) -> str:
-    """The ``chr:start-end:dup|del`` key SV validations and diagnostics use.
-
-    Built from the uncurated locus, as the SVs tab and the SV dialog build it,
-    so a diagnostic saved here is read back by every table.
-    """
-    locus = row.get("_original_locus") or row.get("chr:start-end", "")
-    return f"{locus}:{infer_sv_type(row)}"
-
-
-# Values that represent "unknown/missing" in pedigree files
-_PED_MISSING = {"", "0", "-9"}
-
-
-def _pedigree_data_from_cohort(cohort_name: str) -> Dict[str, Dict[str, str]]:
-    """Build pedigree lookup from the already-parsed Cohort object.
-
-    Uses the DataStore's Cohort (which handles all header formats robustly)
-    instead of re-parsing the pedigree file.
-
-    Returns dict mapping sample_id -> {FID, Father, Mother, Sex, Phenotype}.
-    """
-    store = get_data_store()
-    cohort = store.get_cohort(cohort_name)
-    if cohort is None:
-        return {}
-
-    pedigree_data: Dict[str, Dict[str, str]] = {}
-    for family in cohort.families.values():
-        for sample in family.samples:
-            pedigree_data[sample.sample_id] = {
-                "FID": sample.family_id,
-                "Father": sample.father_id or "",
-                "Mother": sample.mother_id or "",
-                "Sex": sample.sex or "",
-                "Phenotype": sample.phenotype or "",
-            }
-    return pedigree_data
-
-
-def _moi_pedigree(pedigree_data: Dict[str, Dict[str, str]]):
-    """Pedigree lookup for ``annotate_moi`` over ``_pedigree_data_from_cohort``."""
-
-    def lookup(sample_id: str) -> Dict[str, Optional[str]]:
-        ped = pedigree_data.get(sample_id)
-        if ped is None:
-            return {}
-        father = pedigree_data.get(ped.get("Father", ""), {})
-        mother = pedigree_data.get(ped.get("Mother", ""), {})
-        return {
-            "sex": ped.get("Sex"),
-            "father_pheno": father.get("Phenotype"),
-            "mother_pheno": mother.get("Phenotype"),
-        }
-
-    return lookup
+from genetics_viz.utils.view_presets import VIEW_PRESETS
+from genetics_viz.utils.wisecondorx import parse_wisecondorx_bed
 
 
 @ui.page("/search/{cohort_name}")
@@ -217,836 +72,47 @@ def search_cohort_page(cohort_name: str) -> None:
     try:
         store = get_data_store()
 
-        # Scan for source files (wombat + SVS)
-        svs_dir = store.data_dir / "cohorts" / cohort_name / "svs"
-
         with ui.column().classes("w-full px-6 py-6"):
             # Title
             ui.label(f"🔍 Search: {cohort_name}").classes(
                 "text-3xl font-bold text-blue-900 mb-6"
             )
 
-            # Wombat results, sorted so the first (the default) is stable
-            source_files: List[Dict[str, Any]] = [
-                {
-                    "file_path": src.path,
-                    "vep_config": src.vep_config,
-                    "wombat_config": src.wombat_config,
-                    "display_name": src.wombat_config,
-                    "source_type": "wombat",
-                    "parent_dir": "wombat",
-                }
-                for src in cohort_wombat_sources(store.data_dir, cohort_name)
-            ]
-
-            # Scan for SVS subdirectories
-            if svs_dir.exists():
-                for subdir in sorted(svs_dir.iterdir()):
-                    if not subdir.is_dir():
-                        continue
-                    subdir_name = subdir.name
-                    if subdir_name == "wisecondorx":
-                        bed_file = cohort_wcx_file(store.data_dir, cohort_name)
-                        if bed_file is not None:
-                            source_files.append(
-                                {
-                                    "file_path": bed_file,
-                                    "vep_config": "",
-                                    "wombat_config": "",
-                                    "display_name": subdir_name,
-                                    "source_type": "wisecondorx",
-                                    "parent_dir": "svs",
-                                }
-                            )
-
+            # Scan for source files (wombat + SVS)
+            source_files = find_sources(store.data_dir, cohort_name)
             if not source_files:
                 ui.label(
                     "No source files found (checked wombat/ and svs/ directories)"
                 ).classes("text-gray-500 text-lg italic")
                 return
 
-            def _source_key(sf: Dict[str, Any]) -> str:
-                return f"{sf['parent_dir']}/{sf['display_name']}"
-
             # Load pedigree data from the already-parsed Cohort object
-            pedigree_data = _pedigree_data_from_cohort(cohort_name)
-            sample_to_family = {sid: ped["FID"] for sid, ped in pedigree_data.items()}
+            pedigree_data = pedigree_data_from_cohort(store.get_cohort(cohort_name))
 
-            # Derive unique sex and phenotype values for individual filters
-            # Exclude missing-value sentinels ("", "0", "-9") from the option lists
-            available_sex_values = sorted(
-                {v.get("Sex", "") for v in pedigree_data.values()} - _PED_MISSING
+            form = SearchForm(
+                wombat_sources=[
+                    sf for sf in source_files if sf["source_type"] == "wombat"
+                ],
+                wcx_sources=[
+                    sf for sf in source_files if sf["source_type"] == "wisecondorx"
+                ],
+                # Gene sets for the filter menus: the user's tiers, GeneTrek's
+                # lists and the data directory's params/genesets/*.tsv
+                genesets=geneset_sources(store.data_dir, get_gene_scorer()),
+                # Unique sex and phenotype values for the individual filters,
+                # without the missing-value sentinels ("", "0", "-9")
+                sex_values=sorted(
+                    {v.get("Sex", "") for v in pedigree_data.values()} - PED_MISSING
+                ),
+                phenotype_values=sorted(
+                    {v.get("Phenotype", "") for v in pedigree_data.values()}
+                    - PED_MISSING
+                ),
             )
-            available_phenotype_values = sorted(
-                {v.get("Phenotype", "") for v in pedigree_data.values()} - _PED_MISSING
-            )
-
-            # Gene sets for the filter menus: the user's tiers, GeneTrek's
-            # lists and the data directory's params/genesets/*.tsv
-            available_genesets = geneset_sources(store.data_dir, get_gene_scorer())
-
-            # Separate source lists by type for UI
-            wombat_sources = [
-                sf for sf in source_files if sf["source_type"] == "wombat"
-            ]
-            wcx_sources = [
-                sf for sf in source_files if sf["source_type"] == "wisecondorx"
-            ]
-
-            # WisecondorX call values (from svs_tab.py pattern)
-            ALL_CALL_VALUES = [
-                "Robust LOSS",
-                "Robust GAIN",
-                "Permissive LOSS",
-                "Permissive Gain",
-                "Below threshold",
-            ]
-
-            def _make_wombat_component(source_key: str = "") -> Dict[str, Any]:
-                """Create a new wombat source filter component state dict."""
-                if not source_key and wombat_sources:
-                    source_key = _source_key(wombat_sources[0])
-                return {
-                    "id": str(uuid4()),
-                    "type": "wombat",
-                    "source_key": source_key,
-                    "locus": {"value": ""},
-                    "genesets": {"value": []},
-                    "impacts": {"value": list(VEP_CONSEQUENCES.keys())},
-                    "validations": {
-                        "value": [
-                            "present",
-                            "absent",
-                            "uncertain",
-                            "conflicting",
-                            "TODO",
-                        ]
-                    },
-                    "exclude_lcr": {"value": True},
-                    "exclude_gnomad": {"value": True},
-                    "exclude_gnomad_wgs": {"value": False},
-                }
-
-            def _make_wcx_component() -> Dict[str, Any]:
-                """Create a new wisecondorx source filter component state dict."""
-                wcx_key = _source_key(wcx_sources[0]) if wcx_sources else ""
-                return {
-                    "id": str(uuid4()),
-                    "type": "wisecondorx",
-                    "source_key": wcx_key,
-                    "locus": {"value": ""},
-                    "genesets": {"value": []},
-                    "selected_calls": {
-                        "value": [c for c in ALL_CALL_VALUES if c != "Below threshold"]
-                    },
-                    "exonic_only": {"value": False},
-                    "validations": {
-                        "value": [
-                            "present",
-                            "absent",
-                            "uncertain",
-                            "conflicting",
-                            "TODO",
-                        ]
-                    },
-                    "ratio_min": {"value": None},
-                    "ratio_max": {"value": None},
-                }
-
             # Initialize component list with one default wombat component
-            source_components: List[Dict[str, Any]] = []
-            if wombat_sources:
-                source_components.append(_make_wombat_component())
+            form.reset_components()
 
-            # Individual filters state (global, not per-component)
-            filter_sex: Dict[str, List[str]] = {"value": []}
-            filter_phenotype: Dict[str, List[str]] = {"value": []}
-            filter_has_parents: Dict[str, bool] = {"value": False}
-            filter_exclude_samples: Dict[str, List[str]] = {"value": []}
-
-            # --- Helper: build geneset menu for a component ---
-            def _build_geneset_menu(comp: Dict[str, Any]) -> None:
-                """Build the genesets dropdown menu for a component."""
-                create_geneset_filter_menu(
-                    comp["genesets"], available_genesets, button_props="dense size=sm"
-                )
-
-            # --- Helper: build impact menu for a wombat component ---
-            def _build_impact_menu(comp: Dict[str, Any]) -> None:
-                """Build an inline impacts dropdown menu for a wombat component."""
-                comp_impacts = comp["impacts"]
-                impact_btn = ui.button("Impacts", icon="filter_list").props(
-                    "outline dense size=sm"
-                )
-                btn_ref = {"button": impact_btn}
-                with impact_btn:
-                    with ui.menu():
-                        ui.label("Select Impact Types:").classes(
-                            "px-4 py-2 font-semibold text-sm"
-                        )
-                        ui.separator()
-                        with ui.column().classes("p-2"):
-                            imp_cbs: Dict[str, Any] = {}
-
-                            def _update_imp_btn():
-                                if btn_ref["button"]:
-                                    if len(comp_impacts["value"]) == len(
-                                        VEP_CONSEQUENCES
-                                    ):
-                                        btn_ref["button"].props(
-                                            remove="unelevated color=orange",
-                                            add="outline",
-                                        )
-                                    else:
-                                        btn_ref["button"].props(
-                                            remove="outline",
-                                            add="unelevated color=orange",
-                                        )
-                                    btn_ref["button"].update()
-
-                            with ui.row().classes("gap-2 mb-2 flex-wrap"):
-
-                                def _imp_all(
-                                    cbs=imp_cbs, st=comp_impacts, upd=_update_imp_btn
-                                ):
-                                    st["value"] = list(VEP_CONSEQUENCES.keys())
-                                    for cb in cbs.values():
-                                        cb.value = True
-                                    upd()
-
-                                def _imp_none(
-                                    cbs=imp_cbs, st=comp_impacts, upd=_update_imp_btn
-                                ):
-                                    st["value"] = []
-                                    for cb in cbs.values():
-                                        cb.value = False
-                                    upd()
-
-                                def _make_level_handler(
-                                    level,
-                                    cbs=imp_cbs,
-                                    st=comp_impacts,
-                                    upd=_update_imp_btn,
-                                ):
-                                    def handler():
-                                        selected = [
-                                            c
-                                            for c, (imp, _) in VEP_CONSEQUENCES.items()
-                                            if imp == level
-                                        ]
-                                        st["value"] = selected
-                                        for name, cb in cbs.items():
-                                            cb.value = name in selected
-                                        upd()
-
-                                    return handler
-
-                                ui.button("All", on_click=_imp_all).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-                                ui.button("None", on_click=_imp_none).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-                                ui.button(
-                                    "HIGH", on_click=_make_level_handler("HIGH")
-                                ).props("size=sm flat dense color=red").classes(
-                                    "text-xs"
-                                )
-                                ui.button(
-                                    "MODERATE", on_click=_make_level_handler("MODERATE")
-                                ).props("size=sm flat dense color=orange").classes(
-                                    "text-xs"
-                                )
-                                ui.button(
-                                    "LOW", on_click=_make_level_handler("LOW")
-                                ).props("size=sm flat dense color=yellow-8").classes(
-                                    "text-xs"
-                                )
-                                ui.button(
-                                    "MODIFIER", on_click=_make_level_handler("MODIFIER")
-                                ).props("size=sm flat dense color=grey").classes(
-                                    "text-xs"
-                                )
-
-                            ui.separator()
-                            with ui.column().classes("gap-1"):
-
-                                def make_imp_handler(
-                                    cons, st=comp_impacts, upd=_update_imp_btn
-                                ):
-                                    def handler(e):
-                                        if e.value:
-                                            if cons not in st["value"]:
-                                                st["value"].append(cons)
-                                        else:
-                                            if cons in st["value"]:
-                                                st["value"].remove(cons)
-                                        upd()
-
-                                    return handler
-
-                                for impact_level in [
-                                    "HIGH",
-                                    "MODERATE",
-                                    "LOW",
-                                    "MODIFIER",
-                                ]:
-                                    consequences = [
-                                        c
-                                        for c, (imp, _) in VEP_CONSEQUENCES.items()
-                                        if imp == impact_level
-                                    ]
-                                    if consequences:
-                                        ui.label(f"{impact_level}:").classes(
-                                            "text-xs font-bold text-gray-600 mt-2"
-                                        )
-                                        for cons in sorted(consequences):
-                                            imp_cbs[cons] = ui.checkbox(
-                                                format_consequence_display(cons),
-                                                value=cons in comp_impacts["value"],
-                                                on_change=make_imp_handler(cons),
-                                            ).classes("text-sm")
-
-            # --- Helper: build impacts (call filter) menu for a wcx component ---
-            def _build_call_filter_menu(comp: Dict[str, Any]) -> None:
-                """Build an Impacts dropdown menu for a wisecondorx component."""
-                comp_calls = comp["selected_calls"]
-                call_btn = ui.button("Impacts", icon="filter_list").props(
-                    "outline dense size=sm"
-                )
-                btn_ref = {"button": call_btn}
-                with call_btn:
-                    with ui.menu():
-                        ui.label("Filter by Impact:").classes(
-                            "px-4 py-2 font-semibold text-sm"
-                        )
-                        ui.separator()
-                        with ui.column().classes("p-2"):
-                            call_cbs: Dict[str, Any] = {}
-
-                            def _update_call_btn():
-                                if btn_ref["button"]:
-                                    if len(comp_calls["value"]) == len(ALL_CALL_VALUES):
-                                        btn_ref["button"].props(
-                                            remove="unelevated color=orange",
-                                            add="outline",
-                                        )
-                                    else:
-                                        btn_ref["button"].props(
-                                            remove="outline",
-                                            add="unelevated color=orange",
-                                        )
-                                    btn_ref["button"].update()
-
-                            with ui.row().classes("gap-2 mb-2"):
-
-                                def _call_all(
-                                    cbs=call_cbs, st=comp_calls, upd=_update_call_btn
-                                ):
-                                    st["value"] = list(ALL_CALL_VALUES)
-                                    for cb in cbs.values():
-                                        cb.value = True
-                                    upd()
-
-                                def _call_none(
-                                    cbs=call_cbs, st=comp_calls, upd=_update_call_btn
-                                ):
-                                    st["value"] = []
-                                    for cb in cbs.values():
-                                        cb.value = False
-                                    upd()
-
-                                ui.button("All", on_click=_call_all).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-                                ui.button("None", on_click=_call_none).props(
-                                    "size=sm flat dense"
-                                ).classes("text-xs")
-
-                            ui.separator()
-                            for call_val in ALL_CALL_VALUES:
-
-                                def make_call_handler(
-                                    cv, st=comp_calls, upd=_update_call_btn
-                                ):
-                                    def handler(e):
-                                        if e.value:
-                                            if cv not in st["value"]:
-                                                st["value"].append(cv)
-                                        else:
-                                            if cv in st["value"]:
-                                                st["value"].remove(cv)
-                                        upd()
-
-                                    return handler
-
-                                call_cbs[call_val] = ui.checkbox(
-                                    call_val,
-                                    value=call_val in comp_calls["value"],
-                                    on_change=make_call_handler(call_val),
-                                ).classes("text-sm")
-
-            # --- Forward reference for search handler + locus input tracking ---
-            _search_handler: Dict[str, Any] = {"fn": None}
-            locus_inputs: List[Any] = []
-
-            def _bind_locus_enter(loc_input) -> None:
-                """Bind Enter key on a locus input to trigger search."""
-                if _search_handler["fn"]:
-                    loc_input.on("keydown.enter", _search_handler["fn"])
-
-            # Search panel
-            with ui.card().classes("w-full p-2 mb-2").props("flat bordered"):
-                # Side-by-side panels
-                with ui.row().classes("w-full gap-4 items-start flex-nowrap"):
-                    # --- LEFT PANEL: Variants (2/3 width) ---
-                    with ui.column().classes("flex-[2]"):
-                        ui.label("Variants").classes(
-                            "text-sm font-semibold text-gray-600"
-                        )
-
-                        @ui.refreshable
-                        def render_component_list():
-                            locus_inputs.clear()
-                            for i, comp in enumerate(source_components):
-                                if i > 0:
-                                    ui.label("OR").classes(
-                                        "text-xs font-bold text-center w-full text-gray-400 my-0 py-0"
-                                    )
-                                if comp["type"] == "wombat":
-                                    _render_wombat_card(comp)
-                                elif comp["type"] == "wisecondorx":
-                                    _render_wcx_card(comp)
-
-                            # Add buttons row
-                            with ui.row().classes("gap-2 mt-1"):
-                                if wombat_sources:
-
-                                    def _add_wombat():
-                                        source_components.append(
-                                            _make_wombat_component()
-                                        )
-                                        render_component_list.refresh()
-
-                                    ui.button("+ Wombat", on_click=_add_wombat).props(
-                                        "flat dense size=sm color=blue no-caps"
-                                    )
-                                if wcx_sources:
-
-                                    def _add_wcx():
-                                        source_components.append(_make_wcx_component())
-                                        render_component_list.refresh()
-
-                                    ui.button("+ WisecondorX", on_click=_add_wcx).props(
-                                        "flat dense size=sm color=teal no-caps"
-                                    )
-
-                        def _render_wombat_card(comp: Dict[str, Any]) -> None:
-                            """Render a compact wombat source filter card."""
-                            with (
-                                ui.card()
-                                .classes("w-full p-2 mb-0")
-                                .props("flat bordered")
-                            ):
-                                # Row 1: label + file selector + locus + remove
-                                with ui.row().classes("items-center gap-2 w-full"):
-                                    ui.label("Wombat").classes(
-                                        "text-sm font-semibold text-blue-700"
-                                    )
-                                    wombat_options = {
-                                        _source_key(sf): sf["display_name"]
-                                        for sf in wombat_sources
-                                    }
-                                    ui.select(
-                                        options=wombat_options,
-                                        value=comp["source_key"],
-                                        label="Source",
-                                        on_change=lambda e, c=comp: c.update(
-                                            {"source_key": e.value}
-                                        ),
-                                    ).props("outlined dense").classes("w-64")
-
-                                    loc_input = (
-                                        ui.input(
-                                            label="Locus (optional)",
-                                            placeholder="chr1:10000-10100, SHANK3, ENSG...",
-                                            value=comp["locus"]["value"],
-                                            on_change=lambda e, c=comp: c[
-                                                "locus"
-                                            ].update({"value": e.value or ""}),
-                                        )
-                                        .props("outlined dense")
-                                        .classes("flex-grow")
-                                    )
-                                    locus_inputs.append(loc_input)
-                                    _bind_locus_enter(loc_input)
-
-                                    def make_remove_handler(comp_id):
-                                        def handler():
-                                            source_components[:] = [
-                                                c
-                                                for c in source_components
-                                                if c["id"] != comp_id
-                                            ]
-                                            render_component_list.refresh()
-
-                                        return handler
-
-                                    ui.button(
-                                        icon="close",
-                                        on_click=make_remove_handler(comp["id"]),
-                                    ).props("flat round dense size=sm color=grey")
-
-                                # Row 2: genesets + impacts + validation + exclude checkboxes
-                                with ui.row().classes(
-                                    "items-center gap-2 w-full flex-wrap"
-                                ):
-                                    _build_geneset_menu(comp)
-                                    _build_impact_menu(comp)
-                                    create_validation_filter_menu(
-                                        all_statuses=[
-                                            "present",
-                                            "absent",
-                                            "uncertain",
-                                            "conflicting",
-                                            "TODO",
-                                        ],
-                                        filter_state=comp["validations"],
-                                        on_change=lambda: None,
-                                        label="Validation",
-                                        button_classes="",
-                                        button_props="dense size=sm",
-                                    )
-                                    ui.checkbox(
-                                        "Exclude LCR",
-                                        value=comp["exclude_lcr"]["value"],
-                                        on_change=lambda e, c=comp: c[
-                                            "exclude_lcr"
-                                        ].update({"value": e.value}),
-                                    ).props("dense").classes("text-xs")
-                                    ui.checkbox(
-                                        "Exclude gnomAD filtered",
-                                        value=comp["exclude_gnomad"]["value"],
-                                        on_change=lambda e, c=comp: c[
-                                            "exclude_gnomad"
-                                        ].update({"value": e.value}),
-                                    ).props("dense").classes("text-xs")
-                                    ui.checkbox(
-                                        "Exclude gnomAD WGS",
-                                        value=comp["exclude_gnomad_wgs"]["value"],
-                                        on_change=lambda e, c=comp: c[
-                                            "exclude_gnomad_wgs"
-                                        ].update({"value": e.value}),
-                                    ).props("dense").classes("text-xs")
-
-                        def _render_wcx_card(comp: Dict[str, Any]) -> None:
-                            """Render a compact wisecondorx source filter card."""
-                            with (
-                                ui.card()
-                                .classes("w-full p-2 mb-0")
-                                .props("flat bordered")
-                            ):
-                                # Row 1: label + exonic only + locus + remove
-                                with ui.row().classes("items-center gap-2 w-full"):
-                                    ui.label("WisecondorX").classes(
-                                        "text-sm font-semibold text-teal-700"
-                                    )
-
-                                    ui.checkbox(
-                                        "Exonic only",
-                                        value=comp["exonic_only"]["value"],
-                                        on_change=lambda e, c=comp: c[
-                                            "exonic_only"
-                                        ].update({"value": e.value}),
-                                    ).props("dense").classes("text-xs")
-
-                                    loc_input = (
-                                        ui.input(
-                                            label="Locus (optional)",
-                                            placeholder="chr1:10000-10100, SHANK3, ENSG...",
-                                            value=comp["locus"]["value"],
-                                            on_change=lambda e, c=comp: c[
-                                                "locus"
-                                            ].update({"value": e.value or ""}),
-                                        )
-                                        .props("outlined dense")
-                                        .classes("flex-grow")
-                                    )
-                                    locus_inputs.append(loc_input)
-                                    _bind_locus_enter(loc_input)
-
-                                    def make_remove_handler(comp_id):
-                                        def handler():
-                                            source_components[:] = [
-                                                c
-                                                for c in source_components
-                                                if c["id"] != comp_id
-                                            ]
-                                            render_component_list.refresh()
-
-                                        return handler
-
-                                    ui.button(
-                                        icon="close",
-                                        on_click=make_remove_handler(comp["id"]),
-                                    ).props("flat round dense size=sm color=grey")
-
-                                # Row 2: genesets + impacts + validation + ratio filter
-                                with ui.row().classes(
-                                    "items-center gap-2 w-full flex-wrap"
-                                ):
-                                    _build_geneset_menu(comp)
-                                    _build_call_filter_menu(comp)
-                                    create_validation_filter_menu(
-                                        all_statuses=[
-                                            "present",
-                                            "absent",
-                                            "uncertain",
-                                            "conflicting",
-                                            "TODO",
-                                        ],
-                                        filter_state=comp["validations"],
-                                        on_change=lambda: None,
-                                        label="Validation",
-                                        button_classes="",
-                                        button_props="dense size=sm",
-                                    )
-
-                                    ui.label("|ratio|:").classes(
-                                        "text-xs text-gray-600"
-                                    )
-
-                                    def _make_ratio_handler(comp_ref, key):
-                                        def handler(e):
-                                            raw = (e.value or "").replace(",", ".")
-                                            if not raw:
-                                                comp_ref[key].update({"value": None})
-                                                e.sender._props["error"] = False
-                                                e.sender.update()
-                                                return
-                                            try:
-                                                comp_ref[key].update(
-                                                    {"value": float(raw)}
-                                                )
-                                                e.sender._props["error"] = False
-                                                e.sender.update()
-                                            except ValueError:
-                                                e.sender._props["error"] = True
-                                                e.sender.update()
-                                                ui.notify(
-                                                    f"Invalid number: {raw}",
-                                                    type="warning",
-                                                    position="top",
-                                                    timeout=2000,
-                                                )
-
-                                        return handler
-
-                                    ui.input(
-                                        label="Min",
-                                        value=str(comp["ratio_min"]["value"] or ""),
-                                        on_change=_make_ratio_handler(
-                                            comp, "ratio_min"
-                                        ),
-                                    ).props("outlined dense").classes("w-20")
-                                    ui.input(
-                                        label="Max",
-                                        value=str(comp["ratio_max"]["value"] or ""),
-                                        on_change=_make_ratio_handler(
-                                            comp, "ratio_max"
-                                        ),
-                                    ).props("outlined dense").classes("w-20")
-
-                        render_component_list()
-
-                    ui.separator().props("vertical")
-
-                    # --- RIGHT PANEL: Individuals (1/3 width) ---
-                    with ui.column().classes("flex-[1] min-w-0 w-full"):
-                        ui.label("Individuals").classes(
-                            "text-sm font-semibold text-gray-600"
-                        )
-                        with ui.column().classes("gap-2 w-full flex-1"):
-                            # Sex + Phenotype on the same row
-                            with ui.row().classes("w-full gap-2"):
-                                sex_select = (
-                                    ui.select(
-                                        options=available_sex_values,
-                                        label="Sex",
-                                        value=filter_sex["value"],
-                                        multiple=True,
-                                        on_change=lambda e: filter_sex.update(
-                                            {"value": e.value or []}
-                                        ),
-                                    )
-                                    .props("outlined dense use-chips")
-                                    .classes("min-w-0")
-                                    .style("flex: 1;")
-                                )
-                                phenotype_select = (
-                                    ui.select(
-                                        options=available_phenotype_values,
-                                        label="Phenotype",
-                                        value=filter_phenotype["value"],
-                                        multiple=True,
-                                        on_change=lambda e: filter_phenotype.update(
-                                            {"value": e.value or []}
-                                        ),
-                                    )
-                                    .props("outlined dense use-chips")
-                                    .classes("min-w-0")
-                                    .style("flex: 2;")
-                                )
-
-                            has_parents_cb = ui.checkbox(
-                                "Only samples with both parents",
-                                value=filter_has_parents["value"],
-                                on_change=lambda e: filter_has_parents.update(
-                                    {"value": e.value}
-                                ),
-                            ).props("dense")
-
-                            # Exclude samples — chips + input in a
-                            # bordered container that stretches vertically
-                            ui.label("Exclude samples").classes(
-                                "text-xs text-gray-500 -mb-2"
-                            )
-                            with (
-                                ui.column()
-                                .classes(
-                                    "w-full flex-1 border rounded p-2"
-                                    " gap-1 min-h-[60px]"
-                                )
-                                .style("border-color: #bdbdbd;")
-                            ):
-                                # Chips area (cleared & rebuilt, input
-                                # stays outside so it is never destroyed)
-                                exclude_chips_row = ui.row().classes(
-                                    "w-full gap-1 flex-wrap"
-                                )
-
-                                def _rebuild_exclude_chips():
-                                    """Rebuild chip elements only."""
-                                    exclude_chips_row.clear()
-                                    if filter_exclude_samples["value"]:
-                                        with exclude_chips_row:
-                                            for sid in filter_exclude_samples["value"]:
-
-                                                def make_remove(s):
-                                                    def remove(_):
-                                                        filter_exclude_samples[
-                                                            "value"
-                                                        ] = [
-                                                            x
-                                                            for x in filter_exclude_samples[
-                                                                "value"
-                                                            ]
-                                                            if x != s
-                                                        ]
-                                                        _rebuild_exclude_chips()
-
-                                                    return remove
-
-                                                ui.chip(
-                                                    sid,
-                                                    removable=True,
-                                                    on_value_change=make_remove(sid),
-                                                    color="red",
-                                                ).props("dense outline size=sm")
-
-                                def _commit_exclude_text(
-                                    client_value: str | None = None,
-                                ):
-                                    """Parse input text into chips."""
-                                    raw = (
-                                        client_value
-                                        if client_value is not None
-                                        else (exclude_input.value or "")
-                                    )
-                                    tokens = [
-                                        t.strip()
-                                        for t in re.split(r"[,\s]+", raw)
-                                        if t.strip()
-                                    ]
-                                    if tokens:
-                                        current = filter_exclude_samples["value"]
-                                        for t in tokens:
-                                            if t not in current:
-                                                current.append(t)
-                                        filter_exclude_samples["value"] = current
-                                        exclude_input.value = ""
-                                        _rebuild_exclude_chips()
-
-                                def _on_exclude_key(e):
-                                    val = ""
-                                    if isinstance(e.args, dict):
-                                        val = e.args.get("value", "")
-                                    _commit_exclude_text(val)
-
-                                def _on_exclude_blur(e):
-                                    val = ""
-                                    if isinstance(e.args, dict):
-                                        val = e.args.get("value", "")
-                                    _commit_exclude_text(val)
-
-                                # Persistent input (never destroyed)
-                                exclude_input = (
-                                    ui.input(
-                                        placeholder="Type sample IDs...",
-                                    )
-                                    .props("dense hide-bottom-space")
-                                    .classes("w-full exclude-input-wrap")
-                                )
-                                exclude_input.on(
-                                    "keydown",
-                                    _on_exclude_key,
-                                    js_handler="""(e) => {
-                                        if (e.key === ' ' || e.key === ',' || e.key === 'Enter') {
-                                            e.preventDefault();
-                                            const el = e.target;
-                                            emit({value: el.value || ''});
-                                        }
-                                    }""",
-                                    throttle=0.1,
-                                )
-                                exclude_input.on(
-                                    "blur",
-                                    _on_exclude_blur,
-                                    js_handler="""(e) => {
-                                        const el = e.target;
-                                        const val = el.value || '';
-                                        if (val.trim()) {
-                                            emit({value: val});
-                                        }
-                                    }""",
-                                )
-
-                # Search + Clear buttons centered below both panels
-                with ui.row().classes("justify-center gap-4 mt-2"):
-                    search_button = (
-                        ui.button("Search", icon="search")
-                        .props("color=blue dense")
-                        .mark("search-button")
-                    )
-
-                    def _clear_all():
-                        source_components.clear()
-                        if wombat_sources:
-                            source_components.append(_make_wombat_component())
-                        filter_sex["value"] = []
-                        filter_phenotype["value"] = []
-                        filter_has_parents["value"] = False
-                        filter_exclude_samples["value"] = []
-                        sex_select.value = []
-                        phenotype_select.value = []
-                        has_parents_cb.value = False
-                        exclude_input.value = ""
-                        _rebuild_exclude_chips()
-                        render_component_list.refresh()
-
-                    ui.button("Clear", icon="clear_all", on_click=_clear_all).props(
-                        "outline dense"
-                    )
+            search_button = render_search_form(form)
 
             # Results container
             results_container = ui.column().classes("w-full")
@@ -1055,1339 +121,236 @@ def search_cohort_page(cohort_name: str) -> None:
             page_client = context.client
 
             async def perform_search():
-                """Execute the search — iterate over source components, union results."""
-                results_container.clear()
-
-                # Show progress indicator while loading
-                with results_container:
-                    with ui.column().classes(
-                        "items-center gap-4 justify-center py-8 w-full"
-                    ):
-                        progress = ui.circular_progress(
-                            min=0, max=100, value=0, size="xl", color="blue"
-                        )
-                        status_label = ui.label("Starting search...").classes(
-                            "text-lg text-gray-600"
-                        )
-
-                # Validate: need at least one component
-                if not source_components:
-                    results_container.clear()
-                    with results_container:
-                        ui.label("Please add at least one source component").classes(
-                            "text-orange-600"
-                        )
-                    return
-
-                # Validate: every component must have locus or genesets
-                for i, comp in enumerate(source_components):
-                    locus_val = comp["locus"]["value"]
-                    gs_val = comp["genesets"]["value"]
-                    has_locus = bool(locus_val and locus_val.strip())
-                    has_genesets = bool(gs_val)
-                    if not has_locus and not has_genesets:
-                        comp_label = f"Component {i + 1} ({comp['type']})"
-                        results_container.clear()
-                        with results_container:
-                            ui.label(
-                                f"{comp_label}: please enter a locus or select at least one geneset"
-                            ).classes("text-orange-600")
-                        return
-
-                # Update progress
-                progress.set_value(10)
-                status_label.set_text("Loading data...")
-                await asyncio.sleep(0)
-
-                try:
-                    # --- Helper: load a single wombat file ---
-                    def _load_wombat_file(
-                        sf: Dict[str, Any],
-                    ) -> Optional[pl.DataFrame]:
-                        # A headerless cohort table borrows a family's header
-                        cohort = store.get_cohort(cohort_name)
-                        _df = read_cohort_wombat(
-                            sf["file_path"],
-                            family_header_sources(
-                                store.data_dir,
-                                cohort,
-                                sf["vep_config"],
-                                sf["wombat_config"],
-                            )
-                            if cohort is not None
-                            else (),
-                            infer_schema_length=10000,
-                            schema_overrides=get_schema_overrides(),
-                            null_values=[".", ""],
-                        )
-                        if _df is None:
-                            return None
-                        _drop = get_dropped_columns() & set(_df.columns)
-                        if _drop:
-                            _df = _df.drop(list(_drop))
-                        return _df
-
-                    # --- Helper: apply geneset filter ---
-                    def _apply_geneset_filter(df, comp, source_type):
-                        if not comp["genesets"]["value"]:
-                            return df
-                        wanted = selected_symbols(
-                            available_genesets, comp["genesets"]["value"]
-                        )
-                        if not wanted:
-                            return df
-                        if source_type == "wombat":
-                            sym_col = "VEP_SYMBOL"
-                        else:
-                            exonic = comp.get("exonic_only", {}).get("value", False)
-                            sym_col = "exonic_symbol" if exonic else "genic_symbol"
-                        if sym_col not in df.columns:
-                            return df
-                        return df.filter(geneset_filter_expr(sym_col, wanted))
-
-                    # --- Process each component ---
-                    all_wombat_dfs: List[pl.DataFrame] = []
-                    all_wcx_dfs: List[pl.DataFrame] = []
-
-                    for comp in source_components:
-                        sf = next(
-                            (
-                                s
-                                for s in source_files
-                                if _source_key(s) == comp["source_key"]
-                            ),
-                            None,
-                        )
-                        if sf is None:
-                            continue
-
-                        locus_val = comp["locus"]["value"]
-                        query_params = None
-                        if locus_val and locus_val.strip():
-                            query_params = parse_locus_query(locus_val)
-
-                        if comp["type"] == "wombat":
-                            try:
-                                df = await asyncio.to_thread(_load_wombat_file, sf)
-                            except MissingHeaderError as exc:
-                                # Read anyway, its first row would be the columns
-                                results_container.clear()
-                                with results_container:
-                                    ui.label(
-                                        f"Cannot search Wombat source "
-                                        f"{sf['display_name']}: {exc}"
-                                    ).classes("text-red-600").mark(
-                                        "search-source-error"
-                                    )
-                                return
-                            if df is None or len(df) == 0:
-                                continue
-                            # Locus filter
-                            if query_params:
-                                df = filter_dataframe(df, query_params)
-                            # Geneset filter
-                            df = _apply_geneset_filter(df, comp, "wombat")
-                            if df is not None and len(df) > 0:
-                                all_wombat_dfs.append(df)
-
-                        elif comp["type"] == "wisecondorx":
-                            df = await asyncio.to_thread(
-                                parse_wisecondorx_bed, sf["file_path"]
-                            )
-                            if df is None or len(df) == 0:
-                                continue
-                            # Locus filter (use exonic columns if exonic_only is checked)
-                            exonic = comp.get("exonic_only", {}).get("value", False)
-                            if query_params:
-                                df = filter_bed_dataframe(
-                                    df, query_params, exonic=exonic
-                                )
-                            # Geneset filter
-                            df = _apply_geneset_filter(df, comp, "wisecondorx")
-                            # Call filter
-                            if "wisecondorX" in df.columns and comp.get(
-                                "selected_calls"
-                            ):
-                                selected_calls = comp["selected_calls"]["value"]
-                                if selected_calls:
-                                    df = df.filter(
-                                        pl.col("wisecondorX").is_in(selected_calls)
-                                    )
-                            # Ratio filter (on |ratio|)
-                            if "ratio" in df.columns:
-                                ratio_min = comp.get("ratio_min", {}).get("value")
-                                ratio_max = comp.get("ratio_max", {}).get("value")
-                                if ratio_min is not None:
-                                    df = df.filter(
-                                        pl.col("ratio")
-                                        .cast(pl.Float64, strict=False)
-                                        .abs()
-                                        >= ratio_min
-                                    )
-                                if ratio_max is not None:
-                                    df = df.filter(
-                                        pl.col("ratio")
-                                        .cast(pl.Float64, strict=False)
-                                        .abs()
-                                        <= ratio_max
-                                    )
-                            if df is not None and len(df) > 0:
-                                all_wcx_dfs.append(df)
-
-                    # Update progress: data loaded
-                    progress.set_value(35)
-                    status_label.set_text("Filtering data...")
-                    await asyncio.sleep(0)
-
-                    # Deduplicate wombat rows across components
-                    wombat_filtered = None
-                    if all_wombat_dfs:
-                        combined = pl.concat(all_wombat_dfs, how="diagonal_relaxed")
-                        wombat_filtered = aggregate_by_variant(combined)
-
-                    # Deduplicate wcx rows across components
-                    wcx_filtered = None
-                    if all_wcx_dfs:
-                        combined = pl.concat(all_wcx_dfs, how="diagonal_relaxed")
-                        dedup_cols = [
-                            c
-                            for c in ["chr", "start", "end", "type", "sample"]
-                            if c in combined.columns
-                        ]
-                        if dedup_cols:
-                            combined = combined.unique(
-                                subset=dedup_cols, keep="first", maintain_order=True
-                            )
-                        wcx_filtered = combined
-
-                    # Update progress: filtering complete
-                    progress.set_value(60)
-                    status_label.set_text("Processing variants...")
-                    await asyncio.sleep(0)
-
-                    wombat_count = (
-                        len(wombat_filtered) if wombat_filtered is not None else 0
-                    )
-                    wcx_count = len(wcx_filtered) if wcx_filtered is not None else 0
-
-                    if wombat_count == 0 and wcx_count == 0:
-                        results_container.clear()
-                        with results_container:
-                            ui.label("No results found").classes(
-                                "text-gray-500 text-lg italic"
-                            )
-                        return
-
-                    # Load validation data
-                    snv_validation_map = {}
-                    sv_validation_map = {}
-                    validation_file = store.data_dir / "validations" / "snvs.tsv"
-                    sv_validation_file = store.data_dir / "validations" / "svs.tsv"
-                    if wombat_filtered is not None:
-                        snv_validation_map = load_validation_map(validation_file, None)
-                    if wcx_filtered is not None:
-                        sv_validation_map = load_validation_map(
-                            sv_validation_file, None
-                        )
-
-                    # Load diagnostic data
-                    snv_diagnostic_map = {}
-                    sv_diagnostic_map = {}
-                    snv_diag_file = store.data_dir / "diagnostics" / "snvs.tsv"
-                    sv_diag_file = store.data_dir / "diagnostics" / "svs.tsv"
-                    if wombat_filtered is not None:
-                        snv_diagnostic_map = load_diagnostic_map(snv_diag_file, None)
-                    if wcx_filtered is not None:
-                        sv_diagnostic_map = load_diagnostic_map(sv_diag_file, None)
-
-                    # Yield to event loop before badge processing
-                    await asyncio.sleep(0)
-
-                    # Track unknown terms for warnings
-                    unknown_consequences = set()
-                    unknown_clinvar_terms = set()
-                    gene_scorer = get_gene_scorer()
-
-                    all_rows: List[Dict[str, Any]] = []
-
-                    # --- Process wombat rows ---
-                    if wombat_filtered is not None and wombat_count > 0:
-                        wombat_rows = wombat_filtered.to_dicts()
-
-                        # Collect per-component filter state for wombat
-                        # Use the first wombat component's filters as baseline
-                        # (after dedup, we apply the union of all component filters)
-                        wombat_comps = [
-                            c for c in source_components if c["type"] == "wombat"
-                        ]
-
-                        for row in wombat_rows:
-                            row["_source_type"] = "wombat"
-                            row["IsCurated"] = False
-                            row["_curated_tooltip"] = ""
-                            chrom = row.get("#CHROM", "")
-                            pos = row.get("POS", "")
-                            ref = row.get("REF", "")
-                            alt = row.get("ALT", "")
-                            sample_id = row.get("sample", "")
-                            variant_key = f"{chrom}:{pos}:{ref}:{alt}"
-                            row["Variant"] = variant_key
-                            row["_cohort_name"] = cohort_name
-
-                            ped_info = pedigree_data.get(sample_id, {})
-                            row["FID"] = ped_info.get(
-                                "FID", sample_to_family.get(sample_id, "")
-                            )
-                            row["Phenotype"] = ped_info.get("Phenotype", "")
-
-                            # Consequence badges
-                            consequence_str = row.get("VEP_Consequence", "")
-                            if consequence_str:
-                                consequences = []
-                                for part in str(consequence_str).split(","):
-                                    for cons in part.split("&"):
-                                        cons = cons.strip()
-                                        if cons:
-                                            consequences.append(cons)
-                                row["ConsequenceBadges"] = []
-                                seen_badges = set()
-                                for cons in consequences:
-                                    if cons and cons not in VEP_CONSEQUENCES:
-                                        unknown_consequences.add(cons)
-                                    label = format_consequence_display(cons)
-                                    color = get_consequence_color(cons)
-                                    badge_key = (label, color)
-                                    if badge_key not in seen_badges:
-                                        seen_badges.add(badge_key)
-                                        row["ConsequenceBadges"].append(
-                                            {"label": label, "color": color}
-                                        )
-                            else:
-                                row["ConsequenceBadges"] = []
-
-                            # ClinVar badges
-                            clinvar_str = row.get("VEP_CLIN_SIG", "")
-                            if clinvar_str:
-                                clinvar_sigs = []
-                                for part in str(clinvar_str).split(","):
-                                    for sig in part.split("&"):
-                                        sig = sig.strip()
-                                        if sig and sig != ".":
-                                            clinvar_sigs.append(sig)
-                                row["ClinVarBadges"] = []
-                                seen_badges = set()
-                                for sig in clinvar_sigs:
-                                    sig_lower = sig.lower()
-                                    is_known = any(
-                                        key.lower() == sig_lower
-                                        for key in CLINVAR_COLORS.keys()
-                                    )
-                                    if sig and not is_known:
-                                        unknown_clinvar_terms.add(sig)
-                                    label = format_clinvar_display(sig)
-                                    color = get_clinvar_color(sig)
-                                    badge_key = (label, color)
-                                    if badge_key not in seen_badges:
-                                        seen_badges.add(badge_key)
-                                        row["ClinVarBadges"].append(
-                                            {"label": label, "color": color}
-                                        )
-                            else:
-                                row["ClinVarBadges"] = []
-
-                            # Gene badges from VEP_SYMBOL (score-sorted, capped)
-                            row["GeneBadges"] = build_gene_badges(
-                                split_genes(row.get("VEP_SYMBOL", "")), gene_scorer
-                            )
-                            # Synthetic "gene" column for unified display
-                            row["gene"] = ",".join(badge_labels(row["GeneBadges"]))
-
-                            # Gene badges from VEP_Gene (ENSG IDs)
-                            gene_str = row.get("VEP_Gene", "")
-                            if gene_str:
-                                genes = [
-                                    g.strip()
-                                    for g in str(gene_str).split(",")
-                                    if g.strip()
-                                ]
-                                row["VEP_Gene_badges"] = build_gene_badges(
-                                    genes, gene_scorer, cap=None, sort=False
-                                )
-                            else:
-                                row["VEP_Gene_badges"] = []
-
-                            add_validation_status_to_row(
-                                row, snv_validation_map, variant_key, sample_id
-                            )
-                            add_diagnostic_status_to_row(
-                                row, snv_diagnostic_map, variant_key, sample_id
-                            )
-
-                            # Continuous score badges
-                            for col_name, value_str in list(row.items()):
-                                if value_str and value_str != ".":
-                                    try:
-                                        value = float(value_str)
-                                        badge_info = get_score_color(col_name, value)
-                                        if badge_info:
-                                            row[f"{col_name}_badge"] = {
-                                                "label": f"{value:.3f}",
-                                                "color": badge_info["color"],
-                                                "tooltip": f"{col_name}: {value:.3f} ({badge_info['label']})",
-                                            }
-                                    except (ValueError, TypeError):
-                                        pass
-
-                        # Apply per-component wombat filters (impact, exclude, validation)
-                        # A row passes if ANY wombat component would keep it
-                        def _wombat_row_passes(row, comps):
-                            """Check if a wombat row passes at least one component's filters."""
-                            for wc in comps:
-                                # Impact filter
-                                impacts_ok = True
-                                if set(wc["impacts"]["value"]) != set(
-                                    VEP_CONSEQUENCES.keys()
-                                ):
-                                    consequence_str = row.get("VEP_Consequence", "")
-                                    if consequence_str:
-                                        cons_list = []
-                                        for part in str(consequence_str).split(","):
-                                            for c in part.split("&"):
-                                                c = c.strip()
-                                                if c:
-                                                    cons_list.append(c)
-                                        impacts_ok = any(
-                                            c in wc["impacts"]["value"]
-                                            for c in cons_list
-                                        )
-                                    else:
-                                        impacts_ok = False
-
-                                # Exclude LCR
-                                if wc["exclude_lcr"]["value"]:
-                                    if (
-                                        row.get("LCR")
-                                        and "true" in str(row.get("LCR", "")).lower()
-                                    ):
-                                        continue
-                                # Exclude gnomAD filtered
-                                if wc["exclude_gnomad"]["value"]:
-                                    if row.get("genomes_filters"):
-                                        continue
-                                # Exclude gnomAD WGS
-                                if wc["exclude_gnomad_wgs"]["value"]:
-                                    if row.get("fafmax_faf95_max_genomes"):
-                                        continue
-
-                                if not impacts_ok:
-                                    continue
-
-                                # Validation filter
-                                val_status = row.get("Validation", "")
-                                if wc["validations"]["value"]:
-                                    if val_status in wc["validations"]["value"]:
-                                        return True
-                                    if (
-                                        "TODO" in wc["validations"]["value"]
-                                        and not val_status
-                                    ):
-                                        return True
-                                    continue
-                                return True
-                            return False
-
-                        wombat_rows = [
-                            r
-                            for r in wombat_rows
-                            if _wombat_row_passes(r, wombat_comps)
-                        ]
-                        all_rows.extend(wombat_rows)
-
-                    # --- Process wisecondorx rows ---
-                    if wcx_filtered is not None and wcx_count > 0:
-                        wcx_rows = wcx_filtered.to_dicts()
-                        for row in wcx_rows:
-                            row["_source_type"] = "wisecondorx"
-                            sample_id = row.get("sample", "")
-                            row["_original_locus"] = row.get("chr:start-end", "")
-                            row["Variant"] = row.get("chr:start-end", "")
-                            row["_cohort_name"] = cohort_name
-                            # Compute svlen from start/end
-                            try:
-                                row["svlen"] = int(row.get("end", 0)) - int(
-                                    row.get("start", 0)
-                                )
-                            except (ValueError, TypeError):
-                                row["svlen"] = None
-
-                            ped_info = pedigree_data.get(sample_id, {})
-                            row["FID"] = ped_info.get(
-                                "FID", sample_to_family.get(sample_id, "")
-                            )
-                            row["Phenotype"] = ped_info.get("Phenotype", "")
-
-                            # WisecondorX tooltip (ratio + zscore)
-                            ratio_val = row.get("ratio", "")
-                            zscore_val = row.get("zscore", "")
-                            tooltip_parts = []
-                            if ratio_val not in (None, ""):
-                                tooltip_parts.append(f"ratio: {ratio_val}")
-                            if zscore_val not in (None, ""):
-                                tooltip_parts.append(f"zscore: {zscore_val}")
-                            row["_wisecondorx_tooltip"] = ", ".join(tooltip_parts)
-
-                            # No VEP badges for SVS rows
-                            row["ConsequenceBadges"] = []
-                            row["ClinVarBadges"] = []
-
-                            # Gene badges from genic_symbol (score-sorted, capped)
-                            genic_str = row.get("genic_symbol", "")
-                            if genic_str and str(genic_str).strip():
-                                symbols = [
-                                    s.strip()
-                                    for s in str(genic_str).split(",")
-                                    if s.strip()
-                                ]
-                                row["GeneBadges"] = build_gene_badges(
-                                    symbols, gene_scorer
-                                )
-                            else:
-                                row["GeneBadges"] = []
-                            # Synthetic "gene" column for unified display
-                            row["gene"] = ",".join(badge_labels(row["GeneBadges"]))
-
-                            row["VEP_Gene_badges"] = []
-
-                            # SVS validation: variant_key is chr:start-end:type
-                            sv_variant_key = _sv_variant_key(row)
-                            add_validation_status_to_row(
-                                row, sv_validation_map, sv_variant_key, sample_id
-                            )
-                            add_diagnostic_status_to_row(
-                                row, sv_diagnostic_map, sv_variant_key, sample_id
-                            )
-                            _apply_curated_coordinates(
-                                row, sv_validation_map, sv_variant_key, sample_id
-                            )
-
-                        # Apply per-component WCX filters (validation)
-                        wcx_comps = [
-                            c for c in source_components if c["type"] == "wisecondorx"
-                        ]
-
-                        def _wcx_row_passes(row, comps):
-                            """Check if a WCX row passes at least one component's validation filter."""
-                            for wc in comps:
-                                val_status = row.get("Validation", "")
-                                allowed = wc.get("validations", {}).get("value", [])
-                                if allowed:
-                                    if val_status in allowed:
-                                        return True
-                                    if "TODO" in allowed and not val_status:
-                                        return True
-                                    continue
-                                return True
-                            return False
-
-                        wcx_rows = [
-                            r for r in wcx_rows if _wcx_row_passes(r, wcx_comps)
-                        ]
-                        all_rows.extend(wcx_rows)
-
-                    # Update progress: badge processing complete
-                    progress.set_value(85)
-                    status_label.set_text("Rendering table...")
-                    await asyncio.sleep(0)
-
-                    # Display warnings for unknown terms
-                    if unknown_consequences:
-                        ui.notify(
-                            f"⚠️ Unknown VEP consequence terms found: {', '.join(sorted(unknown_consequences))}. "
-                            "Please add to vep_consequences.yaml",
-                            type="warning",
-                            timeout=10000,
-                            position="top",
-                        )
-
-                    if unknown_clinvar_terms:
-                        ui.notify(
-                            f"⚠️ Unknown ClinVar terms found: {', '.join(sorted(unknown_clinvar_terms))}. "
-                            "Please add to clinvar_colors.yaml",
-                            type="warning",
-                            timeout=10000,
-                            position="top",
-                        )
-
-                    # Get all columns from both source types
-                    all_col_set: set[str] = set()
-                    if wombat_filtered is not None:
-                        all_col_set.update(wombat_filtered.columns)
-                    if wcx_filtered is not None:
-                        all_col_set.update(wcx_filtered.columns)
-                    # Remove internal/coordinate columns kept for filtering
-                    all_col_set -= {"_source_type", "chr", "start", "end"}
-                    all_col_set.add("gene")
-                    if wombat_filtered is not None:
-                        all_col_set.add("MOI")
-                    if wcx_filtered is not None:
-                        all_col_set.add("svlen")
-                    all_columns = list(all_col_set)
-                    if "Variant" not in all_columns:
-                        all_columns.insert(0, "Variant")
-                    for ensure_col in [
-                        "FID",
-                        "Phenotype",
-                        "Validation",
-                        "Diagnostic",
-                    ]:
-                        if ensure_col not in all_columns:
-                            all_columns.append(ensure_col)
-
-                    # Group same-group columns together
-                    all_columns = reorder_columns_by_group(all_columns)
-
-                    # Default visible columns
-                    default_visible = [
-                        "Variant",
-                        "VEP_Consequence",
-                        "gene",
-                        "MOI",
-                        "VEP_CLIN_SIG",
-                        "fafmax_faf95_max_genomes",
-                        "FID",
-                        "Phenotype",
-                        "sample",
-                        "sample_gt",
-                        "father_gt",
-                        "mother_gt",
-                        "Validation",
-                    ]
-                    # Auto-select preset based on component mix
-                    has_wombat_comps = any(
-                        c["type"] == "wombat" for c in source_components
-                    )
-                    has_wcx_comps = any(
-                        c["type"] == "wisecondorx" for c in source_components
-                    )
-                    if has_wcx_comps and not has_wombat_comps:
-                        # WCX-only: use SV View preset
-                        initial_preset = next(
-                            (p for p in VIEW_PRESETS if p["name"] == "SV View"),
-                            VIEW_PRESETS[0],
-                        )
-                    elif has_wcx_comps and has_wombat_comps:
-                        # Mixed: use Mix View preset
-                        initial_preset = next(
-                            (p for p in VIEW_PRESETS if p["name"] == "Mix View"),
-                            VIEW_PRESETS[0],
-                        )
-                    else:
-                        # Wombat-only: select based on first wombat config file
-                        first_wombat_comp = next(
-                            (c for c in source_components if c["type"] == "wombat"),
-                            None,
-                        )
-                        wombat_config = ""
-                        if first_wombat_comp:
-                            sf = next(
-                                (
-                                    s
-                                    for s in source_files
-                                    if _source_key(s) == first_wombat_comp["source_key"]
-                                ),
-                                None,
-                            )
-                            if sf:
-                                wombat_config = sf.get("wombat_config", "")
-                        initial_preset = select_preset_for_config(
-                            wombat_config, VIEW_PRESETS
-                        )
-                    selected_preset = {"name": initial_preset["name"]}
-
-                    # Override with preset columns if available
-                    preset_columns = initial_preset.get("columns", [])
-                    initial_selected = [
-                        col for col in preset_columns if col in all_columns
-                    ]
-
-                    selected_cols = {
-                        "value": initial_selected
-                        if initial_selected
-                        else [col for col in default_visible if col in all_columns]
-                    }
-
-                    # Table state for persistence across refreshes
-                    table_state: Dict[str, Any] = {"sorting": [], "page": 0}
-
-                    # Apply individual filters (sex, phenotype, has-parents)
-                    if filter_sex["value"]:
-                        all_rows = [
-                            r
-                            for r in all_rows
-                            if pedigree_data.get(r.get("sample", ""), {}).get("Sex", "")
-                            in filter_sex["value"]
-                        ]
-
-                    if filter_phenotype["value"]:
-                        all_rows = [
-                            r
-                            for r in all_rows
-                            if pedigree_data.get(r.get("sample", ""), {}).get(
-                                "Phenotype", ""
-                            )
-                            in filter_phenotype["value"]
-                        ]
-
-                    if filter_has_parents["value"]:
-
-                        def _has_parents(ped: Dict[str, str]) -> bool:
-                            father = ped.get("Father", "")
-                            mother = ped.get("Mother", "")
-                            return (
-                                father not in _PED_MISSING
-                                and mother not in _PED_MISSING
-                            )
-
-                        all_rows = [
-                            r
-                            for r in all_rows
-                            if _has_parents(pedigree_data.get(r.get("sample", ""), {}))
-                        ]
-
-                    # Exclude specific samples
-                    if filter_exclude_samples["value"]:
-                        exclude_set = set(filter_exclude_samples["value"])
-                        all_rows = [
-                            r
-                            for r in all_rows
-                            if r.get("sample", "") not in exclude_set
-                        ]
-
-                    # Impact, exclude, validation filters are now applied per-component
-                    # (wombat rows filtered by _wombat_row_passes, wcx rows filtered by call filter)
-
-                    # MOI: does each SNV fit its gene's mode of inheritance?
-                    # Second hits are looked for among these results only.
-                    annotate_moi(
-                        all_rows,
-                        get_snapshot(),
-                        pedigree=_moi_pedigree(pedigree_data),
-                    )
-
-                    # Update progress: ready to display
-                    progress.set_value(100)
-                    status_label.set_text("Complete!")
-                    await asyncio.sleep(0)
-
-                    # Clear progress indicator and show results
-                    results_container.clear()
-                    with results_container:
-
-                        @ui.refreshable
-                        def render_results_table():
-                            # All per-component filters (impact, exclude, validation, calls)
-                            # are already applied — use all_rows directly
-                            rows = all_rows.copy()
-                            # An SV's region (curated when curated) opens GeneTrek
-                            # on the genes it overlaps.
-                            for r in rows:
-                                if r.get("_source_type") == "wisecondorx":
-                                    r["_genetrek_url"] = search_url([r["Variant"]])
-
-                            def get_columns():
-                                cols: List[Dict[str, Any]] = [
-                                    {
-                                        "id": "actions",
-                                        "header": "",
-                                        "cellType": "action",
-                                        "actionName": "view_variant",
-                                        "actionIcon": "visibility",
-                                        "actionColor": "#1976d2",
-                                        "actionTooltip": "View in IGV",
-                                        "sortable": False,
-                                    }
-                                ]
-                                for col in all_columns:
-                                    col_def: Dict[str, Any] = {
-                                        "id": col,
-                                        "header": get_display_label(col),
-                                        "group": get_column_group(col),
-                                        "sorting": get_column_sorting(col),
-                                        "sortable": True,
-                                    }
-                                    if col == "Variant":
-                                        col_def["cellType"] = "curated_locus"
-                                        col_def["curatedField"] = "IsCurated"
-                                        col_def["tooltipField"] = "_curated_tooltip"
-                                    elif col == "Validation":
-                                        col_def["cellType"] = "validation"
-                                    elif col == "Diagnostic":
-                                        col_def["cellType"] = "diagnostic"
-                                    elif col == "VEP_Consequence":
-                                        col_def["cellType"] = "badge_list"
-                                        col_def["badgesField"] = "ConsequenceBadges"
-                                    elif col == "VEP_CLIN_SIG":
-                                        col_def["cellType"] = "badge_list"
-                                        col_def["badgesField"] = "ClinVarBadges"
-                                    elif col == "gene":
-                                        col_def["cellType"] = "gene_badge"
-                                        col_def["badgesField"] = "GeneBadges"
-                                    elif col == "VEP_SYMBOL":
-                                        col_def["cellType"] = "gene_badge"
-                                        col_def["badgesField"] = "GeneBadges"
-                                    elif col == "VEP_Gene":
-                                        col_def["cellType"] = "gene_badge"
-                                        col_def["badgesField"] = "VEP_Gene_badges"
-                                    elif col == "MOI":
-                                        col_def["cellType"] = "badge_list"
-                                        col_def["badgesField"] = "MoiBadges"
-                                        col_def["sortField"] = "_moi_rank"
-                                    elif col == "wisecondorX":
-                                        col_def["cellType"] = "cnv_call"
-                                        col_def["callColors"] = build_call_colors()
-                                        col_def["tooltipField"] = "_wisecondorx_tooltip"
-                                    elif col == "FID":
-                                        col_def["cellType"] = "link"
-                                        col_def["href"] = (
-                                            "/cohort/{_cohort_name}/family/{FID}"
-                                        )
-                                    else:
-                                        col_type = get_column_type(col)
-                                        if col_type in ("int", "float"):
-                                            col_def["cellType"] = "number"
-                                        else:
-                                            col_def["cellType"] = "score_badge"
-                                    apply_width_constraints(col_def, col)
-                                    cols.append(col_def)
-                                return cols
-
-                            # Reference to the DataTable for column visibility updates
-                            search_dt: Dict[str, Any] = {"ref": None}
-
-                            def _apply_col_visibility():
-                                if search_dt["ref"]:
-                                    visible = ["actions"] + list(selected_cols["value"])
-                                    search_dt["ref"].set_column_visibility(visible)
-
-                            with ui.row().classes(
-                                "items-center gap-4 mt-4 mb-2 w-full"
-                            ):
-                                ui.label(f"Results ({len(rows)} rows)").classes(
-                                    "text-lg font-semibold text-blue-700"
-                                )
-
-                                # Preset dropdown
-                                preset_select = ui.select(
-                                    options={
-                                        p["name"]: p["name"] for p in VIEW_PRESETS
-                                    },
-                                    value=selected_preset["name"],
-                                    label="Preset",
-                                ).classes("w-48")
-
-                                ui.space()  # Push column selector to the right
-
-                                # Column selector dialog
-                                col_dialog, _sync_col_selector = build_column_selector(
-                                    all_columns=all_columns,
-                                    selected_cols=selected_cols,
-                                    on_visibility_change=_apply_col_visibility,
-                                    presets=VIEW_PRESETS,
-                                )
-                                ui.button(
-                                    "Columns",
-                                    icon="view_column",
-                                    on_click=col_dialog.open,
-                                ).props("outline color=blue size=sm")
-
-                                # --- Stats button + dialog ---
-                                ui.button(
-                                    "Stats",
-                                    icon="bar_chart",
-                                    on_click=lambda _e=None, r=rows: show_stats_dialog(
-                                        r
-                                    ),
-                                ).props("outline color=blue size=sm")
-
-                                # --- Save / Download ---
-                                def _save_validation_file(filename: str):
-                                    """Write TSV to to_validate directory."""
-                                    current_name = selected_preset["name"]
-                                    if current_name in ("SV View", "Mix View"):
-                                        target_preset = next(
-                                            (
-                                                p
-                                                for p in VIEW_PRESETS
-                                                if p["name"] == current_name
-                                            ),
-                                            VIEW_PRESETS[0],
-                                        )
-                                    else:
-                                        target_preset = next(
-                                            (
-                                                p
-                                                for p in VIEW_PRESETS
-                                                if p["name"] == "Standard View"
-                                            ),
-                                            VIEW_PRESETS[0],
-                                        )
-                                    save_cols = [
-                                        col
-                                        for col in target_preset.get("columns", [])
-                                        if col != "Validation"
-                                        and col in all_columns
-                                        and is_export_column(col)
-                                    ]
-                                    # Auto-include essential SV fields for validation file page
-                                    if current_name in ("SV View", "Mix View"):
-                                        for sv_col in ["ratio", "zscore", "type"]:
-                                            if (
-                                                sv_col in all_columns
-                                                and sv_col not in save_cols
-                                            ):
-                                                save_cols.append(sv_col)
-                                    tsv_content = rows_to_tsv(rows, save_cols)
-                                    to_validate_dir = store.data_dir / "to_validate"
-                                    to_validate_dir.mkdir(parents=True, exist_ok=True)
-                                    file_path = to_validate_dir / filename
-                                    if file_path.exists():
-                                        ui.notify(
-                                            f"File '{filename}' already exists!",
-                                            type="warning",
-                                        )
-                                        return
-                                    file_path.write_text(tsv_content)
-                                    ui.notify(
-                                        f"Saved {filename} to to_validate/",
-                                        type="positive",
-                                        position="top",
-                                    )
-
-                                def _download_tsv(filename: str):
-                                    """Trigger browser download of TSV with displayed columns."""
-                                    download_cols = [
-                                        col
-                                        for col in selected_cols["value"]
-                                        if is_export_column(col)
-                                    ]
-                                    tsv_content = rows_to_tsv(rows, download_cols)
-                                    ui.download(
-                                        tsv_content.encode("utf-8"),
-                                        filename,
-                                        media_type="text/tab-separated-values",
-                                    )
-
-                                def _build_save_dialog(
-                                    title, confirm_label, confirm_icon, on_confirm
-                                ):
-                                    """Pre-build a save/download dialog. Returns (dialog, name_input)."""
-                                    with (
-                                        ui.dialog() as dlg,
-                                        ui.card().classes("p-4 min-w-[400px]"),
-                                    ):
-                                        ui.label(title).classes(
-                                            "text-lg font-semibold mb-2"
-                                        )
-
-                                        with ui.row().classes(
-                                            "items-center w-full gap-1"
-                                        ):
-                                            name_input = (
-                                                ui.input(
-                                                    label="Filename",
-                                                    value="",
-                                                )
-                                                .props("outlined dense")
-                                                .classes("flex-grow")
-                                            )
-                                            ui.label(".tsv").classes(
-                                                "text-gray-500 text-sm mt-2"
-                                            )
-
-                                        with ui.row().classes(
-                                            "justify-end gap-2 w-full mt-4"
-                                        ):
-                                            ui.button(
-                                                "Cancel", on_click=dlg.close
-                                            ).props("flat")
-
-                                            def _on_confirm(
-                                                inp=name_input, d=dlg, cb=on_confirm
-                                            ):
-                                                raw_name = inp.value.strip()
-                                                if not raw_name:
-                                                    ui.notify(
-                                                        "Please enter a filename",
-                                                        type="warning",
-                                                    )
-                                                    return
-                                                if not raw_name.endswith(".tsv"):
-                                                    raw_name += ".tsv"
-                                                d.close()
-                                                cb(raw_name)
-
-                                            ui.button(
-                                                confirm_label,
-                                                icon=confirm_icon,
-                                                on_click=_on_confirm,
-                                            ).props("unelevated color=blue")
-                                    return dlg, name_input
-
-                                save_dlg, save_input = _build_save_dialog(
-                                    "Save as validation file",
-                                    "Save",
-                                    "save",
-                                    _save_validation_file,
-                                )
-                                dl_dlg, dl_input = _build_save_dialog(
-                                    "Download TSV",
-                                    "Download",
-                                    "download",
-                                    _download_tsv,
-                                )
-
-                                def _open_dialog(dlg, name_input):
-                                    """Reset filename, open dialog, auto-focus and select text."""
-                                    name_input.value = f"genetics-viz.{datetime.now().strftime('%Y-%m-%d.%H-%M')}"
-                                    dlg.open()
-                                    ui.run_javascript(
-                                        f"setTimeout(function() {{"
-                                        f'  var el = getElement({name_input.id}).$el.querySelector("input");'
-                                        f"  if(el){{el.focus();el.select();}}"
-                                        f"}}, 200);"
-                                    )
-
-                                with ui.button(
-                                    "Save",
-                                    icon="save",
-                                ).props("outline color=blue size=sm"):
-                                    with ui.menu().classes("min-w-[250px]"):
-                                        if can_write():
-                                            ui.menu_item(
-                                                "Save as validation file",
-                                                on_click=lambda: _open_dialog(
-                                                    save_dlg, save_input
-                                                ),
-                                            )
-                                        ui.menu_item(
-                                            "Download TSV",
-                                            on_click=lambda: _open_dialog(
-                                                dl_dlg, dl_input
-                                            ),
-                                        )
-
-                            # Preset change handler
-                            def on_preset_change(e):
-                                """Handle preset selection change."""
-                                preset_name = e.value
-                                preset = next(
-                                    (
-                                        p
-                                        for p in VIEW_PRESETS
-                                        if p["name"] == preset_name
-                                    ),
-                                    None,
-                                )
-                                if not preset:
-                                    return
-
-                                # Filter columns to only those available in the data
-                                available = [
-                                    col
-                                    for col in preset.get("columns", [])
-                                    if col in all_columns
-                                ]
-
-                                selected_cols["value"] = available
-                                selected_preset["name"] = preset_name
-                                _apply_col_visibility()
-                                _sync_col_selector()
-
-                            # Connect preset change handler
-                            preset_select.on_value_change(on_preset_change)
-
-                            # CNV calls legend (only when WCX data is present)
-                            if has_wcx_comps:
-                                with ui.row().classes("gap-4 items-center"):
-                                    ui.label("CNV calls:").classes(
-                                        "text-sm font-semibold"
-                                    )
-                                    for _cfg_key in [
-                                        "robust_loss",
-                                        "permissive_loss",
-                                        "robust_gain",
-                                        "permissive_gain",
-                                    ]:
-                                        cfg = WISECONDORX_CONFIG[_cfg_key]
-                                        _op = "≤" if "loss" in _cfg_key else "≥"
-                                        with ui.row().classes("gap-2 items-center"):
-                                            ui.html(
-                                                f'<span class="q-badge" style="background-color: {cfg["color"]}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px;">{cfg["label"]}</span>',
-                                                sanitize=False,
-                                            )
-                                            ui.label(
-                                                f"(log2{_op}{cfg['ratio_threshold']} & Z{_op}{cfg['zscore_threshold']})"
-                                            ).classes("text-xs text-gray-600")
-
-                            def _refresh_all_rows():
-                                """Reload validation + diagnostic data for all rows."""
-                                snv_val = load_validation_map(validation_file, None)
-                                sv_val = load_validation_map(sv_validation_file, None)
-                                snv_diag = load_diagnostic_map(snv_diag_file, None)
-                                sv_diag = load_diagnostic_map(sv_diag_file, None)
-                                for row in all_rows:
-                                    s_id = row.get("sample", "")
-                                    if row.get("_source_type") == "wisecondorx":
-                                        orig = row.get(
-                                            "_original_locus",
-                                            row.get("chr:start-end", ""),
-                                        )
-                                        sv_vk = _sv_variant_key(row)
-                                        row["chr:start-end"] = orig
-                                        row["Variant"] = orig
-                                        add_validation_status_to_row(
-                                            row, sv_val, sv_vk, s_id
-                                        )
-                                        add_diagnostic_status_to_row(
-                                            row, sv_diag, sv_vk, s_id
-                                        )
-                                        _apply_curated_coordinates(
-                                            row, sv_val, sv_vk, s_id
-                                        )
-                                    else:
-                                        v_key = row.get("Variant", "")
-                                        add_validation_status_to_row(
-                                            row, snv_val, v_key, s_id
-                                        )
-                                        add_diagnostic_status_to_row(
-                                            row, snv_diag, v_key, s_id
-                                        )
-                                with page_client:
-                                    render_results_table.refresh()
-
-                            # Handle row action click
-                            def on_row_action(e):
-                                action = e.get("action", "")
-                                row_data = e.get("row", {})
-                                variant_str = row_data.get("Variant", "")
-                                sample_id = row_data.get("sample", "")
-                                source_type = row_data.get("_source_type", "wombat")
-
-                                # Get family from sample
-                                family_id = sample_to_family.get(sample_id)
-
-                                if not family_id:
-                                    ui.notify(
-                                        f"Could not find family for sample {sample_id}",
-                                        type="warning",
-                                    )
-                                    return
-
-                                if action == "open_diagnostic":
-                                    if source_type == "wisecondorx":
-                                        # SV diagnostic
-                                        gene_str = row_data.get("gene", "")
-                                        gene_syms = []
-                                        if gene_str and gene_str != "-":
-                                            for gp in str(gene_str).split(","):
-                                                sym = gp.split(":")[0].strip()
-                                                if sym:
-                                                    gene_syms.append(sym)
-                                        gene = ", ".join(gene_syms) if gene_syms else ""
-                                        sv_call = str(
-                                            row_data.get(
-                                                "wisecondorX",
-                                                row_data.get("call", ""),
-                                            )
-                                        ).upper()
-                                        impact = (
-                                            "GAIN"
-                                            if "GAIN" in sv_call
-                                            else (
-                                                "LOSS" if "LOSS" in sv_call else sv_call
-                                            )
-                                        )
-                                        show_diagnostic_dialog(
-                                            family_id=family_id,
-                                            variant_key=_sv_variant_key(row_data),
-                                            gene=gene,
-                                            impact=impact,
-                                            sample=sample_id,
-                                            variant_type="sv",
-                                            diagnostic_file=sv_diag_file,
-                                            on_save_callback=lambda s: (
-                                                _refresh_all_rows()
-                                            ),
-                                        )
-                                    else:
-                                        # SNV diagnostic
-                                        gene = row_data.get("VEP_SYMBOL", "")
-                                        impact = row_data.get("VEP_Consequence", "")
-                                        show_diagnostic_dialog(
-                                            family_id=family_id,
-                                            variant_key=variant_str,
-                                            gene=gene,
-                                            impact=impact,
-                                            sample=sample_id,
-                                            variant_type="snv",
-                                            diagnostic_file=snv_diag_file,
-                                            on_save_callback=lambda s: (
-                                                _refresh_all_rows()
-                                            ),
-                                        )
-                                    return
-
-                                try:
-                                    if source_type == "wisecondorx":
-                                        # SV dialog
-                                        locus_for_dialog = row_data.get(
-                                            "_original_locus", variant_str
-                                        )
-                                        parts = locus_for_dialog.split(":")
-                                        if len(parts) == 2:
-                                            chrom = parts[0]
-                                            range_parts = parts[1].split("-")
-                                            if len(range_parts) == 2:
-                                                show_sv_dialog(
-                                                    cohort_name=cohort_name,
-                                                    family_id=family_id,
-                                                    chrom=chrom,
-                                                    start=range_parts[0],
-                                                    end=range_parts[1],
-                                                    sample=sample_id,
-                                                    sv_data={
-                                                        **row_data,
-                                                        "call": row_data.get(
-                                                            "wisecondorX",
-                                                            row_data.get("call", ""),
-                                                        ),
-                                                    },
-                                                    on_validation_saved=_refresh_all_rows,
-                                                )
-                                            else:
-                                                ui.notify(
-                                                    "Invalid SV format",
-                                                    type="warning",
-                                                )
-                                        else:
-                                            ui.notify(
-                                                "Invalid SV format",
-                                                type="warning",
-                                            )
-                                    else:
-                                        # Wombat variant dialog
-                                        parts = variant_str.split(":")
-                                        if len(parts) == 4:
-                                            chrom, pos, ref, alt = parts
-                                            show_variant_dialog(
-                                                cohort_name=cohort_name,
-                                                family_id=family_id,
-                                                chrom=chrom,
-                                                pos=pos,
-                                                ref=ref,
-                                                alt=alt,
-                                                sample=sample_id,
-                                                variant_data=dict(row_data),
-                                                on_save_callback=lambda s: (
-                                                    _refresh_all_rows()
-                                                ),
-                                            )
-                                        else:
-                                            ui.notify(
-                                                "Invalid variant format. Expected chr:pos:ref:alt",
-                                                type="warning",
-                                            )
-                                except Exception as ex:
-                                    ui.notify(
-                                        f"Error parsing variant: {ex}",
-                                        type="warning",
-                                    )
-
-                            # Restore table state (sorting / page) across refreshes
-                            saved_sorting = table_state.get("sorting", [])
-                            if saved_sorting:
-                                col_id = saved_sorting[0]["id"]
-                                desc = saved_sorting[0].get("desc", False)
-                                col_def = next(
-                                    (c for c in get_columns() if c.get("id") == col_id),
-                                    {},
-                                )
-                                sort_field = col_def.get("sortField", col_id)
-                                sort_type = col_def.get("sorting", "")
-                                if sort_type == "genomic":
-                                    from genetics_viz.utils.column_names import (
-                                        genomic_sort_key,
-                                    )
-
-                                    rows.sort(
-                                        key=lambda r: (
-                                            r.get(sort_field) is None,
-                                            genomic_sort_key(r.get(sort_field, "")),
-                                        ),
-                                        reverse=desc,
-                                    )
-                                elif sort_type == "numerical":
-
-                                    def _num_key(r):
-                                        v = r.get(sort_field)
-                                        if v is None:
-                                            return (True, 0.0)
-                                        try:
-                                            return (False, float(v))
-                                        except (ValueError, TypeError):
-                                            return (True, 0.0)
-
-                                    rows.sort(key=_num_key, reverse=desc)
-                                else:
-                                    rows.sort(
-                                        key=lambda r: (
-                                            r.get(sort_field) is None,
-                                            r.get(sort_field, ""),
-                                        ),
-                                        reverse=desc,
-                                    )
-
-                            # Create table with all columns, initial visibility from preset
-                            search_dt["ref"] = DataTable(
-                                columns=get_columns(),
-                                rows=rows,
-                                row_key="Variant",
-                                pagination={"rowsPerPage": 50},
-                                visible_columns=["actions"]
-                                + list(selected_cols["value"]),
-                                on_row_action=on_row_action,
-                                initial_sorting=saved_sorting,
-                                initial_page=table_state.get("page", 0),
-                                state_holder=table_state,
-                            )
-
-                        render_results_table()
-
-                except Exception as e:
-                    import traceback
-
-                    results_container.clear()
-                    with results_container:
-                        ui.label(f"Error: {e}").classes("text-red-500 text-xl mb-4")
-                        ui.label("Traceback:").classes("text-red-500 font-semibold")
-                        ui.label(traceback.format_exc()).classes(
-                            "text-red-500 text-xs font-mono whitespace-pre"
-                        )
+                await _run_search(
+                    form,
+                    results_container,
+                    store=store,
+                    cohort_name=cohort_name,
+                    source_files=source_files,
+                    pedigree_data=pedigree_data,
+                    page_client=page_client,
+                )
 
             # Set up handlers after function definition
             search_button.on_click(perform_search)
-            _search_handler["fn"] = perform_search
-            # Bind Enter key on initial locus inputs
-            # (new inputs from add-component get bound in _render_*_card via _bind_locus_enter)
-            for loc_inp in locus_inputs:
-                loc_inp.on("keydown.enter", perform_search)
+            form.set_search(perform_search)
 
     except Exception as e:
-        import traceback
-
         with ui.column().classes("w-full px-6 py-6"):
-            ui.label(f"Error: {e}").classes("text-red-500 text-xl mb-4")
-            ui.label("Traceback:").classes("text-red-500 font-semibold")
-            ui.label(traceback.format_exc()).classes(
-                "text-red-500 text-xs font-mono whitespace-pre"
+            _show_error(e)
+
+
+def _show_error(e: Exception) -> None:
+    import traceback
+
+    ui.label(f"Error: {e}").classes("text-red-500 text-xl mb-4")
+    ui.label("Traceback:").classes("text-red-500 font-semibold")
+    ui.label(traceback.format_exc()).classes(
+        "text-red-500 text-xs font-mono whitespace-pre"
+    )
+
+
+def _show_message(container: Any, text: str, classes: str) -> None:
+    container.clear()
+    with container:
+        ui.label(text).classes(classes)
+
+
+async def _run_search(
+    form: SearchForm,
+    results_container: Any,
+    *,
+    store: Any,
+    cohort_name: str,
+    source_files: List[Dict[str, Any]],
+    pedigree_data: Dict[str, Dict[str, str]],
+    page_client: Any,
+) -> None:
+    """Execute the search — iterate over source components, union results."""
+    results_container.clear()
+    components = form.components
+
+    # Show progress indicator while loading
+    with results_container:
+        with ui.column().classes("items-center gap-4 justify-center py-8 w-full"):
+            progress = ui.circular_progress(
+                min=0, max=100, value=0, size="xl", color="blue"
             )
+            status_label = ui.label("Starting search...").classes(
+                "text-lg text-gray-600"
+            )
+
+    # Validate: at least one component, each with a locus or genesets
+    problem = missing_query(components)
+    if problem:
+        _show_message(results_container, problem, "text-orange-600")
+        return
+
+    async def step(value: int, text: str) -> None:
+        progress.set_value(value)
+        status_label.set_text(text)
+        await asyncio.sleep(0)
+
+    await step(10, "Loading data...")
+
+    try:
+        # --- Process each component ---
+        all_wombat_dfs: List[pl.DataFrame] = []
+        all_wcx_dfs: List[pl.DataFrame] = []
+        cohort = store.get_cohort(cohort_name)
+
+        for comp in components:
+            sf = find_source(source_files, comp["source_key"])
+            if sf is None:
+                continue
+
+            locus_val = comp["locus"]["value"]
+            query_params = None
+            if locus_val and locus_val.strip():
+                query_params = parse_locus_query(locus_val)
+
+            if comp["type"] == "wombat":
+                try:
+                    df = await asyncio.to_thread(
+                        load_wombat_source, store.data_dir, cohort, sf
+                    )
+                except MissingHeaderError as exc:
+                    # Read anyway, its first row would be the columns
+                    results_container.clear()
+                    with results_container:
+                        ui.label(
+                            f"Cannot search Wombat source {sf['display_name']}: {exc}"
+                        ).classes("text-red-600").mark("search-source-error")
+                    return
+                if df is None or len(df) == 0:
+                    continue
+                # Locus filter
+                if query_params:
+                    df = filter_dataframe(df, query_params)
+                # Geneset filter
+                df = apply_geneset_filter(df, comp, "wombat", form.genesets)
+                if df is not None and len(df) > 0:
+                    all_wombat_dfs.append(df)
+
+            elif comp["type"] == "wisecondorx":
+                df = await asyncio.to_thread(parse_wisecondorx_bed, sf["file_path"])
+                if df is None or len(df) == 0:
+                    continue
+                # Locus filter (use exonic columns if exonic_only is checked)
+                exonic = comp.get("exonic_only", {}).get("value", False)
+                if query_params:
+                    df = filter_bed_dataframe(df, query_params, exonic=exonic)
+                # Geneset filter, then calls and |ratio|
+                df = apply_geneset_filter(df, comp, "wisecondorx", form.genesets)
+                df = filter_wcx_calls(df, comp)
+                if df is not None and len(df) > 0:
+                    all_wcx_dfs.append(df)
+
+        await step(35, "Filtering data...")
+
+        # Deduplicate rows across components
+        wombat_filtered = combine_wombat(all_wombat_dfs)
+        wcx_filtered = combine_wcx(all_wcx_dfs)
+
+        await step(60, "Processing variants...")
+
+        wombat_count = len(wombat_filtered) if wombat_filtered is not None else 0
+        wcx_count = len(wcx_filtered) if wcx_filtered is not None else 0
+
+        if wombat_count == 0 and wcx_count == 0:
+            _show_message(
+                results_container, "No results found", "text-gray-500 text-lg italic"
+            )
+            return
+
+        # Load validation and diagnostic data
+        maps = CurationMaps(store.data_dir).load(
+            snv=wombat_filtered is not None, sv=wcx_filtered is not None
+        )
+
+        # Yield to event loop before badge processing
+        await asyncio.sleep(0)
+
+        # Track unknown terms for warnings
+        unknown_consequences: set = set()
+        unknown_clinvar_terms: set = set()
+        sample_to_family = {sid: ped["FID"] for sid, ped in pedigree_data.items()}
+        common: Dict[str, Any] = {
+            "cohort_name": cohort_name,
+            "pedigree_data": pedigree_data,
+            "sample_to_family": sample_to_family,
+            "maps": maps,
+            "gene_scorer": get_gene_scorer(),
+        }
+
+        # Each source's rows are filtered by its own components: a row passes
+        # if ANY component of its type would keep it.
+        all_rows: List[Dict[str, Any]] = []
+        if wombat_filtered is not None and wombat_count > 0:
+            all_rows.extend(
+                build_wombat_rows(
+                    wombat_filtered,
+                    [c for c in components if c["type"] == "wombat"],
+                    unknown_consequences=unknown_consequences,
+                    unknown_clinvar=unknown_clinvar_terms,
+                    **common,
+                )
+            )
+        if wcx_filtered is not None and wcx_count > 0:
+            all_rows.extend(
+                build_wcx_rows(
+                    wcx_filtered,
+                    [c for c in components if c["type"] == "wisecondorx"],
+                    **common,
+                )
+            )
+
+        await step(85, "Rendering table...")
+
+        notify_unknown_terms(unknown_consequences, unknown_clinvar_terms)
+
+        # Group same-group columns together
+        all_columns = reorder_columns_by_group(
+            result_columns(wombat_filtered, wcx_filtered)
+        )
+
+        # Auto-select preset based on component mix; its columns, else defaults
+        preset = initial_preset(components, source_files, VIEW_PRESETS)
+        initial_selected = [
+            col for col in preset.get("columns", []) if col in all_columns
+        ]
+        selected_cols = {
+            "value": initial_selected
+            or [col for col in DEFAULT_VISIBLE if col in all_columns]
+        }
+
+        all_rows = filter_individuals(all_rows, pedigree_data, form.individuals)
+
+        # MOI: does each SNV fit its gene's mode of inheritance?
+        # Second hits are looked for among these results only.
+        annotate_moi(all_rows, get_snapshot(), pedigree=moi_pedigree(pedigree_data))
+
+        await step(100, "Complete!")
+
+        # Clear progress indicator and show results
+        results_container.clear()
+        with results_container:
+            render_results(
+                SearchResults(
+                    rows=all_rows,
+                    all_columns=all_columns,
+                    selected_cols=selected_cols,
+                    selected_preset={"name": preset["name"]},
+                    has_wcx=any(c["type"] == "wisecondorx" for c in components),
+                    maps=maps,
+                    cohort_name=cohort_name,
+                    sample_to_family=sample_to_family,
+                    data_dir=store.data_dir,
+                    page_client=page_client,
+                )
+            )
+
+    except Exception as e:
+        results_container.clear()
+        with results_container:
+            _show_error(e)

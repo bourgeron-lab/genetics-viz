@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from genetics_viz.utils.validation_badges import build_validation_badge
+from genetics_viz.utils.validation_status import consensus
 
 #: ``validations/snvs.tsv``.
 SNV_VALIDATION_HEADER = [
@@ -145,40 +146,9 @@ def add_validation_status_to_row(
             row["Validation_badge"] = None
             return
 
-        validation_statuses = [v[0] for v in validations]
-        # Normalize "in phase MNV" to "present" for conflict detection
-        normalized_statuses = [
-            "present" if s == "in phase MNV" else s for s in validation_statuses
-        ]
-        unique_validations = set(normalized_statuses)
-
-        if len(unique_validations) > 1:
-            row["Validation"] = "conflicting"
-            row["ValidationInheritance"] = ""
-        elif "present" in unique_validations:
-            # Check if any is specifically "in phase MNV"
-            if "in phase MNV" in validation_statuses:
-                row["Validation"] = "in phase MNV"
-            else:
-                row["Validation"] = "present"
-            # Check inheritance - prioritize de novo, then homozygous,
-            # then first non-empty inheritance from present validations
-            present = [v for v in validations if v[0] in ("present", "in phase MNV")]
-            inh_values = [v[1] for v in present if v[1]]
-            if "de novo" in inh_values:
-                row["ValidationInheritance"] = "de novo"
-            elif "homozygous" in inh_values:
-                row["ValidationInheritance"] = "homozygous"
-            elif inh_values:
-                row["ValidationInheritance"] = inh_values[0]
-            else:
-                row["ValidationInheritance"] = ""
-        elif "absent" in unique_validations:
-            row["Validation"] = "absent"
-            row["ValidationInheritance"] = ""
-        else:
-            row["Validation"] = "uncertain"
-            row["ValidationInheritance"] = ""
+        row["Validation"], row["ValidationInheritance"] = consensus(
+            (v[0], v[1]) for v in validations
+        )
 
         row["Validation_badge"] = build_validation_badge(
             row["Validation"], row["ValidationInheritance"], validations

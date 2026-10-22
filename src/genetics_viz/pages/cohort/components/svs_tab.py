@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List
 
 from nicegui import ui
 
+from genetics_viz.utils.validation_status import row_status
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
 from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.components.diagnostic_loader import (
@@ -618,7 +619,7 @@ def render_wisecondorx_subtab(
                                     locus = r.get("chr:start-end", "")
                                     if ":" in locus:
                                         chrom = locus.split(":")[0].replace("chr", "")
-                                        status = r.get("Validation", "") or "TODO"
+                                        status = row_status(r)
                                         if chrom in chrom_counts:
                                             chrom_counts[chrom][status] = (
                                                 chrom_counts[chrom].get(status, 0) + 1
@@ -739,8 +740,7 @@ def render_wisecondorx_subtab(
                                             "text-lg font-semibold text-gray-800"
                                         )
                                         val_counts = Counter(
-                                            r.get("Validation", "") or "TODO"
-                                            for r in current_rows
+                                            row_status(r) for r in current_rows
                                         )
                                         val_data = [
                                             {

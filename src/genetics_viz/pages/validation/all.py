@@ -15,6 +15,11 @@ from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.validation_badges import build_validation_badge
+from genetics_viz.utils.validation_status import (
+    VALIDATED_STATUSES,
+    consensus,
+    filter_by_status,
+)
 from genetics_viz.utils.validation_files import VALIDATION_TYPES, validation_paths
 
 
@@ -135,42 +140,7 @@ async def validation_all_page() -> None:
                         # All are ignored, skip
                         continue
 
-                    validation_statuses = [v[0] for v in non_ignored_vals]
-                    # Normalize "in phase MNV" to "present" for conflict detection
-                    normalized_statuses = [
-                        "present" if s == "in phase MNV" else s
-                        for s in validation_statuses
-                    ]
-                    unique_validations = set(normalized_statuses)
-
-                    # Determine final validation status
-                    if len(unique_validations) > 1:
-                        final_validation = "conflicting"
-                        final_inheritance = ""
-                    elif "present" in unique_validations:
-                        # Check if any is specifically "in phase MNV"
-                        if "in phase MNV" in validation_statuses:
-                            final_validation = "in phase MNV"
-                        else:
-                            final_validation = "present"
-                        # Check inheritance - prioritize de novo, then homozygous
-                        inheritances = [
-                            v[1]
-                            for v in non_ignored_vals
-                            if v[0] in ("present", "in phase MNV")
-                        ]
-                        if "de novo" in inheritances:
-                            final_inheritance = "de novo"
-                        elif "homozygous" in inheritances:
-                            final_inheritance = "homozygous"
-                        else:
-                            final_inheritance = ""
-                    elif "absent" in unique_validations:
-                        final_validation = "absent"
-                        final_inheritance = ""
-                    else:
-                        final_validation = "uncertain"
-                        final_inheritance = ""
+                    final_validation, final_inheritance = consensus(non_ignored_vals)
 
                     # Build badge tuples for the badge builder
                     badge_vals = [
@@ -226,7 +196,7 @@ async def validation_all_page() -> None:
             all_unique_users = sorted(all_unique_users)
 
             # Filter state - all statuses selected by default
-            all_validation_statuses = ["present", "absent", "uncertain", "conflicting"]
+            all_validation_statuses = list(VALIDATED_STATUSES)
             filter_validations: Dict[str, List[str]] = {
                 "value": list(all_validation_statuses)
             }
@@ -426,12 +396,9 @@ async def validation_all_page() -> None:
                     ]
 
                 # Filter by validation status
-                if filter_validations["value"]:
-                    filtered_data = [
-                        row
-                        for row in filtered_data
-                        if row.get("Validation") in filter_validations["value"]
-                    ]
+                filtered_data = filter_by_status(
+                    filtered_data, filter_validations["value"]
+                )
 
                 # Filter by user
                 if filter_users["value"]:
