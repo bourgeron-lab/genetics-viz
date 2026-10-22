@@ -1,8 +1,10 @@
 """Authentication and authorization helpers."""
 
+from urllib.parse import quote
+
 from starlette.responses import RedirectResponse
 
-from nicegui import app
+from nicegui import app, context
 
 
 def check_auth() -> RedirectResponse | None:
@@ -14,8 +16,20 @@ def check_auth() -> RedirectResponse | None:
             return redirect
     """
     if not is_authenticated():
-        return RedirectResponse("/login")
+        return RedirectResponse(_login_url())
     return None
+
+
+def _login_url() -> str:
+    """``/login``, with the page asked for as ``next``: a shared link survives."""
+    try:
+        url = context.client.request.url
+    except (AttributeError, RuntimeError):
+        return "/login"
+    target = url.path + (f"?{url.query}" if url.query else "")
+    if target == "/":
+        return "/login"
+    return f"/login?next={quote(target, safe='')}"
 
 
 def is_authenticated() -> bool:

@@ -10,10 +10,12 @@ import asyncio
 from typing import Any, Dict, List
 
 import polars as pl
+from fastapi import Request
 from nicegui import context, ui
 
 from genetics_viz.components.filters import notify_unknown_terms
 from genetics_viz.components.header import create_header
+from genetics_viz.components.page_link import PageLink
 from genetics_viz.pages.search_form import SearchForm, render_search_form
 from genetics_viz.pages.search_results import SearchResults, render_results
 from genetics_viz.utils.auth import check_auth
@@ -42,6 +44,8 @@ from genetics_viz.utils.search_rows import (
     filter_wcx_calls,
     find_source,
     find_sources,
+    form_from_link,
+    form_to_link,
     initial_preset,
     load_wombat_source,
     missing_query,
@@ -54,10 +58,16 @@ from genetics_viz.utils.wisecondorx import parse_wisecondorx_bed
 
 
 @ui.page("/search/{cohort_name}")
-def search_cohort_page(cohort_name: str) -> None:
-    """Search page for cohort-wide variant search."""
+def search_cohort_page(cohort_name: str, request: Request) -> None:
+    """Search page for cohort-wide variant search.
+
+    Running a search writes the form into the URL query (``q``), and a page
+    opened with one fills the form and runs it: the address is a link to the
+    results.
+    """
     if redirect := check_auth():
         return redirect
+    link = PageLink.from_request(request)
     create_header(cohort_name)
 
     # Add IGV.js library
@@ -109,8 +119,15 @@ def search_cohort_page(cohort_name: str) -> None:
                     - PED_MISSING
                 ),
             )
-            # Initialize component list with one default wombat component
-            form.reset_components()
+            # The linked search, else one default wombat component
+            linked = form_from_link(
+                link.get("q"), form.wombat_sources, form.wcx_sources
+            )
+            if linked is not None and linked[0]:
+                form.components[:], form.individuals = linked
+            else:
+                linked = None
+                form.reset_components()
 
             search_button = render_search_form(form)
 
@@ -121,6 +138,10 @@ def search_cohort_page(cohort_name: str) -> None:
             page_client = context.client
 
             async def perform_search():
+                link.set(
+                    "q", form_to_link(form.components, form.individuals, source_files)
+                )
+                link.push()
                 await _run_search(
                     form,
                     results_container,
@@ -134,6 +155,8 @@ def search_cohort_page(cohort_name: str) -> None:
             # Set up handlers after function definition
             search_button.on_click(perform_search)
             form.set_search(perform_search)
+            if linked is not None:
+                ui.timer(0.1, perform_search, once=True)
 
     except Exception as e:
         with ui.column().classes("w-full px-6 py-6"):

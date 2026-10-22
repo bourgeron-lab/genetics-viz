@@ -4,11 +4,13 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, List
 
+from fastapi import Request
 from nicegui import ui
 
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
+from genetics_viz.components.page_link import PageLink, link_members
 from genetics_viz.components.notes_loader import (
     delete_note,
     ensure_notes_file,
@@ -63,10 +65,15 @@ def _render_availability_badges(avail: dict) -> None:
 
 
 @ui.page("/family/{family_id}")
-async def standalone_family_page(family_id: str) -> None:
-    """Render the standalone family detail page (no cohort context)."""
+async def standalone_family_page(family_id: str, request: Request) -> None:
+    """Render the standalone family detail page (no cohort context).
+
+    The open tab, the selected members and the Wombat and SV filters are in
+    the URL query, as on the cohort family page.
+    """
     if redirect := check_auth():
         return redirect
+    link = PageLink.from_request(request)
     create_header()
 
     # Add IGV.js library at page level
@@ -182,6 +189,12 @@ async def standalone_family_page(family_id: str) -> None:
                 "value": [m["Sample ID"] for m in members_data]
             }
             data_table_refreshers: List = []
+            link_members(
+                link,
+                selected_members,
+                [m["Sample ID"] for m in members_data],
+                data_table_refreshers,
+            )
 
             # Redraws the member QC icons after a review in the Sample QC tab.
             qc_icons: Dict[str, Any] = {"update": None}
@@ -381,7 +394,38 @@ async def standalone_family_page(family_id: str) -> None:
                 if not has_qc:
                     qc_tab.props("disable")
 
-            with ui.tab_panels(tabs, value=wombat_tab).classes("w-full"):
+            # A shared link opens its tab, when the family has its data
+            tab_slugs = {
+                "Wombat": "wombat",
+                "SVs": "svs",
+                "Ancestry": "ancestry",
+                "Polygenic Scores": "pgs",
+                "ROH": "roh",
+                "STR": "str",
+                "Sample QC": "qc",
+            }
+            tab_has_data = {
+                "wombat": True,
+                "svs": True,
+                "ancestry": has_ancestry,
+                "pgs": has_pgs,
+                "roh": has_roh,
+                "str": has_str,
+                "qc": has_qc,
+            }
+            linked_tab = link.get("tab") or ""
+            open_tab = linked_tab if tab_has_data.get(linked_tab) else "wombat"
+            tab_objects = {
+                "wombat": wombat_tab,
+                "svs": svs_tab,
+                "ancestry": ancestry_tab,
+                "pgs": pgs_tab,
+                "roh": roh_tab,
+                "str": str_tab,
+                "qc": qc_tab,
+            }
+
+            with ui.tab_panels(tabs, value=tab_objects[open_tab]).classes("w-full"):
                 with ui.tab_panel(wombat_tab).classes(
                     "border border-gray-300 rounded-lg p-4"
                 ):
@@ -396,6 +440,7 @@ async def standalone_family_page(family_id: str) -> None:
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
                                 family=family,
+                                link=link,
                             )
                         else:
                             with ui.column().classes(
@@ -421,6 +466,7 @@ async def standalone_family_page(family_id: str) -> None:
                                 cohort_name="",
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                link=link,
                             )
                         else:
                             with ui.column().classes(
@@ -600,6 +646,8 @@ async def standalone_family_page(family_id: str) -> None:
             }
 
             def on_tab_change(e):
+                link.set("tab", tab_slugs.get(e.args), default="wombat")
+                link.push()
                 entry = lazy_tabs.get(e.args)
                 if entry is None:
                     return
@@ -614,6 +662,17 @@ async def standalone_family_page(family_id: str) -> None:
                 ui.timer(0.1, load, once=True)
 
             tabs.on("update:model-value", on_tab_change)
+
+            # The linked tab loads as a click on it would
+            if open_tab != "wombat":
+                label = next(k for k, v in tab_slugs.items() if v == open_tab)
+                _, state, content = lazy_tabs[label]
+
+                def load_linked():
+                    state["loaded"] = True
+                    content.refresh()
+
+                ui.timer(0.1, load_linked, once=True)
 
     except Exception as e:
         import traceback

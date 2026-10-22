@@ -5,9 +5,11 @@ import csv
 from collections import defaultdict
 from typing import Any, Callable, Dict, List
 
+from fastapi import Request
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.components.page_link import PageLink
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.pages.cohort.components.cohort_ancestry_tab import (
     probe_cohort_ancestry_data,
@@ -108,11 +110,60 @@ def _render_workflow_tab(cohort: Any) -> None:
                 render_params_doc_panel()
 
 
+#: Link key of each individuals-table column filter, and its empty value.
+_FILTER_LINK = {
+    "FID": ("fid", ""),
+    "Sample ID": ("sid", ""),
+    "Sex": ("sex", []),
+    "Phenotype": ("pheno", []),
+    "Diagnostic": ("diag", []),
+    "QC": ("qc", []),
+    "Father": ("father", False),
+    "Mother": ("mother", False),
+}
+
+#: Link value of each right-hand panel tab.
+_PANEL_SLUGS = {
+    "Statistics": "stats",
+    "Ancestry": "ancestry",
+    "Polygenic Scores": "pgs",
+    "ROH": "roh",
+    "STR": "str",
+    "Sample QC": "qc",
+}
+
+
+def _filters_from_link(link: PageLink) -> Dict[str, Any]:
+    """The table's column filter values a shared link sets."""
+    filters: Dict[str, Any] = {}
+    for col, (key, empty) in _FILTER_LINK.items():
+        if key not in link.params:
+            continue
+        if isinstance(empty, list):
+            filters[col] = link.get_list(key) or []
+        elif isinstance(empty, bool):
+            filters[col] = link.get_bool(key, False)
+        else:
+            filters[col] = link.get(key) or ""
+    return filters
+
+
+def _filters_to_link(filters: Dict[str, Any], link: PageLink) -> None:
+    for col, (key, empty) in _FILTER_LINK.items():
+        value = filters.get(col)
+        link.set(key, value if value else None, default=empty)
+
+
 @ui.page("/cohort/{cohort_name}")
-def cohort_page(cohort_name: str) -> None:
-    """Render the cohort detail page."""
+def cohort_page(cohort_name: str, request: Request) -> None:
+    """Render the cohort detail page.
+
+    The open tabs and the individuals table's filters are in the URL query
+    (``components/page_link.py``), so the address is a link to this view.
+    """
     if redirect := check_auth():
         return redirect
+    link = PageLink.from_request(request)
     create_header(cohort_name)
 
     try:
@@ -309,9 +360,12 @@ def cohort_page(cohort_name: str) -> None:
 
                             # Table holder for update_data access
                             dt_ref: Dict[str, Any] = {"dt": None}
+                            linked_filters = _filters_from_link(link)
 
                             def on_filter(e: Dict[str, Any]) -> None:
                                 filters = e.get("filters", {})
+                                _filters_to_link(filters, link)
+                                link.push()
                                 filtered = all_individuals
 
                                 # FID text filter
@@ -514,8 +568,13 @@ def cohort_page(cohort_name: str) -> None:
                                 row_key="Sample ID",
                                 pagination={"rowsPerPage": 20},
                                 on_filter=on_filter,
+                                initial_filters=linked_filters,
                             )
                             dt_ref["dt"] = dt
+                            # A shared link's filters apply before the panels
+                            # are built, so they open on the filtered individuals
+                            if linked_filters:
+                                on_filter({"filters": linked_filters})
 
                         # Right: tabbed panel — Statistics, Ancestry, Polygenic
                         # Scores, ROH, STR. Everything describing the pipeline run lives on the
@@ -567,9 +626,36 @@ def cohort_page(cohort_name: str) -> None:
                                 if not has_qc:
                                     qc_tab.props("disable")
 
-                            with ui.tab_panels(panel_tabs, value=stats_tab).classes(
-                                "w-full"
-                            ):
+                            # A shared link opens its panel tab, when it has data
+                            panel_has_data = {
+                                "Statistics": True,
+                                "Ancestry": has_ancestry,
+                                "Polygenic Scores": has_pgs,
+                                "ROH": has_roh,
+                                "STR": has_str,
+                                "Sample QC": has_qc,
+                            }
+                            panel_objects = {
+                                "Statistics": stats_tab,
+                                "Ancestry": ancestry_tab,
+                                "Polygenic Scores": pgs_tab,
+                                "ROH": roh_tab,
+                                "STR": str_tab,
+                                "Sample QC": qc_tab,
+                            }
+                            linked_panel = next(
+                                (
+                                    label
+                                    for label, slug in _PANEL_SLUGS.items()
+                                    if slug == link.get("panel")
+                                    and panel_has_data[label]
+                                ),
+                                "Statistics",
+                            )
+
+                            with ui.tab_panels(
+                                panel_tabs, value=panel_objects[linked_panel]
+                            ).classes("w-full"):
                                 # Each renderer opens its own card, so the panels carry
                                 # no border of their own and the chrome is not doubled.
                                 with ui.tab_panel(stats_tab).classes("w-full p-0"):
@@ -686,12 +772,12 @@ def cohort_page(cohort_name: str) -> None:
                                 "Sample QC": (has_qc, qc_content),
                             }
 
-                            def on_panel_tab_change(e: Any) -> None:
-                                entry = lazy_tabs.get(e.args)
+                            def open_panel(label: str) -> None:
+                                entry = lazy_tabs.get(label)
                                 if entry is None:
                                     return
                                 available, content = entry
-                                state = tab_state[e.args]
+                                state = tab_state[label]
                                 if not available or state["loaded"]:
                                     return
 
@@ -701,7 +787,15 @@ def cohort_page(cohort_name: str) -> None:
 
                                 ui.timer(0.1, load, once=True)
 
+                            def on_panel_tab_change(e: Any) -> None:
+                                link.set(
+                                    "panel", _PANEL_SLUGS.get(e.args), default="stats"
+                                )
+                                link.push()
+                                open_panel(e.args)
+
                             panel_tabs.on("update:model-value", on_panel_tab_change)
+                            open_panel(linked_panel)
 
                 if workflow_tab is not None:
                     with ui.tab_panel(workflow_tab).classes("w-full p-0"):
@@ -716,7 +810,12 @@ def cohort_page(cohort_name: str) -> None:
                         workflow_content()
 
             def on_page_tab_change(e: Any) -> None:
-                if e.args != "Workflow" or workflow_state["loaded"]:
+                link.set("view", "workflow" if e.args == "Workflow" else None)
+                link.push()
+                open_page_tab(e.args)
+
+            def open_page_tab(label: str) -> None:
+                if label != "Workflow" or workflow_state["loaded"]:
                     return
 
                 async def load() -> None:
@@ -732,6 +831,9 @@ def cohort_page(cohort_name: str) -> None:
                 ui.timer(0.1, load, once=True)
 
             page_tabs.on("update:model-value", on_page_tab_change)
+            if workflow_tab is not None and link.get("view") == "workflow":
+                page_tabs.set_value(workflow_tab)
+                open_page_tab("Workflow")
 
     except RuntimeError as e:
         ui.label(f"Error: {e}").classes("text-red-500")
