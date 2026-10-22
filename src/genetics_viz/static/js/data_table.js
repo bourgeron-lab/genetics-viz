@@ -19,6 +19,8 @@ class DataTable {
         this.selectedRowKeys = [];
         this.stickyFirstColumn = config.stickyFirstColumn || false;
         this.rowKey = config.rowKey || 'id';
+        // Column filter values to start from (a shared link's filters)
+        this._filterValues = Object.assign({}, config.initialFilters || {});
 
         this._allColumnDefs = config.columns;
         this._visibleColumnIds = config.visibleColumns

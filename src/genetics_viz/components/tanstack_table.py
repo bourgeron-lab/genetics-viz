@@ -101,6 +101,8 @@ class DataTable:
         initial_sorting: list[dict[str, Any]] | None = None,
         initial_page: int = 0,
         state_holder: dict[str, Any] | None = None,
+        on_state_change: Callable[[], None] | None = None,
+        initial_filters: dict[str, Any] | None = None,
         instance_id: str | None = None,
     ):
         self.instance_id = instance_id or f"dt-{uuid.uuid4().hex[:8]}"
@@ -121,6 +123,11 @@ class DataTable:
         self.sorting = list(self.initial_sorting)
         self.initial_page = initial_page
         self._state_holder = state_holder
+        # Called after a sort or page change has been recorded (a shareable
+        # link follows the table this way).
+        self._on_state_change = on_state_change
+        # Column filter values to start from, as the filter row reports them.
+        self.initial_filters = initial_filters or {}
 
         _inject_once()
         self._create_container()
@@ -153,7 +160,11 @@ class DataTable:
         if self._on_filter:
             ui.on(f"{prefix}_filterChange", lambda e: self._on_filter(e.args))
 
-        if self._on_page_change or self._state_holder is not None:
+        if (
+            self._on_page_change
+            or self._state_holder is not None
+            or self._on_state_change
+        ):
             ui.on(f"{prefix}_page-change", self._handle_page_change)
 
     def _init_table(self) -> None:
@@ -172,6 +183,8 @@ class DataTable:
             cfg_dict["initialSorting"] = self.initial_sorting
         if self.initial_page:
             cfg_dict["initialPage"] = self.initial_page
+        if self.initial_filters:
+            cfg_dict["initialFilters"] = self.initial_filters
         config = json.dumps(cfg_dict, default=str)
         data = json.dumps(self.rows, default=str)
         inst_id = self.instance_id
@@ -213,6 +226,8 @@ class DataTable:
             self._state_holder["page"] = page
         if self._on_page_change:
             self._on_page_change(e.args)
+        if self._on_state_change:
+            self._on_state_change()
 
     # ---- Default sort handler (server-side in Python) ----
 
@@ -273,3 +288,5 @@ class DataTable:
             self._state_holder["sorting"] = sorting
             self._state_holder["page"] = 0  # Sort resets to page 0
         self.update_data(self.rows)
+        if self._on_state_change:
+            self._on_state_change()

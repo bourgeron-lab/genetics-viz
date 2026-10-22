@@ -11,6 +11,11 @@ from typing import Any, Callable, Dict, List
 
 from nicegui import ui
 
+from genetics_viz.components.page_link import (
+    PageLink,
+    decode_consequences,
+    encode_consequences,
+)
 from genetics_viz.components.filters import (
     create_consequence_filter_menu,
     create_geneset_filter_menu,
@@ -49,6 +54,39 @@ class WombatFilters:
     validations: Dict[str, List[str]] = field(
         default_factory=lambda: {"value": list(FILTER_STATUSES)}
     )
+
+
+#: Link keys of the shown config's filters, prefixed ``w`` (Wombat tab).
+LINK_KEYS = ("wlcr", "wgnomad", "wmnv", "wgs", "wimp", "wval")
+
+
+def filters_from_link(link: PageLink) -> WombatFilters:
+    """The filters a shared link sets; defaults for what it leaves out."""
+    filters = WombatFilters()
+    filters.exclude_lcr["value"] = link.get_bool("wlcr", True)
+    filters.exclude_gnomad["value"] = link.get_bool("wgnomad", True)
+    filters.exclude_mnv["value"] = link.get_bool("wmnv", True)
+    if (genesets := link.get_list("wgs")) is not None:
+        filters.genesets["value"] = genesets
+    if (impacts := link.get_list("wimp")) is not None:
+        filters.impacts["value"] = decode_consequences(impacts)
+    if (statuses := link.get_list("wval")) is not None:
+        filters.validations["value"] = [s for s in statuses if s in FILTER_STATUSES]
+    return filters
+
+
+def filters_to_link(filters: WombatFilters, link: PageLink) -> None:
+    """Write the filters into the link, leaving defaults out."""
+    link.set("wlcr", filters.exclude_lcr["value"], default=True)
+    link.set("wgnomad", filters.exclude_gnomad["value"], default=True)
+    link.set("wmnv", filters.exclude_mnv["value"], default=True)
+    link.set("wgs", filters.genesets["value"], default=[])
+    impacts = filters.impacts["value"]
+    link.set(
+        "wimp",
+        None if set(impacts) == set(VEP_CONSEQUENCES) else encode_consequences(impacts),
+    )
+    link.set("wval", filters.validations["value"], default=FILTER_STATUSES)
 
 
 def apply_filters(

@@ -20,10 +20,14 @@ from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.filters import notify_unknown_terms
+from genetics_viz.components.page_link import PageLink, decode_sorting, encode_sorting
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
 from genetics_viz.models import Family
 from genetics_viz.pages.cohort.components.wombat_filters import (
+    LINK_KEYS,
+    filters_from_link,
+    filters_to_link,
     WombatFilters,
     apply_filters,
     render_filter_panel,
@@ -147,6 +151,59 @@ class _ConfigView:
     table: Optional[DataTable] = None
 
 
+class _WombatLink:
+    """The Wombat tab's part of the page link.
+
+    It holds the shown config (``wcfg``) and that config's filters, sorting
+    (``wsort``) and page (``wpage``). The other configs keep their own state
+    while hidden, but only the shown one is in the link.
+    """
+
+    def __init__(self, link: Optional[PageLink], default_cfg: str, shown: str):
+        self.link = link
+        self.default_cfg = default_cfg
+        self.current = shown
+        self.views: Dict[str, _ConfigView] = {}
+
+    def initial_state(self, cfg: str) -> tuple[WombatFilters, Dict[str, Any]]:
+        """The filters and table state a config opens with.
+
+        The link's apply to the config it names, once: a config opened later
+        starts from the defaults.
+        """
+        if self.link is not None and cfg == self.current and not self.views:
+            page = self.link.get("wpage") or "0"
+            return filters_from_link(self.link), {
+                "sorting": decode_sorting(self.link.get("wsort")),
+                "page": int(page) if page.isdigit() else 0,
+            }
+        return WombatFilters(), {"sorting": [], "page": 0}
+
+    def register(self, cfg: str, view: _ConfigView) -> None:
+        self.views[cfg] = view
+
+    def show(self, cfg: str) -> None:
+        self.current = cfg
+        self.write()
+
+    def changed(self, cfg: str) -> None:
+        if cfg == self.current:
+            self.write()
+
+    def write(self) -> None:
+        if self.link is None:
+            return
+        self.link.set("wcfg", self.current, default=self.default_cfg)
+        view = self.views.get(self.current)
+        if view is None:
+            self.link.drop(*LINK_KEYS, "wsort", "wpage")
+        else:
+            filters_to_link(view.filters, self.link)
+            self.link.set("wsort", encode_sorting(view.table_state.get("sorting", [])))
+            self.link.set("wpage", view.table_state.get("page", 0), default=0)
+        self.link.push()
+
+
 def render_wombat_tab(
     store: Any,
     family_id: str,
@@ -155,6 +212,7 @@ def render_wombat_tab(
     data_table_refreshers: List[Callable[[], None]],
     family: Optional[Family] = None,
     on_open_qc: Optional[Callable[[], None]] = None,
+    link: Optional[PageLink] = None,
 ) -> None:
     """Render the Wombat tab panel content.
 
@@ -167,6 +225,7 @@ def render_wombat_tab(
         family: The family's pedigree, for the MOI column's sex and parental
             phenotypes
         on_open_qc: Opens the family's Sample QC tab, from the de novo warning
+        link: The page link: the shown config, its filters, sorting and page
     """
     wombat_dir = get_family_path(store.data_dir, family_id) / "wombat"
 
@@ -217,7 +276,13 @@ def render_wombat_tab(
         ),
         wombat_files[0]["wombat_config"],
     )
+    # A shared link names the config to show, when it has variants
+    default_cfg = first_active_name
+    linked_cfg = link.get("wcfg") if link is not None else None
+    if linked_cfg in config_dfs:
+        first_active_name = linked_cfg
     first_active = subtab_refs[first_active_name]
+    wombat_link = _WombatLink(link, default_cfg, first_active_name)
 
     # Each sub-tab is built the first time it is shown, as the family page's
     # tabs are: a config nobody opens costs nothing. Keyed by config name,
@@ -252,6 +317,7 @@ def render_wombat_tab(
                     available_genesets,
                     family,
                     on_open_qc,
+                    wombat_link,
                 )
 
             unbuilt_panels[config_name] = (panel_slot, build_panel)
@@ -266,6 +332,7 @@ def render_wombat_tab(
             build_panel()
 
     def on_subtab_change(e) -> None:
+        wombat_link.show(e.args)
         if e.args in unbuilt_panels:
             ui.timer(0.1, lambda: build_subtab(e.args), once=True)
 
@@ -284,6 +351,7 @@ def _render_config_panel(
     available_genesets: List[Any],
     family: Optional[Family],
     on_open_qc: Optional[Callable[[], None]],
+    wombat_link: _WombatLink,
 ) -> None:
     """One config's sub-tab: the config card, the filters and the table."""
     config_name = wf["wombat_config"]
@@ -313,6 +381,7 @@ def _render_config_panel(
         all_columns = wombat_columns(df.columns)
         # Auto-select preset based on keywords, its columns that the data has
         initial_preset = select_preset_for_config(config_name, VIEW_PRESETS)
+        filters, table_state = wombat_link.initial_state(config_name)
         view = _ConfigView(
             has_sample="sample" in df.columns,
             all_rows=all_rows,
@@ -323,7 +392,10 @@ def _render_config_panel(
                 ]
             },
             selected_preset={"name": initial_preset["name"]},
+            filters=filters,
+            table_state=table_state,
         )
+        wombat_link.register(config_name, view)
 
         # Capture the client context for use in callbacks
         from nicegui import context
@@ -331,10 +403,15 @@ def _render_config_panel(
         page_client = context.client
 
         with ui.column().classes("w-full"):
+
+            def filters_changed() -> None:
+                # A filter change shows the first page again
+                view.table_state["page"] = 0
+                render_data_table.refresh()
+                wombat_link.changed(config_name)
+
             render_filter_panel(
-                view.filters,
-                available_genesets,
-                on_change=lambda: render_data_table.refresh(),
+                view.filters, available_genesets, on_change=filters_changed
             )
 
             @ui.refreshable
@@ -348,6 +425,7 @@ def _render_config_panel(
                     selected_members,
                     available_genesets,
                     on_curation_saved=refresh_curation,
+                    on_table_change=lambda: wombat_link.changed(config_name),
                 )
 
             def refresh_curation() -> None:
@@ -375,6 +453,7 @@ def _render_table(
     selected_members: Dict[str, List[str]],
     available_genesets: List[Any],
     on_curation_saved: Callable[[], None],
+    on_table_change: Callable[[], None],
 ) -> None:
     """The count, preset, Columns/Stats/Download row, then the table itself."""
     config_name = wf["wombat_config"]
@@ -508,6 +587,7 @@ def _render_table(
         initial_sorting=saved_sorting,
         initial_page=view.table_state.get("page", 0),
         state_holder=view.table_state,
+        on_state_change=on_table_change,
     )
 
     def on_preset_change(e):

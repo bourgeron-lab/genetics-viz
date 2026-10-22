@@ -3,11 +3,13 @@
 from datetime import datetime
 from typing import Any, Dict, List
 
+from fastapi import Request
 from nicegui import ui
 
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
+from genetics_viz.components.page_link import PageLink, link_members
 from genetics_viz.components.notes_loader import (
     delete_note,
     ensure_notes_file,
@@ -51,10 +53,16 @@ from genetics_viz.utils.sample_qc import (
 
 
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
-def family_page(cohort_name: str, family_id: str) -> None:
-    """Render the family detail page."""
+def family_page(cohort_name: str, family_id: str, request: Request) -> None:
+    """Render the family detail page.
+
+    The open tab, the selected members and the Wombat and SV filters are in
+    the URL query (``components/page_link.py``), so the address is a link to
+    this view.
+    """
     if redirect := check_auth():
         return redirect
+    link = PageLink.from_request(request)
     create_header(cohort_name)
 
     # Add IGV.js library at page level
@@ -170,6 +178,12 @@ def family_page(cohort_name: str, family_id: str) -> None:
 
             # Store refresh functions for all data tables
             data_table_refreshers: List = []
+            link_members(
+                link,
+                selected_members,
+                [m["Sample ID"] for m in members_data],
+                data_table_refreshers,
+            )
 
             with ui.row().classes("w-full gap-4 items-start"):
                 _, qc_active, qc_acked = qc["summary"]
@@ -397,6 +411,20 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 default_tab_name = "qc"
             else:
                 default_tab_name = "wombat"
+            first_tab_name = default_tab_name
+
+            # A shared link opens its tab, when the family has its data
+            tab_has_data = {
+                "wombat": has_wombat,
+                "svs": has_svs,
+                "ancestry": has_ancestry,
+                "pgs": has_pgs,
+                "roh": has_roh,
+                "str": has_str,
+                "qc": has_qc,
+            }
+            if tab_has_data.get(link.get("tab") or ""):
+                default_tab_name = link.get("tab")
 
             default_tab = {
                 "wombat": wombat_tab,
@@ -433,6 +461,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                     if has_qc
                                     else None
                                 ),
+                                link=link,
                             )
                         else:
                             with ui.column().classes(
@@ -463,6 +492,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                                 cohort_name=cohort_name,
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                link=link,
                             )
                         else:
                             with ui.column().classes(
@@ -663,10 +693,17 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 ui.timer(0.1, make_loader(default_state, default_content), once=True)
 
             # Lazy load tabs when clicked
+            tab_slugs = {label: slug for slug, label in tab_names.items()}
+
+            def link_tab(label: str) -> None:
+                link.set("tab", tab_slugs.get(label), default=first_tab_name)
+                link.push()
+
             def on_tab_change(e):
                 entry = lazy_tabs.get(e.args)
                 if entry is None:
                     return
+                link_tab(e.args)
                 available, state, content = entry
                 if available and not state["loaded"]:
                     ui.timer(0.1, make_loader(state, content), once=True)
@@ -677,6 +714,7 @@ def family_page(cohort_name: str, family_id: str) -> None:
                 if not has_qc:
                     return
                 tabs.set_value(qc_tab)
+                link_tab("Sample QC")
                 if not qc_state["loaded"]:
                     ui.timer(0.1, make_loader(qc_state, qc_content), once=True)
 

@@ -61,6 +61,7 @@ src/genetics_viz/
     sv_read_panel.py              # SV dialog: samplot-like read-evidence panel
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
+    page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
     diagnostic_dialog.py          # Diagnostic review dialog
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
     upd_dialog.py                 # UPD review: evidence, validation, diagnostic (ROH + Sample QC tabs)
@@ -424,6 +425,16 @@ Every cohort right-hand tab but Statistics, and every family tab, has a `Downloa
 - Per-sample files start `FID, IID, sex, phenotype` (pedigree codes via `export.person`); the PGS export is samples × traits at both levels, not the family table's transpose. ROH percentiles are headed `_vs_ref_group`: they are against the reference group, not the cohort.
 - Builders run in `asyncio.to_thread` at click time: resolve `can_write()` at render and close over it. Content reaches `ui.download` as **bytes** — the test `UserDownload` fetches a `str` as a URL. A header-only result shows "Nothing to download".
 - Wombat and SV exports are the table's current `DataTable.rows` (filtered and sorted in Python) with the shown columns, through `is_export_column`, as the Search page's Download TSV.
+
+### Shareable Links (view state in the URL)
+The family pages (both), the cohort page and the Search page keep their view in the URL query, so the address bar is a link a curator can send (`components/page_link.py`).
+- **Read at build, written as it changes.** A page takes `request: Request`, builds `PageLink.from_request(request)` and opens with its values; every change calls `link.set(...)` then `link.push()` (`history.replaceState`: no reload, no history entry per click). Only non-default values are written, so a page opened bare is in its usual state.
+- **Keys:** family pages `tab`, `m` (members), the Wombat tab's shown config `wcfg` and its `wlcr`/`wgnomad`/`wmnv`/`wgs`/`wimp`/`wval`/`wsort`/`wpage`, the SV tab `svcalls`; cohort page `view=workflow`, `panel`, and the individuals table's column filters (`fid`, `sid`, `sex`, `pheno`, `diag`, `qc`, `father`, `mother`); Search `q`, the whole form as compact JSON, written when Search runs and run on open.
+- Lists are comma-joined, `-` is an emptied list (not the same as absent). Consequences shorten to impact levels (`wimp=HIGH`). Search names sources by display name, never by directory: a link carries no server path.
+- Only the shown Wombat config is in the link; the others keep their state while hidden. A linked value the page cannot honour (a tab without data, an unknown config or member) falls back to the default.
+- **The query is in the server's access log**, as the path already is. The fragment would not be, but Python could only read it after the page was built, through a JavaScript round trip.
+- **Login keeps the link**: `check_auth` redirects to `/login?next=<path?query>`, and the login goes there after success. `safe_next` accepts only a path on this site (not `//host`, `/\host`, a full URL or `/login`).
+- Tables: `DataTable(initial_filters=..., on_state_change=...)` opens with column filter values and reports sort/page changes.
 
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.

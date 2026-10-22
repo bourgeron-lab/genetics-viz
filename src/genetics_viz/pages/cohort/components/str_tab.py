@@ -177,7 +177,7 @@ def render_eh_subtab(
         "members": [],
         "context": None,
         "context_loading": cohort is not None,
-        "hide_normal": False,
+        "hide_normal": True,
     }
 
     def load_family() -> bool:
@@ -235,7 +235,7 @@ def render_eh_subtab(
         ui.space()
         ui.switch(
             "Hide loci where every member is normal",
-            value=False,
+            value=state["hide_normal"],
             on_change=lambda e: (
                 state.update({"hide_normal": e.value}),
                 content.refresh(),

@@ -236,6 +236,19 @@ async def test_family_str_table_filters_on_locus_and_disease(user, monkeypatch):
     open_tab(user, "family-tabs", "STR")
     await user.should_see("compared with 3 founders", retries=30)
 
+    # Loci where every member is normal are hidden by default (ARX_2 here)
+    assert "ARX_2" not in {r["locus"] for r in tables[-1]["rows"]}
+    hide = next(
+        iter(user.find(kind=ui.switch, content="every member is normal").elements)
+    )
+    assert hide.value is True
+    with user.client:
+        hide.set_value(False)
+    for _ in range(100):
+        if "ARX_2" in {r["locus"] for r in tables[-1]["rows"]}:
+            break
+        await asyncio.sleep(0.05)
+
     eh = tables[-1]
     assert eh["on_filter"], "the Locus and Disease filter boxes need a handler"
     table = eh["table"]

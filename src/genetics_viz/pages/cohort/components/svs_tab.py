@@ -1,7 +1,7 @@
 """SVs tab component for family page."""
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
@@ -20,6 +20,7 @@ from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.export import export_filename, is_export_column, rows_to_tsv
+from genetics_viz.components.page_link import PageLink
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -74,6 +75,7 @@ def render_svs_tab(
     cohort_name: str,
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
+    link: Optional[PageLink] = None,
 ) -> None:
     """Render the SVs tab panel content.
 
@@ -83,6 +85,7 @@ def render_svs_tab(
         cohort_name: Cohort name
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
+        link: The page link: the WisecondorX call types shown (``svcalls``)
     """
     svs_dir = get_family_path(store.data_dir, family_id) / "svs"
 
@@ -130,6 +133,7 @@ def render_svs_tab(
                     selected_members=selected_members,
                     data_table_refreshers=data_table_refreshers,
                     cohort_name=cohort_name,
+                    link=link,
                 )
 
 
@@ -140,6 +144,7 @@ def render_wisecondorx_subtab(
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
     cohort_name: str,
+    link: Optional[PageLink] = None,
 ) -> None:
     """Render the WisecondorX subtab content.
 
@@ -410,8 +415,14 @@ def render_wisecondorx_subtab(
             "Below threshold",
         ]
         # Default: all selected except "Below threshold"
+        default_calls = [call for call in all_call_values if call != "Below threshold"]
+        linked_calls = link.get_list("svcalls") if link is not None else None
         selected_calls = {
-            "value": [call for call in all_call_values if call != "Below threshold"]
+            "value": (
+                [c for c in all_call_values if c in linked_calls]
+                if linked_calls is not None
+                else list(default_calls)
+            )
         }
 
         # Create a container for the data table
@@ -925,6 +936,11 @@ def render_wisecondorx_subtab(
 
                 def update_call_filter():
                     render_data_table.refresh()
+                    if link is not None:
+                        link.set(
+                            "svcalls", selected_calls["value"], default=default_calls
+                        )
+                        link.push()
 
             data_table_refreshers.append(render_data_table.refresh)
             render_data_table()

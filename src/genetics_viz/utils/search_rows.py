@@ -10,6 +10,7 @@ write into them), built by :func:`new_wombat_component` /
 :func:`new_wcx_component`.
 """
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -764,3 +765,118 @@ def sort_rows(
             return (r.get(sort_field) is None, r.get(sort_field, ""))
 
     rows.sort(key=key, reverse=desc)
+
+
+# ---------------------------------------------------------------------------
+# Shareable link: the form as the ``q`` query value
+# ---------------------------------------------------------------------------
+
+#: Wombat component boxes and their link keys; booleans and lists as is.
+_WOMBAT_LINK = {
+    "exclude_lcr": "lcr",
+    "exclude_gnomad": "gnomad",
+    "exclude_gnomad_wgs": "wgs",
+}
+_WCX_LINK = {"exonic_only": "exonic", "ratio_min": "rmin", "ratio_max": "rmax"}
+
+
+def form_to_link(
+    components: List[Dict[str, Any]],
+    individuals: IndividualFilters,
+    sources: List[Dict[str, Any]],
+) -> str:
+    """The search as compact JSON, only what differs from a new component.
+
+    Sources are named by their display name and type, never by their
+    directory: a link must not carry server paths.
+    """
+    from genetics_viz.components.page_link import encode_consequences
+
+    by_key = {source_key(sf): sf for sf in sources}
+    out: List[Dict[str, Any]] = []
+    for comp in components:
+        is_wombat = comp["type"] == "wombat"
+        default = new_wombat_component() if is_wombat else new_wcx_component()
+        entry: Dict[str, Any] = {"t": "w" if is_wombat else "x"}
+        sf = by_key.get(comp["source_key"])
+        if sf is not None:
+            entry["src"] = sf["display_name"]
+        for box, key in (
+            ("locus", "l"),
+            ("genesets", "gs"),
+            ("validations", "val"),
+            ("selected_calls", "calls"),
+        ):
+            if box in comp and comp[box]["value"] != default[box]["value"]:
+                entry[key] = comp[box]["value"]
+        if is_wombat and set(comp["impacts"]["value"]) != set(VEP_CONSEQUENCES):
+            entry["imp"] = encode_consequences(comp["impacts"]["value"])
+        for box, key in (_WOMBAT_LINK if is_wombat else _WCX_LINK).items():
+            if comp[box]["value"] != default[box]["value"]:
+                entry[key] = comp[box]["value"]
+        out.append(entry)
+    data: Dict[str, Any] = {"c": out}
+    ind = {
+        "sex": individuals.sex["value"],
+        "pheno": individuals.phenotype["value"],
+        "parents": individuals.has_parents["value"],
+        "excl": individuals.exclude_samples["value"],
+    }
+    if any(ind.values()):
+        data["i"] = {k: v for k, v in ind.items() if v}
+    return json.dumps(data, separators=(",", ":"))
+
+
+def form_from_link(
+    raw: Optional[str],
+    wombat_sources: List[Dict[str, Any]],
+    wcx_sources: List[Dict[str, Any]],
+) -> Optional[Tuple[List[Dict[str, Any]], IndividualFilters]]:
+    """Components and individual filters of a :func:`form_to_link` value.
+
+    ``None`` when there is none, or it does not parse. A source the data
+    directory no longer has falls back to the first of its type; a component
+    of a type the cohort has no source for is dropped.
+    """
+    from genetics_viz.components.page_link import decode_consequences
+
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        entries = list(data.get("c", []))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    components: List[Dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        is_wombat = entry.get("t") == "w"
+        pool = wombat_sources if is_wombat else wcx_sources
+        if not pool:
+            continue
+        sf = next((s for s in pool if s["display_name"] == entry.get("src")), pool[0])
+        comp = (new_wombat_component if is_wombat else new_wcx_component)(
+            source_key(sf)
+        )
+        for box, key in (
+            ("locus", "l"),
+            ("genesets", "gs"),
+            ("validations", "val"),
+            ("selected_calls", "calls"),
+        ):
+            if box in comp and key in entry:
+                comp[box]["value"] = entry[key]
+        if is_wombat and "imp" in entry:
+            comp["impacts"]["value"] = decode_consequences(entry["imp"])
+        for box, key in (_WOMBAT_LINK if is_wombat else _WCX_LINK).items():
+            if key in entry:
+                comp[box]["value"] = entry[key]
+        components.append(comp)
+    individuals = IndividualFilters()
+    ind = data.get("i") or {}
+    individuals.sex["value"] = list(ind.get("sex", []))
+    individuals.phenotype["value"] = list(ind.get("pheno", []))
+    individuals.has_parents["value"] = bool(ind.get("parents", False))
+    individuals.exclude_samples["value"] = list(ind.get("excl", []))
+    return components, individuals

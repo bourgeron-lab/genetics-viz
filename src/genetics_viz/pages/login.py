@@ -15,6 +15,7 @@ from genetics_viz.config_model import (
     save_config,
     verify_password,
 )
+from genetics_viz.components.page_link import safe_next
 from genetics_viz.utils import login_throttle
 
 
@@ -27,9 +28,12 @@ def _dummy_hash() -> str:
 @ui.page("/login")
 def login_page(request: Request) -> None:
     """Login page — no auth check required."""
-    # If already authenticated, redirect to home
+    # Back where a shared link pointed, else home
+    destination = safe_next(request.query_params.get("next")) or "/"
+
+    # If already authenticated, go straight there
     if app.storage.user.get("authenticated"):
-        ui.navigate.to("/")
+        ui.navigate.to(destination)
         return
 
     address = request.client.host if request.client else "unknown"
@@ -90,7 +94,7 @@ def login_page(request: Request) -> None:
                             "data_dir": get_default_data_dir(config),
                         }
                     )
-                    ui.navigate.to("/")
+                    ui.navigate.to(destination)
                     return
 
                 login_throttle.record_failure(address, username)

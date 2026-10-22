@@ -142,7 +142,7 @@ def render_member_selector(
                     with ui.element("div").classes(cell).style(_CONTROL_CELL_STYLE):
                         member_checkboxes[sample_id] = ui.checkbox(
                             "",
-                            value=True,
+                            value=sample_id in selected_members["value"],
                             on_change=make_change_handler(sample_id),
                         ).props("dense size=xs")
                     with ui.element("div").classes(cell).style(_CONTROL_CELL_STYLE):
