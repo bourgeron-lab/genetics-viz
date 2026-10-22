@@ -5,6 +5,47 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-10-22
+
+### Security
+- **Data files need a login.** The data directories (CRAMs, coverage, every TSV) were served to anyone who could reach the server. They now answer 401 without a logged-in session, 404 once a directory is removed on the admin page, and are sent with `Cache-Control: private`. Range requests still work for IGV.
+- **Passwords are stored as salted scrypt** instead of unsalted SHA-512. Existing passwords keep working: each user's first login rehashes theirs and saves the config. No reset is needed.
+- **Login backs off after repeated failures**: 5 free failures per username and 20 per client address, then a doubling wait of up to 15 min. Unknown usernames are treated like real ones, so the login does not reveal which accounts exist.
+- **Validations, diagnostics and wave reviews record the logged-in user** as author, not the value of the readonly User box, which the browser could change.
+
+### Added
+- **Shareable links.** The address bar now keeps the view, so it can be sent to a colleague who opens exactly the same view:
+  - family pages: the open tab, the selected members, the shown Wombat config with its filters, sort and page, and the SV call types;
+  - cohort page: the Workflow tab, the right-hand panel tab and the individuals table's column filters;
+  - Search: the whole form, run automatically when the link is opened. Sources are named by display name, so a link carries no server path.
+
+  Only values that differ from the defaults are written, so links stay short (`?tab=roh`). Anything the page cannot show falls back to the default.
+- **Login returns to the linked page.** Opening a link while logged out goes to the login, then to that page instead of the home page.
+
+### Changed
+- **STR tab: "Hide loci where every member is normal" is on by default.** The tab's Download follows the switch.
+- **Rows validated "in phase MNV" count as present** in every validation filter. Every status selection used to hide them, including the default.
+- **An empty Impacts selection filters nothing on Search**, as in the Wombat tab. It used to show no rows.
+- **All validations** shows a present call's inheritance beyond de novo and homozygous (e.g. `maternal`), as the other pages do.
+- A Wombat filter change goes back to the table's first page. Choosing an impact level refreshes the table once instead of once per checkbox.
+
+### Fixed
+- **Two curators saving at the same time could corrupt a curation file.** Validations, diagnostics, notes, wave reviews, Sample QC acknowledgements, UPD and STR validations and report conclusions now all go through one locked write. Before:
+  - the first two saves to a new file could both write the header;
+  - lines reached the file only after the lock was released, so the next writer could find it empty;
+  - an ignore toggle or a note deletion emptied the file before locking it, so a save in between could be lost.
+- **A note or comment starting with a quote lost it.** A comment containing `"` that went through an ignore toggle or a note deletion before this release was saved quoted, and now shows its quotes doubled.
+- **Hidden directories under `cohorts/`** (a NAS `.snapshot`) were listed as incomplete cohorts.
+- The family member boxes were always ticked, whatever the selection.
+
+### Refactored
+- Validation statuses and their consensus are defined once (`utils/validation_status.py`), and Wombat badges and filters are shared by the Wombat tab, Search and the per-file validation page (`utils/variant_rows.py`).
+- The three largest files are split: `sv_dialog.py` (into `sv_details.py`, `sv_igv_views.py`, `sv_validation_panel.py`), `search.py` (`search_form.py`, `search_results.py`, `utils/search_rows.py`) and `wombat_tab.py` (`wombat_rows.py`, `wombat_filters.py`, `wombat_stats.py`).
+
+### Note
+- **Behind a proxy, the per-address login limit counts the proxy's address** unless uvicorn trusts the forwarded headers (`FORWARDED_ALLOW_IPS`, with `X-Forwarded-For` passed along). Otherwise every user shares one address, and 20 failures from anyone slow logins for everyone.
+- Links keep filter values (and on Search, loci and gene names) in the URL query, so they appear in the server's access log, as family IDs in the paths already do.
+
 ## [0.24.1] - 2026-10-21
 
 ### Fixed
