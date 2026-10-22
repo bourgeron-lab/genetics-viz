@@ -5,21 +5,17 @@ Each note has a FID, optional sample ID, message, user, and timestamp.
 """
 
 import csv
-import fcntl
 from pathlib import Path
 from typing import Dict, List
 
-from genetics_viz.utils.tsv import clean_tsv_field
+from genetics_viz.utils.tsv import append_tsv_row, append_tsv_rows, rewrite_tsv_rows
 
-NOTES_HEADER = "FID\tSample\tMessage\tUser\tTimestamp\n"
+NOTES_HEADER = ["FID", "Sample", "Message", "User", "Timestamp"]
 
 
 def ensure_notes_file(file_path: Path) -> None:
     """Create the notes file with header if it doesn't exist."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    if not file_path.exists():
-        with open(file_path, "w") as f:
-            f.write(NOTES_HEADER)
+    append_tsv_rows(file_path, NOTES_HEADER, [])
 
 
 def load_family_notes(notes_file: Path, family_id: str) -> List[Dict[str, str]]:
@@ -33,7 +29,7 @@ def load_family_notes(notes_file: Path, family_id: str) -> List[Dict[str, str]]:
         return entries
 
     with open(notes_file, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
+        reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
         for row in reader:
             if row.get("FID") == family_id:
                 entries.append(dict(row))
@@ -51,14 +47,9 @@ def save_note(
     timestamp: str,
 ) -> None:
     """Append a note entry to the TSV file with file locking."""
-    ensure_notes_file(notes_file)
-    clean_msg = clean_tsv_field(message)
-    with open(notes_file, "a") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            f.write(f"{family_id}\t{sample}\t{clean_msg}\t{user}\t{timestamp}\n")
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    append_tsv_row(
+        notes_file, NOTES_HEADER, [family_id, sample, message, user, timestamp]
+    )
 
 
 def delete_note(
@@ -70,42 +61,23 @@ def delete_note(
     """Hard-delete a note from the TSV file.
 
     Matches on FID + Timestamp + User as composite key.
-    Uses read-all, remove, write-back with file locking.
 
     Returns True if a note was deleted, False otherwise.
     """
-    if not notes_file.exists():
-        return False
 
-    rows: List[Dict[str, str]] = []
-    fieldnames: list[str] = []
-    with open(notes_file, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        fieldnames = list(reader.fieldnames or [])
-        for row in reader:
-            rows.append(dict(row))
+    def remove(rows: List[Dict[str, str]]) -> bool:
+        kept = [
+            r
+            for r in rows
+            if not (
+                r.get("FID") == family_id
+                and r.get("Timestamp") == timestamp
+                and r.get("User") == user
+            )
+        ]
+        if len(kept) == len(rows):
+            return False
+        rows[:] = kept
+        return True
 
-    original_len = len(rows)
-    rows = [
-        r
-        for r in rows
-        if not (
-            r.get("FID") == family_id
-            and r.get("Timestamp") == timestamp
-            and r.get("User") == user
-        )
-    ]
-
-    if len(rows) == original_len:
-        return False
-
-    with open(notes_file, "w") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
-            writer.writeheader()
-            writer.writerows(rows)
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
-    return True
+    return rewrite_tsv_rows(notes_file, remove)

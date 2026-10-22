@@ -82,7 +82,7 @@ def _load_validation_map(validation_file_path) -> Dict[tuple, List[tuple]]:
 
     if validation_file_path.exists():
         with open(validation_file_path, "r") as f:
-            reader = csv.DictReader(f, delimiter="\t")
+            reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
             for vrow in reader:
                 fid = vrow.get("FID")
                 variant_key = vrow.get("Variant")

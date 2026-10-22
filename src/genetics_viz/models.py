@@ -352,7 +352,7 @@ def _iter_cohort_dirs(
     """Yield ``(directory, pedigree_file, params_file)`` for every cohort dir.
 
     The single definition of cohort discovery: every directory under
-    ``cohorts/`` is a cohort. ``pedigree_file`` is the expected path and may not
+    ``cohorts/`` is a cohort, except hidden ones (a NAS ``.snapshot``). ``pedigree_file`` is the expected path and may not
     exist -- callers decide what that means. ``params_file`` is resolved, so it
     is None when the directory has none.
 
@@ -367,7 +367,7 @@ def _iter_cohort_dirs(
     if not cohorts_dir.exists():
         return
     for cohort_path in sorted(cohorts_dir.iterdir()):
-        if not cohort_path.is_dir():
+        if cohort_path.name.startswith(".") or not cohort_path.is_dir():
             continue
         name = cohort_path.name
         yield (

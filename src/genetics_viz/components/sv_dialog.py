@@ -1,7 +1,6 @@
 """Shared component for SV visualization in a dialog with IGV.js."""
 
 import csv
-import fcntl
 from genetics_viz.utils.auth import can_write, get_current_user
 import json
 import re
@@ -25,7 +24,12 @@ from genetics_viz.utils.gene_scoring import (
     tier_legend_html,
 )
 from genetics_viz.utils.genetrek import search_url
-from genetics_viz.utils.tsv import clean_tsv_field
+from genetics_viz.components.validation_loader import (
+    SV_VALIDATION_HEADER,
+    parents_to_validate,
+    validated_samples,
+)
+from genetics_viz.utils.tsv import append_tsv_rows, clean_tsv_field
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 from genetics_viz.utils.sv_view import read_view_windows, visibility_window_bp
 from genetics_viz.utils.wisecondorx import infer_sv_type
@@ -1811,105 +1815,30 @@ def show_sv_dialog(
                         timestamp = datetime.now().isoformat()
 
                         try:
-                            # Ensure directory exists
-                            validation_file.parent.mkdir(parents=True, exist_ok=True)
-
-                            # Check if file exists
-                            file_exists = validation_file.exists()
-
-                            # Append validation
-                            with open(validation_file, "a") as f:
-                                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                                try:
-                                    # Only write header if file is new
-                                    if not file_exists:
-                                        f.write(
-                                            "FID\tVariant\tSample\tUser\tInheritance\tValidation\tCuratedStart\tCuratedEnd\tComment\tIgnore\tTimestamp\n"
-                                        )
-                                    f.write(
-                                        f"{family_id}\t{variant_key}\t{sample}\t{user}\t{inheritance}\t{validation_status}\t{curated_start}\t{curated_end}\t{comment}\t0\t{timestamp}\n"
-                                    )
-
-                                    # If validation is "present" with maternal/paternal/either inheritance,
-                                    # also save validations for the parent(s)
-                                    parent_samples_added = []
-                                    if (
-                                        validation_status == "present"
-                                        and inheritance
-                                        in ["maternal", "paternal", "either"]
-                                    ):
-                                        # Load existing validations to check if parents already have validations
-                                        existing_validations = set()
-                                        if file_exists:
-                                            # Re-read the file to get existing validations
-                                            with open(validation_file, "r") as check_f:
-                                                reader = csv.DictReader(
-                                                    check_f, delimiter="\t"
-                                                )
-                                                for row in reader:
-                                                    if (
-                                                        row.get("FID") == family_id
-                                                        and row.get("Variant")
-                                                        == variant_key
-                                                    ):
-                                                        existing_validations.add(
-                                                            row.get("Sample")
-                                                        )
-
-                                        # Determine which parent(s) to add validations for
-                                        parents_to_add = []
-                                        if (
-                                            inheritance == "maternal"
-                                            and sample_parents["mother"]
-                                        ):
-                                            if (
-                                                sample_parents["mother"]
-                                                not in existing_validations
-                                            ):
-                                                parents_to_add.append(
-                                                    ("mother", sample_parents["mother"])
-                                                )
-                                        elif (
-                                            inheritance == "paternal"
-                                            and sample_parents["father"]
-                                        ):
-                                            if (
-                                                sample_parents["father"]
-                                                not in existing_validations
-                                            ):
-                                                parents_to_add.append(
-                                                    ("father", sample_parents["father"])
-                                                )
-                                        elif inheritance == "either":
-                                            if (
-                                                sample_parents["mother"]
-                                                and sample_parents["mother"]
-                                                not in existing_validations
-                                            ):
-                                                parents_to_add.append(
-                                                    ("mother", sample_parents["mother"])
-                                                )
-                                            if (
-                                                sample_parents["father"]
-                                                and sample_parents["father"]
-                                                not in existing_validations
-                                            ):
-                                                parents_to_add.append(
-                                                    ("father", sample_parents["father"])
-                                                )
-
-                                        # Write parent validations
-                                        for parent_type, parent_id in parents_to_add:
-                                            parent_comment = (
-                                                f"(inherited from {sample})"
-                                            )
-                                            f.write(
-                                                f"{family_id}\t{variant_key}\t{parent_id}\t{user}\tunknown\tpresent\t{curated_start}\t{curated_end}\t{parent_comment}\t0\t{timestamp}\n"
-                                            )
-                                            parent_samples_added.append(parent_id)
-
-                                finally:
-                                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                            # A validated present call names the parent(s) it
+                            # came from: record them as carriers too, unless
+                            # they are validated already. One locked write.
+                            parent_samples_added = []
+                            if validation_status == "present":
+                                parent_samples_added = parents_to_validate(
+                                    inheritance,
+                                    sample_parents,
+                                    validated_samples(
+                                        validation_file, family_id, variant_key
+                                    ),
+                                )
+                            curated = [curated_start, curated_end]
+                            rows = [
+                                [family_id, variant_key, sample, user, inheritance]
+                                + [validation_status, *curated, comment, "0"]
+                                + [timestamp]
+                            ] + [
+                                [family_id, variant_key, parent_id, user, "unknown"]
+                                + ["present", *curated, f"(inherited from {sample})"]
+                                + ["0", timestamp]
+                                for parent_id in parent_samples_added
+                            ]
+                            append_tsv_rows(validation_file, SV_VALIDATION_HEADER, rows)
 
                             # Notify user about saved validations
                             notify_message = f"SV validation saved: {validation_status}"
@@ -1940,7 +1869,9 @@ def show_sv_dialog(
 
                 if validation_file.exists():
                     with open(validation_file, "r") as f:
-                        reader = csv.DictReader(f, delimiter="\t")
+                        reader = csv.DictReader(
+                            f, delimiter="\t", quoting=csv.QUOTE_NONE
+                        )
                         for row in reader:
                             if (
                                 row.get("FID") == family_id

@@ -161,7 +161,7 @@ src/genetics_viz/
     vep.py                        # VEP consequence utilities (from YAML)
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
     sharding.py                   # Two-level sharded directory path resolution
-    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels, append_tsv_row
+    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels, append_tsv_row(s), rewrite_tsv_rows, set_ignore
     wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
     sample_counts.py              # Cohort Wombat/WisecondorX files, per-sample counts, outlier flags
     view_presets.py               # View preset loading with reload support
@@ -337,7 +337,7 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - Tests: `datagen` writes the bigWigs with pybigtools and a **reference-free CRAM** (`no_ref=1`) with a hand-written `.fai`, since a real chr2 reference would be 240 MB.
 
 ### Cohort Discovery
-- **A cohort is a directory under `cohorts/`.** The directory name is the cohort name.
+- **A cohort is a directory under `cohorts/`.** The directory name is the cohort name. Hidden directories (a NAS `.snapshot`) are skipped.
 - `DataStore.cohorts` holds only cohorts with a readable `<NAME>.pedigree.tsv`, so the header dropdown, validation pages and search keep their existing meaning. Directories with no pedigree — or one that will not parse — land in `DataStore.incomplete_cohorts` as `CohortStub`s, carded on the home page but not navigable. `CohortStub.reason` is `"missing"` or `"unreadable"`; the two need different fixes and do not share a message.
 - Discovery lives in **one** place, `_iter_cohort_dirs()`. It used to be hand-copied into `load()`, `take_snapshot()` and `reload()`, which drifted the moment the rules changed.
 - `take_snapshot()` watches the pedigree **and** `<NAME>.params.yml` (the newer of the two mtimes, `0.0` when absent) and keys every cohort directory, so a directory appearing or gaining a pedigree registers as a change.
@@ -432,6 +432,8 @@ The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields
 - **Validation kinds are listed once**, in `utils/validation_files.py`. The All validations and Statistics pages loop over it, so a new kind is one entry there plus its writer.
 - **Diagnostic kinds are listed once**, in `utils/diagnostic_files.py`. The following loop over it: the Diagnostic All and Statistics pages, the cohort and home summaries, and `load_family_diagnostics`. The per-kind table callers (wombat, svs, search, validation/file) name their own file. `save_diagnostic_entry` and `update_diagnostic_ignore_status` check `can_write()` themselves.
 - Utility code shared across pages lives in `utils/`, not duplicated in page components.
+- **Curation files (validations, diagnostics, notes, waves, acks, summaries) are written only through `utils/tsv.py`**: `append_tsv_row(s)` to add records, `rewrite_tsv_rows` (or `set_ignore`) to edit one in place. Both check the header and write under one `flock`, and flush before unlocking: a buffered write reaches the file only at close, and the next writer would find it empty and write the header again. Never `csv.DictWriter`, which quotes a field holding `"`.
+- **Read curation files with `quoting=csv.QUOTE_NONE`.** They are written unquoted, and the default reader takes a comment's leading `"` for quoting and drops it. Rows an older `DictWriter` rewrite quoted (a comment holding `"`, in a file whose ignore toggle or note deletion ran before this) now show their quotes doubled.
 - YAML configs live in `config/`, loaded by corresponding `utils/*.py` modules.
 - All new ClinVar terms must be added to `config/clinvar_colors.yaml`.
 - All new VEP consequences must be added to `config/vep_consequences.yaml`.

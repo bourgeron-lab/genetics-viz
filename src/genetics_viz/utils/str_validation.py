@@ -93,7 +93,7 @@ def read_str_validations(
     with open(path, "r") as f:
         return [
             row
-            for row in csv.DictReader(f, delimiter="\t")
+            for row in csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
             if row.get("FID") == family_id
             and (variant_key is None or row.get("Variant") == variant_key)
         ]

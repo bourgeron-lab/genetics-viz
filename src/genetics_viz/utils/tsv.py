@@ -1,11 +1,12 @@
 """Tab-separated file reading helpers."""
 
+import csv
 import fcntl
 import gzip
 import logging
 import re
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import polars as pl
 
@@ -26,12 +27,26 @@ def clean_tsv_field(text: str) -> str:
     )
 
 
+def _tsv_line(fields: Iterable[Any]) -> str:
+    return "\t".join(clean_tsv_field(str(v)) for v in fields) + "\n"
+
+
 def append_tsv_row(path: Path, header: List[str], fields: Iterable[Any]) -> None:
     """Append one record to a curation file, writing ``header`` first if it is new.
 
     Every field goes through :func:`clean_tsv_field`. The write holds an
     exclusive ``flock``, and the header check is made under it, at the end of
     the file as it is now: two first saves must not both write the header.
+    """
+    append_tsv_rows(path, header, [fields])
+
+
+def append_tsv_rows(
+    path: Path, header: List[str], rows: Iterable[Iterable[Any]]
+) -> None:
+    """Append several records under one lock, as :func:`append_tsv_row`.
+
+    With no rows, this only creates the file with its header.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
@@ -40,9 +55,77 @@ def append_tsv_row(path: Path, header: List[str], fields: Iterable[Any]) -> None
             f.seek(0, 2)
             if f.tell() == 0:
                 f.write("\t".join(header) + "\n")
-            f.write("\t".join(clean_tsv_field(str(v)) for v in fields) + "\n")
+            f.writelines(_tsv_line(fields) for fields in rows)
+            # Before unlocking: buffered lines would reach the file only at
+            # close, and the next writer would find it empty.
+            f.flush()
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def rewrite_tsv_rows(
+    path: Path, change: Callable[[List[Dict[str, str]]], bool]
+) -> bool:
+    """Edit a curation file in place: read, ``change`` the rows, write back.
+
+    ``change`` edits the list of row dicts in place and returns whether it
+    changed anything; the file is rewritten only then. Read and write happen
+    under one exclusive ``flock``, so a save in between is neither lost nor
+    truncated away. Returns ``change``'s answer, ``False`` for a missing file.
+
+    Rows are read with ``QUOTE_NONE`` and written back unquoted, as
+    :func:`append_tsv_row` writes them: a ``csv.DictWriter`` would quote a
+    comment holding ``"``, and the next read would keep the quotes.
+    """
+    if not path.exists():
+        return False
+    with open(path, "r+") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
+            rows = list(reader)
+            fieldnames = list(reader.fieldnames or [])
+            if not change(rows):
+                return False
+            f.seek(0)
+            f.write("\t".join(fieldnames) + "\n")
+            f.writelines(
+                _tsv_line(row.get(name) or "" for name in fieldnames) for row in rows
+            )
+            f.truncate()
+            f.flush()
+            return True
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def set_ignore(
+    path: Path,
+    family_id: str,
+    variant_key: str,
+    sample: str,
+    timestamp: str,
+    ignore_value: str,
+) -> bool:
+    """Set ``Ignore`` on one validation or diagnostic record, in place.
+
+    The record is the one of this family, variant, sample and timestamp: both
+    kinds of file key their rows alike. Returns False when none matches.
+    """
+
+    def change(rows: List[Dict[str, str]]) -> bool:
+        for row in rows:
+            if (
+                row.get("FID") == family_id
+                and row.get("Variant") == variant_key
+                and row.get("Sample") == sample
+                and row.get("Timestamp") == timestamp
+            ):
+                row["Ignore"] = ignore_value
+                return True
+        return False
+
+    return rewrite_tsv_rows(path, change)
 
 
 def _header(path: Path) -> list[str]:

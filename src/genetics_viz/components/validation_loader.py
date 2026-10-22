@@ -2,9 +2,58 @@
 
 import csv
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from genetics_viz.utils.validation_badges import build_validation_badge
+
+#: ``validations/snvs.tsv``.
+SNV_VALIDATION_HEADER = [
+    "FID", "Variant", "Sample", "User", "Inheritance", "Validation",
+    "Comment", "Ignore", "Timestamp",
+]  # fmt: skip
+
+#: ``validations/svs.tsv``: the SNV columns plus the curated breakpoints.
+SV_VALIDATION_HEADER = [
+    "FID", "Variant", "Sample", "User", "Inheritance", "Validation",
+    "CuratedStart", "CuratedEnd", "Comment", "Ignore", "Timestamp",
+]  # fmt: skip
+
+
+def validated_samples(
+    validation_file: Path, family_id: str, variant_key: str
+) -> Set[str]:
+    """Samples of a family with any validation row for this variant."""
+    if not validation_file.exists():
+        return set()
+    with open(validation_file, "r") as f:
+        return {
+            row.get("Sample") or ""
+            for row in csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
+            if row.get("FID") == family_id and row.get("Variant") == variant_key
+        }
+
+
+def parents_to_validate(
+    inheritance: str,
+    parents: Dict[str, Optional[str]],
+    validated: Set[str],
+    both_parent_modes: Iterable[str] = ("either",),
+) -> List[str]:
+    """Parents to record as carriers when a child's call is validated present.
+
+    ``maternal`` gives the mother, ``paternal`` the father, a mode in
+    ``both_parent_modes`` both (mother first). A parent already validated for
+    the variant, or not in the pedigree, is left out.
+    """
+    if inheritance == "maternal":
+        wanted = [parents.get("mother")]
+    elif inheritance == "paternal":
+        wanted = [parents.get("father")]
+    elif inheritance in both_parent_modes:
+        wanted = [parents.get("mother"), parents.get("father")]
+    else:
+        wanted = []
+    return [p for p in wanted if p and p not in validated]
 
 
 def load_validation_map(
@@ -28,7 +77,7 @@ def load_validation_map(
         return validation_map
 
     with open(validation_file_path, "r") as f:
-        reader = csv.DictReader(f, delimiter="\t")
+        reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
         for row in reader:
             fid = row.get("FID")
             variant_key = row.get("Variant")
