@@ -2,14 +2,10 @@
 
 from typing import Dict, Tuple
 
+from genetics_viz.utils.validation_status import STATUS_ICONS
+
 # Map validation status to (icon_name, color)
-VALIDATION_STATUS_ICONS: Dict[str, Tuple[str, str]] = {
-    "present": ("check_circle", "green"),
-    "absent": ("cancel", "red"),
-    "uncertain": ("help", "orange"),
-    "conflicting": ("bolt", "amber-9"),
-    "TODO": ("assignment", "grey"),
-}
+VALIDATION_STATUS_ICONS: Dict[str, Tuple[str, str]] = STATUS_ICONS
 
 
 def get_validation_icon(status: str) -> Tuple[str, str]:

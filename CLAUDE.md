@@ -47,13 +47,16 @@ src/genetics_viz/
   components/
     tanstack_table.py             # DataTable: TanStack table bridge (JS/CSS injection)
     column_selector.py            # Column visibility dialog with presets
-    filters.py                    # Reusable filter menus (validation statuses, genesets)
+    filters.py                    # Reusable filter menus (validation statuses, consequences, genesets), unknown-term warning
     sample_counts.py              # Stats dialogs: variants per member + cohort comparison
     gene_prefs_editor.py          # Profile card: GeneTrek tiers per geneset, live preview
     header.py                     # Shared page header with data dir dropdown + user menu
     validation_loader.py          # Validation TSV loading and badge logic
     variant_dialog.py             # IGV variant inspection dialog
-    sv_dialog.py                  # SV inspection dialog (copy number, IGV, read evidence)
+    sv_dialog.py                  # SV inspection dialog: orchestrates the panels below (SVViewState)
+    sv_details.py                 # SV dialog: details card, suggested curated coordinates
+    sv_igv_views.py               # SV dialog: igv.js views (bedgraph, VAF, read level), SVViewState
+    sv_validation_panel.py        # SV dialog: validation form (curated position) and history
     sv_cn_panel.py                # SV dialog: copy-number panel (sample ÷ control panel)
     sv_read_panel.py              # SV dialog: samplot-like read-evidence panel
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
@@ -81,7 +84,9 @@ src/genetics_viz/
   pages/
     login.py                      # Login page (no auth required)
     profile.py                    # User profile (role, password, gene badge tiers)
-    search.py                     # Cohort-wide variant search with individual filters
+    search.py                     # Cohort-wide variant search: route and search steps
+    search_form.py                # Search page form: source cards, Individuals panel (SearchForm)
+    search_results.py             # Search page results: table, presets, Save/Download, row actions
     admin/
       directories.py              # Admin: manage data directories
       users.py                    # Admin: manage users
@@ -103,7 +108,10 @@ src/genetics_viz/
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
         status_panel.py           # Pipeline run status (Workflow tab + home card)
-        wombat_tab.py             # WOMBAT analysis tab (per-family)
+        wombat_tab.py             # WOMBAT analysis tab (per-family): sub-tabs, config panels, table
+        wombat_rows.py            # Wombat tab data: result files, table rows, columns
+        wombat_filters.py         # Wombat tab filters: WombatFilters, panel, apply_filters
+        wombat_stats.py           # Wombat tab Stats dialog
         dnm_tab.py                # DNM analysis tab (per-family)
         svs_tab.py                # SV analysis tab (per-family)
         stats_panel.py            # Carrier stats box/bar plots
@@ -130,6 +138,8 @@ src/genetics_viz/
     export.py                     # TSV/zip helpers, export filenames, person columns (FID, IID, sex, phenotype)
     sample_qc_plots.py            # ECharts builders for the Sample QC views
     validation_files.py           # The validation kinds (SNV/SV/STR/UPD) and their files
+    validation_status.py          # Validation statuses: consensus of a row's validations, filter, icons/colours
+    variant_rows.py               # Wombat rows: VEP/ClinVar/score badges, LCR/gnomAD/MNV/consequence filters
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR/UPD) and their files
     diagnostic_labels.py          # Diagnostics panel wording: STR repeat counts, UPD origin
     upd.py                        # validations/upds.tsv (role-guarded), UPD key, flag/ROH evidence
@@ -163,6 +173,7 @@ src/genetics_viz/
     sharding.py                   # Two-level sharded directory path resolution
     tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels, append_tsv_row(s), rewrite_tsv_rows, set_ignore
     wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
+    search_rows.py                # Search page logic without UI: sources, filters, result rows, columns
     sample_counts.py              # Cohort Wombat/WisecondorX files, per-sample counts, outlier flags
     view_presets.py               # View preset loading with reload support
     column_names.py               # Column name/group/sorting/schema utilities
@@ -429,6 +440,8 @@ The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields
 
 ## Conventions
 
+- **Validation statuses are defined once**, in `utils/validation_status.py`: `UNVALIDATED` (`"TODO"`, a row nobody validated), `FILTER_STATUSES` (menu order), their icons and chart colours, `consensus()` (several curators' validations → one status and inheritance) and `status_selected` / `filter_by_status` (an empty selection filters nothing; `in phase MNV` counts as `present`). Never spell `"TODO"` or the status list in a page.
+- **Wombat rows are badged and filtered through `utils/variant_rows.py`** (Wombat tab, Search, per-file validation page), with `create_consequence_filter_menu` for the Impacts menu. An empty consequence selection filters nothing, like the validation filter.
 - **Validation kinds are listed once**, in `utils/validation_files.py`. The All validations and Statistics pages loop over it, so a new kind is one entry there plus its writer.
 - **Diagnostic kinds are listed once**, in `utils/diagnostic_files.py`. The following loop over it: the Diagnostic All and Statistics pages, the cohort and home summaries, and `load_family_diagnostics`. The per-kind table callers (wombat, svs, search, validation/file) name their own file. `save_diagnostic_entry` and `update_diagnostic_ignore_status` check `can_write()` themselves.
 - Utility code shared across pages lives in `utils/`, not duplicated in page components.

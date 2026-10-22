@@ -36,8 +36,13 @@ from genetics_viz.utils.gene_scoring import (
     get_gene_scorer,
     split_genes,
 )
-from genetics_viz.utils.score_colors import get_score_color
 from genetics_viz.utils.validation_badges import build_validation_badge
+from genetics_viz.utils.variant_rows import add_score_badges
+from genetics_viz.utils.validation_status import (
+    FILTER_STATUSES,
+    consensus,
+    filter_by_status,
+)
 from genetics_viz.utils.wisecondorx import build_call_colors, infer_sv_type
 from genetics_viz.utils.clinvar import (
     format_clinvar_display,
@@ -127,42 +132,9 @@ def _add_validation_status_to_rows(
         map_key = (fid, lookup_variant, sample)
         if map_key in validation_map:
             validations = validation_map[map_key]
-            validation_statuses = [v[0] for v in validations]
-            # Normalize "in phase MNV" to "present" for conflict detection
-            normalized_statuses = [
-                "present" if s == "in phase MNV" else s for s in validation_statuses
-            ]
-            unique_validations = set(normalized_statuses)
-
-            if len(unique_validations) > 1:
-                row["Validation"] = "conflicting"
-                row["ValidationInheritance"] = ""
-            elif "present" in unique_validations:
-                # Check if any is specifically "in phase MNV"
-                if "in phase MNV" in validation_statuses:
-                    row["Validation"] = "in phase MNV"
-                else:
-                    row["Validation"] = "present"
-                # Check inheritance - prioritize de novo, then homozygous,
-                # then first non-empty inheritance from present validations
-                present = [
-                    v for v in validations if v[0] in ("present", "in phase MNV")
-                ]
-                inh_values = [v[1] for v in present if v[1]]
-                if "de novo" in inh_values:
-                    row["ValidationInheritance"] = "de novo"
-                elif "homozygous" in inh_values:
-                    row["ValidationInheritance"] = "homozygous"
-                elif inh_values:
-                    row["ValidationInheritance"] = inh_values[0]
-                else:
-                    row["ValidationInheritance"] = ""
-            elif "absent" in unique_validations:
-                row["Validation"] = "absent"
-                row["ValidationInheritance"] = ""
-            else:
-                row["Validation"] = "uncertain"
-                row["ValidationInheritance"] = ""
+            row["Validation"], row["ValidationInheritance"] = consensus(
+                (v[0], v[1]) for v in validations
+            )
 
             row["Validation_badge"] = build_validation_badge(
                 row["Validation"], row["ValidationInheritance"], validations
@@ -370,31 +342,10 @@ async def validation_file_page(filename: str) -> None:
                             row[f"{col_name}_badges"] = []
 
                 # Continuous score badges (after per-column processing)
-                for col_name, value_str in list(row.items()):
-                    if value_str and value_str != ".":
-                        try:
-                            value = float(value_str)
-                            badge_info = get_score_color(col_name, value)
-                            if badge_info:
-                                row[f"{col_name}_badge"] = {
-                                    "label": f"{value:.3f}",
-                                    "color": badge_info["color"],
-                                    "tooltip": (
-                                        f"{col_name}: {value:.3f}"
-                                        f" ({badge_info['label']})"
-                                    ),
-                                }
-                        except (ValueError, TypeError):
-                            pass
+                add_score_badges(row)
 
             # Filter state - all statuses selected by default
-            all_validation_statuses = [
-                "present",
-                "absent",
-                "uncertain",
-                "conflicting",
-                "TODO",
-            ]
+            all_validation_statuses = list(FILTER_STATUSES)
             filter_validations: Dict[str, List[str]] = {
                 "value": list(all_validation_statuses)
             }
@@ -451,17 +402,7 @@ async def validation_file_page(filename: str) -> None:
                 table_container.clear()
 
                 # Apply filters
-                filtered_data = file_data.copy()
-                if filter_validations["value"]:
-                    filtered_data = [
-                        row
-                        for row in filtered_data
-                        if row.get("Validation", "") in filter_validations["value"]
-                        or (
-                            "TODO" in filter_validations["value"]
-                            and not row.get("Validation")
-                        )
-                    ]
+                filtered_data = filter_by_status(file_data, filter_validations["value"])
 
                 with table_container:
                     # Show count

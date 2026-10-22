@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Dict
 
+from genetics_viz.utils.validation_status import STATUS_COLORS
+
 # Giemsa stain colors for cytoband rendering
 GIESTAIN_COLORS: Dict[str, str] = {
     "gneg": "#f5f5f5",
@@ -47,13 +49,7 @@ CHROM_SIZES_MB: Dict[str, int] = {
 }
 
 # Validation status colours (avoids grays used by cytoband stains)
-VALIDATION_COLORS: Dict[str, str] = {
-    "present": "#22c55e",
-    "absent": "#ef4444",
-    "uncertain": "#f59e0b",
-    "conflicting": "#fb923c",
-    "TODO": "#8b5cf6",
-}
+VALIDATION_COLORS: Dict[str, str] = STATUS_COLORS
 
 
 def _load_cytobands() -> Dict[str, list]:

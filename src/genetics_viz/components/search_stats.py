@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from nicegui import ui
 
+from genetics_viz.utils.validation_status import row_status
 from genetics_viz.utils.cytobands import (
     CHROM_ORDER,
     CHROM_SIZES_MB,
@@ -185,7 +186,7 @@ def show_stats_dialog(rows: List[Dict[str, Any]]) -> None:
                 # Count SNVs/Indels per chromosome
                 for r in filtered_snvs:
                     chrom = norm_chrom(r.get("#CHROM", ""))
-                    status = r.get("Validation", "") or "TODO"
+                    status = row_status(r)
                     if chrom in chrom_validation:
                         chrom_validation[chrom][status] = (
                             chrom_validation[chrom].get(status, 0) + 1
@@ -193,7 +194,7 @@ def show_stats_dialog(rows: List[Dict[str, Any]]) -> None:
                 # Count SVs per chromosome (each SV = 1 count)
                 for r in filtered_svs:
                     chrom = r.get("_sv_chrom", "")
-                    status = r.get("Validation", "") or "TODO"
+                    status = row_status(r)
                     if chrom in chrom_validation:
                         chrom_validation[chrom][status] = (
                             chrom_validation[chrom].get(status, 0) + 1
@@ -215,9 +216,7 @@ def show_stats_dialog(rows: List[Dict[str, Any]]) -> None:
                     consequence_counts[r.get("_sv_call", "Unknown")] += 1
 
                 # Validation distribution (all variant types combined)
-                validation_counts = Counter(
-                    r.get("Validation", "") or "TODO" for r in filtered_all
-                )
+                validation_counts = Counter(row_status(r) for r in filtered_all)
 
                 # Scatter data for ideogram (SNVs)
                 scatter_data: List[List[Any]] = []
@@ -229,7 +228,7 @@ def show_stats_dialog(rows: List[Dict[str, Any]]) -> None:
                     except (ValueError, TypeError):
                         continue
                     if chrom in chrom_sizes_mb:
-                        status = r.get("Validation", "") or "TODO"
+                        status = row_status(r)
                         scatter_data.append([pos_mb, chrom, status])
 
                 # SV range data for ideogram
