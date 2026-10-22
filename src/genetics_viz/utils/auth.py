@@ -13,9 +13,14 @@ def check_auth() -> RedirectResponse | None:
         if redirect := check_auth():
             return redirect
     """
-    if not app.storage.user.get("authenticated"):
+    if not is_authenticated():
         return RedirectResponse("/login")
     return None
+
+
+def is_authenticated() -> bool:
+    """Return True if the session belongs to a logged-in user."""
+    return bool(app.storage.user.get("authenticated"))
 
 
 def get_current_user() -> str:

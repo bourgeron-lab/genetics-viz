@@ -206,12 +206,8 @@ def wave_validation_page(sample_id: str) -> None:
                         if not can_write():
                             ui.notify("Permission denied", type="negative")
                             return
-                        user = user_input.value.strip()
+                        user = get_current_user()
                         wave = wave_select.value
-
-                        if not user:
-                            ui.notify("Please enter a username", type="warning")
-                            return
 
                         if wave is None or not isinstance(wave, int):
                             ui.notify(

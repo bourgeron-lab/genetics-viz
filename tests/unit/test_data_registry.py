@@ -44,10 +44,8 @@ def test_missing_directory_still_registers(tmp_path):
 
 def test_hot_added_prefixes_never_collide(tmp_path, monkeypatch):
     mounted = []
-    import nicegui
-
     monkeypatch.setattr(
-        nicegui.app, "add_static_files", lambda prefix, path: mounted.append(prefix)
+        data, "mount_data_files", lambda prefix, path: mounted.append(prefix)
     )
     dirs = []
     for name in "abc":

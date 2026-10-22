@@ -1,5 +1,7 @@
 """Application config load/save (config_model.py)."""
 
+import hashlib
+
 import yaml
 
 from genetics_viz import config_model
@@ -8,6 +10,7 @@ from genetics_viz.config_model import (
     get_default_data_dir,
     hash_password,
     load_config,
+    needs_rehash,
     save_config,
     verify_password,
 )
@@ -16,6 +19,30 @@ from genetics_viz.config_model import (
 def test_password_round_trip():
     hashed = hash_password("s3cret")
     assert verify_password("s3cret", hashed) and not verify_password("other", hashed)
+
+
+def test_password_hashes_are_salted_scrypt():
+    first, second = hash_password("s3cret"), hash_password("s3cret")
+    assert first.startswith("scrypt$") and first != second
+    assert not needs_rehash(first)
+
+
+def test_legacy_sha512_still_verifies_and_needs_rehash():
+    legacy = hashlib.sha512(b"s3cret").hexdigest()
+    assert verify_password("s3cret", legacy) and not verify_password("other", legacy)
+    assert needs_rehash(legacy)
+
+
+def test_older_scrypt_parameters_need_rehash(monkeypatch):
+    monkeypatch.setattr(config_model, "SCRYPT_N", 2**10)
+    old = hash_password("s3cret")
+    monkeypatch.undo()
+    assert verify_password("s3cret", old) and needs_rehash(old)
+
+
+def test_malformed_or_empty_hash_never_verifies():
+    assert not verify_password("", "")
+    assert not verify_password("s3cret", "scrypt$garbage")
 
 
 def test_load_sets_the_singleton(app_config, reference_root):

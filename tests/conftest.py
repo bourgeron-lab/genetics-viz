@@ -23,6 +23,7 @@ from genetics_viz.utils import (
     gene_scoring,
     genetrek,
     ghfc_ngs_docs,
+    login_throttle,
     pipeline_params,
     report_summaries,
     roh,
@@ -61,6 +62,7 @@ def _reset_globals() -> None:
     genetrek.clear_genetrek_cache()
     user_preferences.clear_preferences_cache()
     gene_scoring.clear_scorer_cache()
+    login_throttle.clear_login_throttle()
     change_monitor._change_callbacks.clear()
 
 
