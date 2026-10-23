@@ -120,8 +120,8 @@ genetrek_url: https://genetrek-py.dev.pasteur.cloud/
 # Optional. Where the gene index behind the gene and variant pages is kept
 # (default: .gene_index/ next to this file). It copies, by gene, every
 # cohort's Wombat, WisecondorX, ExpansionHunter and ROH genes tables, so keep
-# it on local disk and as private as the data. It is built at startup, off
-# the request path, and only tables that changed are read again.
+# it as private as the data. It is built at startup, off the request path,
+# and only tables that changed are read again.
 # gene_index_dir: /path/to/gene_index
 
 # Auto-generated on first run — do not edit manually

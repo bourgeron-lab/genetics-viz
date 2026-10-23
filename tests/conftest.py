@@ -76,6 +76,15 @@ def clean_globals() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def gene_index_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build the gene index in the test process: a process per table costs seconds.
+
+    ``test_gene_index`` covers the separate-process build on its own.
+    """
+    monkeypatch.setenv("GENETICS_VIZ_GENE_INDEX_IN_PROCESS", "1")
+
+
+@pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail loudly on any real network access (ghfc-ngs docs, GeneTrek).
 

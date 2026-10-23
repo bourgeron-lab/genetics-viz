@@ -1,5 +1,6 @@
 """The cross-cohort gene index and the gene/variant page rows built from it."""
 
+import importlib
 import os
 from pathlib import Path
 
@@ -262,3 +263,107 @@ def test_rows_of_another_data_directory_link_through_it(app_config, data_dir, tm
     assert extra["_dir"] == "1"
     assert extra["Data dir"] == "data2"
     assert gene_rows.seen_summary(carriers)["data_dirs"] == 2
+
+
+# ---------------------------------------------------------------------------
+# What the first production build ran into
+# ---------------------------------------------------------------------------
+
+
+def test_sv_rows_leave_out_non_calls_and_flag_exonic_genes(indexed: Path):
+    bed = indexed / "cohorts/DEMO/svs/wisecondorx/DEMO_aberrations.bed"
+    datagen.write_tsv(
+        bed,
+        datagen.WCX_COLUMNS,
+        [
+            ["chr2", 1000001, 3000000, -1.2, -10.0, "primary", "loss", "S3",
+             "GENEA,GENEB", "", "GENEA", "", "1001"],
+            # ratio and z-score under every threshold: "Below threshold"
+            ["chr2", 5000001, 6000000, -0.01, -0.5, "primary", "loss", "S3",
+             "GENEC", "", "GENEC", "", "1001"],
+        ],
+    )  # fmt: skip
+    source = gene_index.Source("sv", "DEMO", "wisecondorx", bed)
+    cohort = data.get_all_data_stores()[str(indexed)].cohorts["DEMO"]
+    frame = gene_index.build_frame(source, indexed, cohort)
+    assert sorted(frame.select("gene", "exonic").rows()) == [
+        ("GENEA", True),
+        ("GENEB", False),
+    ]
+    assert frame["variant"].unique().to_list() == ["chr2:1000001-3000000:del"]
+
+
+def test_progress_is_saved_after_each_table(indexed: Path, monkeypatch):
+    root = gene_index._store_root(str(indexed))
+    (root / gene_index._MANIFEST).unlink()
+    gene_index.clear_gene_index()
+    calls = []
+    real = gene_index.build_frame
+
+    def stop_on_third(source, *args):
+        calls.append(source)
+        if len(calls) == 3:
+            raise KeyboardInterrupt  # the process going away mid-build
+        return real(source, *args)
+
+    monkeypatch.setattr(gene_index, "build_frame", stop_on_third)
+    with pytest.raises(KeyboardInterrupt):
+        gene_index.refresh_all(wait=True)
+    saved = gene_index._load_manifest(root)
+    assert {str(s.path) for s in calls[:2]} <= set(saved)
+
+
+def test_a_table_whose_build_process_died_is_skipped_until_it_changes(
+    indexed: Path, monkeypatch
+):
+    wcx = indexed / "cohorts/DEMO/svs/wisecondorx/DEMO_aberrations.bed"
+    real = gene_index._build
+
+    def killed(source, *args):
+        if source.path == wcx:
+            raise gene_index.ChildKilled(gene_index.KILLED)
+        return real(source, *args)
+
+    monkeypatch.setattr(gene_index, "_build", killed)
+    os.utime(wcx, (3, 3))
+    gene_index.refresh_all(wait=True)
+    assert _manifest(indexed)[str(wcx)]["error"] == gene_index.KILLED
+    assert gene_index.index_status().errors[str(wcx)] == gene_index.KILLED
+    assert gene_index.lookup_gene("sv", ["SCN2A"]).is_empty()
+    assert len(gene_index.lookup_gene("snv", ["SHANK3"])) == 4  # the rest kept
+
+    monkeypatch.setattr(gene_index, "_build", real)
+    gene_index.refresh_all(wait=True)  # unchanged: not read again
+    assert "error" in _manifest(indexed)[str(wcx)]
+    os.utime(wcx, (4, 4))  # rewritten by the pipeline: read again
+    gene_index.refresh_all(wait=True)
+    assert "error" not in _manifest(indexed)[str(wcx)]
+    assert len(gene_index.lookup_gene("sv", ["SCN2A"])) == 1
+
+
+@pytest.mark.slow
+def test_tables_are_built_in_a_process_of_their_own(
+    config_file: Path, data_dir: Path, monkeypatch
+):
+    # The modules as sys.modules has them now: the UI tests re-import the
+    # package, and pickle refuses to send the child a function of a stale copy.
+    config = importlib.import_module("genetics_viz.config_model")
+    registry = importlib.import_module("genetics_viz.utils.data")
+    index = importlib.import_module("genetics_viz.utils.gene_index")
+    monkeypatch.delenv(index.IN_PROCESS_ENV)
+    datagen.add_gene_case(data_dir)
+    config.load_config(config_file)
+    registry.init_all_data_stores([config.DataDirectoryConfig(path=str(data_dir))])
+    try:
+        index.refresh_all(wait=True)
+        entries = index._manifests[str(data_dir)]
+        assert [e.get("error") for e in entries.values() if e.get("error")] == []
+        other = data_dir / "cohorts/OTHER/wombat/OTHER.rare.vep1.default.results.tsv"
+        assert entries[str(other)]["rows"] == 2
+        assert "POLARS_MAX_THREADS" not in os.environ
+        df = index.lookup_gene("snv", ["SHANK3"])
+        assert sorted(set(df["sample"].to_list())) == ["S3", "S9"]
+    finally:
+        index.clear_gene_index()
+        registry.init_all_data_stores([])
+        config._app_config = None
