@@ -20,6 +20,7 @@ from genetics_viz.utils import (
     cnv_coverage,
     cohort_state,
     data,
+    gene_index,
     gene_scoring,
     genetrek,
     ghfc_ngs_docs,
@@ -62,6 +63,7 @@ def _reset_globals() -> None:
     genetrek.clear_genetrek_cache()
     user_preferences.clear_preferences_cache()
     gene_scoring.clear_scorer_cache()
+    gene_index.clear_gene_index()
     login_throttle.clear_login_throttle()
     change_monitor._change_callbacks.clear()
 

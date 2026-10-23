@@ -6,6 +6,7 @@ This is the main entry point for the application. All pages are modular:
 - genetics_viz.pages.validation: Validation Statistics, File, All pages
 - genetics_viz.pages.diagnostic: Diagnostic All, Statistics pages
 - genetics_viz.pages.search: Cohort-wide search
+- genetics_viz.pages.gene: Gene and variant pages, across cohorts
 - genetics_viz.pages.login: Authentication
 - genetics_viz.pages.profile: User profile
 - genetics_viz.pages.admin: Admin management pages
@@ -25,6 +26,7 @@ from genetics_viz.utils.data import (
     init_all_data_stores,
     mount_data_files,
 )
+from genetics_viz.utils.gene_index import start_gene_index, stop_gene_index
 from genetics_viz.utils.genetrek import start_refresh, stop_refresh
 
 # Import pages to register routes — this triggers all @ui.page decorators.
@@ -32,6 +34,7 @@ from genetics_viz.pages import (  # noqa: F401
     admin,
     cohort,
     diagnostic,
+    gene,
     login,
     profile,
     search,
@@ -108,6 +111,10 @@ def _init_from_config(config_file: Path) -> None:
     # both off the event loop. Pages render with neutral badges meanwhile.
     nicegui_app.on_startup(start_refresh)
     nicegui_app.on_shutdown(stop_refresh)
+    # Cross-cohort gene index: rebuilt off the event loop where a cohort table
+    # changed, served from local disk meanwhile.
+    nicegui_app.on_startup(start_gene_index)
+    nicegui_app.on_shutdown(stop_gene_index)
 
 
 # Auto-initialize when module is reloaded (for --reload mode)

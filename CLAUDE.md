@@ -21,7 +21,7 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
 ## Tests and CI
 
 - `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
-- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers and the login throttle. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle and the gene index manifests. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
 - An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
 - **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
   - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
@@ -69,6 +69,7 @@ src/genetics_viz/
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
     genetrek.yaml                 # GeneTrek refresh period, tier colours, default profile
+    gene_index.yaml               # Gene index refresh period, Parquet row group size
     inheritance.yaml              # MOI flag: GeneTrek mode strings -> codes, verdict colours, PAR
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
     sample_qc.yaml                # Sample QC flag wording (curator/reader), categories, plot lines
@@ -88,6 +89,7 @@ src/genetics_viz/
     search.py                     # Cohort-wide variant search: route and search steps
     search_form.py                # Search page form: source cards, Individuals panel (SearchForm)
     search_results.py             # Search page results: table, presets, Save/Download, row actions
+    gene.py                       # /gene/<symbol>, /variant/<variant>, /goto/<n> (data dir switch)
     admin/
       directories.py              # Admin: manage data directories
       users.py                    # Admin: manage users
@@ -174,6 +176,8 @@ src/genetics_viz/
     sharding.py                   # Two-level sharded directory path resolution
     tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels, append_tsv_row(s), rewrite_tsv_rows, set_ignore
     wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
+    gene_index.py                 # Cross-cohort gene index: cohort tables -> local Parquet, lookups
+    gene_rows.py                  # Gene/variant page rows: carriers, curation joined, /goto links
     search_rows.py                # Search page logic without UI: sources, filters, result rows, columns
     sample_counts.py              # Cohort Wombat/WisecondorX files, per-sample counts, outlier flags
     view_presets.py               # View preset loading with reload support
@@ -316,6 +320,18 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - **Methods text and tool versions are in `report.yaml`, hand-copied from ghfc-ngs** (`methods_source` names the commit). The run's own version and commit come from the run record. Update both when the pipeline changes a tool.
 - **Curator conclusions** live in `reports/family_summaries.tsv` (`FID Summary User Timestamp`), append-only, last row wins, empty clears. Line breaks are written `\n`. `save_family_summary` checks `can_write()` itself.
 - Test data: `datagen.add_report_case(data_dir)` adds the four report traits, a chr21 gain for S3 and diagnostics. It is opt-in because it changes the PGS tables other tests compare whole.
+
+### Gene Index (gene and variant pages)
+`/gene/<symbol>` and `/variant/<chr:pos:ref:alt>` (header box `gene-lookup`) gather a gene or variant from every cohort of **every data directory**, through `utils/gene_index.py`.
+- **Only cohort-level tables are indexed**: Wombat results (`cohort_wombat_sources`), WisecondorX aberrations, the newest STR catalog's genotypes, the `roh_genes` table. A family without a cohort table is missing; that is said in the CHANGELOG, not worked around.
+- **One Parquet file per source, sorted by `gene_key`** (upper-cased symbol), under `gene_index_dir` (default `<config dir>/.gene_index/<sha1(data dir)>/`), with a `manifest.json` of each source's `(mtime, size)`. A refresh re-reads only changed sources, drops vanished ones, and runs off-thread at startup and every `refresh_minutes`. The manifest on disk is published before the check, so a restart serves lookups at once.
+- **Every kind's files have exactly `SCHEMAS[kind]`** (`_conform`), so all cohorts scan as one table. Changing a schema means bumping `INDEX_VERSION`, which rebuilds everything.
+- **Wombat tables are read with `read_cohort_wombat(columns=...)`**: only the dozen columns used are parsed, by index, since polars 1.x and 2.x disagree on how `new_columns` combines with a selection.
+- **Validations and diagnostics are not indexed**: read live per data directory (`gene_rows.load_curation`) and joined by the keys the family tabs save (`chr:pos:ref:alt`, `chr:start-end:del|dup`, `str_variant_key`). Diagnostics are also found by their `Gene` column, whose SV genes carry an overlap suffix (`SCN2A:exonic`); the variant page reads the validation history straight from the files, so a variant in no cohort table still shows its curation.
+- **Look genes up through `gene_rows.gene_keys`**: the current symbol plus previous/alias names (`matching_identifiers`), since VEP symbols lag HGNC.
+- **Rows of another data directory link through `/goto/<n>?next=<path>`** (`_dir`, `_next`; `n` from the `/data-N` prefix, never a path), which sets `app.storage.user["data_dir"]` and follows `safe_next`.
+- The pages only read. Their diagnostic column is a `badge_list` (`DiagnosticBadges`), not the `diagnostic` cell, which would offer a "+" that opens nothing.
+- Test data: `datagen.add_gene_case(data_dir)` adds cohort OTHER sharing DEMO's SHANK3 de novo, with validations and diagnostics; `datagen.build_second_data_dir(root)` gives a second data directory. Both opt-in.
 
 ### Family Diagnostics Panel
 - One renderer, `components/diagnostics_panel.py`, for the cohort and standalone family pages; each page wraps it in its own refreshable.

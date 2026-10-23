@@ -1,0 +1,13 @@
+# Cross-cohort gene index (utils/gene_index.py).
+#
+# Where the index lives is per deployment and goes in the application config
+# (`gene_index_dir`, default `.gene_index/` next to the config file).
+
+# How often every cohort's result tables are checked for changes. A check is
+# a few stat calls per cohort; only a table whose size or mtime changed is
+# read again.
+refresh_minutes: 30
+
+# Rows per Parquet row group. Each file is sorted by gene, so a lookup reads
+# only the row groups whose gene range holds the one asked for.
+row_group_size: 20000

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from nicegui import app, context, ui
 
 from genetics_viz import __version__
@@ -9,6 +11,7 @@ from genetics_viz.models import ChangeReport
 from genetics_viz.utils.auth import get_current_user, is_admin
 from genetics_viz.utils.change_monitor import check_now, subscribe
 from genetics_viz.utils.data import get_data_dir_options, get_data_store
+from genetics_viz.utils.gene_index import parse_variant
 
 
 def create_header(cohort_name: str | None = None) -> None:
@@ -81,6 +84,29 @@ def create_header(cohort_name: str | None = None) -> None:
                             "Statistics",
                             on_click=lambda: ui.navigate.to("/diagnostic/statistics"),
                         )
+
+                # Gene or variant, across every cohort (always visible)
+                def on_lookup(e) -> None:
+                    text = (lookup.value or "").strip()
+                    if not text:
+                        return
+                    variant = parse_variant(text)
+                    if variant is not None:
+                        ui.navigate.to(f"/variant/{quote(variant.label)}")
+                    else:
+                        ui.navigate.to(f"/gene/{quote(text, safe='')}")
+
+                lookup = (
+                    ui.input(placeholder="Gene or variant")
+                    .props("outlined dense dark color=white clearable")
+                    .classes("w-44")
+                    .on("keydown.enter", on_lookup)
+                    .mark("gene-lookup")
+                    .tooltip(
+                        "A gene symbol, or a variant as chr:pos:ref:alt: "
+                        "what every cohort has of it"
+                    )
+                )
 
                 # Project selector dropdown (always visible)
                 try:
