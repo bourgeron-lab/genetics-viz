@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.26.1] - 2026-10-24
 
 ### Fixed
 - **The app restarted every ~45 s after updating to 0.26.0**, showing "connection lost". Building the gene index for a cohort's WisecondorX table took up to 13 GB, the VM killed the app, and the build started over on every restart. Now:
