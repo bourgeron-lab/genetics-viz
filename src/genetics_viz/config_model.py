@@ -317,8 +317,8 @@ def get_gene_index_dir() -> Optional[Path]:
     """Return where the cross-cohort gene index is kept, or ``None`` with no config.
 
     Defaults to ``.gene_index/`` next to the config file, as for the GeneTrek
-    cache: local disk, so lookups never cross the data mount. It holds
-    genotypes, so it is created readable by the app's user only.
+    cache: a directory the app can already write (on the VM, the share). It
+    holds genotypes, so it is created readable by the app's user only.
     """
     if _app_config is None:
         return None

@@ -212,7 +212,17 @@ def read_cohort_wombat(
     sniffed = _wombat_read_kwargs(tsv_path, header_sources)
     if sniffed is None:
         return None
+    return _read_sniffed(tsv_path, sniffed, columns, kwargs)
+
+
+def _read_sniffed(
+    tsv_path: Path,
+    sniffed: Tuple[int, Dict[str, Any]],
+    columns: Optional[Iterable[str]],
+    kwargs: Dict[str, Any],
+) -> Optional[pl.DataFrame]:
     blanks, read_kwargs = sniffed
+    read_kwargs = dict(read_kwargs)
     if columns is not None:
         # Selected by index and renamed here: polars 1.x and 2.x disagree on
         # whether ``new_columns`` names the file's columns or the selected ones.
@@ -229,6 +239,44 @@ def read_cohort_wombat(
     if df is not None and names is not None:
         df.columns = names
     return df
+
+
+def scan_cohort_wombat(
+    tsv_path: Path,
+    header_sources: Iterable[Path],
+    columns: Iterable[str],
+    null_values: List[str],
+) -> Optional[pl.LazyFrame]:
+    """The named columns of a cohort Wombat table, all strings, as a LazyFrame.
+
+    A table with its own header is scanned, so a streaming collect never holds
+    the whole file: SPARK iWES-v3's 2 GB table took 14.7 GB read eagerly. A
+    headerless one (the small de novo tables) is read through
+    :func:`read_cohort_wombat`. None for a blank file.
+    """
+    sniffed = _wombat_read_kwargs(tsv_path, header_sources)
+    if sniffed is None:
+        return None
+    blanks, read_kwargs = sniffed
+    if blanks or read_kwargs:
+        # The family files were already tried: reuse the header found
+        df = _read_sniffed(
+            tsv_path,
+            sniffed,
+            columns,
+            {"infer_schema_length": 0, "null_values": null_values},
+        )
+        return None if df is None else df.lazy()
+    header = (_first_lines(tsv_path)[1] or "").split("\t")
+    wanted = set(columns)
+    return pl.scan_csv(
+        tsv_path,
+        separator="\t",
+        infer_schema_length=0,
+        quote_char=None,
+        null_values=null_values,
+        low_memory=True,
+    ).select([c for c in header if c in wanted])
 
 
 def _read_wombat_body(

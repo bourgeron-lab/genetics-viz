@@ -5,6 +5,16 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The app restarted every ~45 s after updating to 0.26.0**, showing "connection lost". Building the gene index for a cohort's WisecondorX table took up to 13 GB, the VM killed the app, and the build started over on every restart. Now:
+  - each table is built in a separate, lower-priority process, so a table too large for the machine is skipped (until it changes, and listed under the gene pages' index line) instead of taking the app down;
+  - the largest tables need far less memory: 650 MB instead of 13.4 GB for CANDY_mpx's WisecondorX calls, 4.6 GB instead of 14.7 GB for SPARK iWES-v3's 2 GB Wombat table;
+  - progress is saved after each table, so a restart continues where it stopped.
+- The gene page's consequence column now shows the consequences of that gene's transcripts only. The index is rebuilt once after updating.
+- The gene index leaves out WisecondorX segments under every call threshold ("Below threshold"), which the SVs tab and Search hide by default.
+
 ## [0.26.0] - 2026-10-23
 
 ### Added
