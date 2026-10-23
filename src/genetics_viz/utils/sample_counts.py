@@ -193,7 +193,10 @@ def _wombat_read_kwargs(
 
 
 def read_cohort_wombat(
-    tsv_path: Path, header_sources: Iterable[Path] = (), **kwargs: Any
+    tsv_path: Path,
+    header_sources: Iterable[Path] = (),
+    columns: Optional[Iterable[str]] = None,
+    **kwargs: Any,
 ) -> Optional[pl.DataFrame]:
     """Read a cohort Wombat table, borrowing a family's header if it has none.
 
@@ -202,20 +205,44 @@ def read_cohort_wombat(
     file has no header. Raises ``MissingHeaderError`` when none fits, rather
     than reading the first row as column names. Other keyword arguments go to
     :func:`read_tsv_or_none`. None for a file with no rows.
+
+    ``columns`` reads only those of the named columns the table has, borrowed
+    header or not; the rest are never parsed.
     """
     sniffed = _wombat_read_kwargs(tsv_path, header_sources)
     if sniffed is None:
         return None
     blanks, read_kwargs = sniffed
+    if columns is not None:
+        # Selected by index and renamed here: polars 1.x and 2.x disagree on
+        # whether ``new_columns`` names the file's columns or the selected ones.
+        header = read_kwargs.pop("new_columns", None)
+        if header is None:
+            header = (_first_lines(tsv_path)[1] or "").split("\t")
+        wanted = set(columns)
+        indices = [i for i, name in enumerate(header) if name in wanted]
+        names = [header[i] for i in indices]
+        read_kwargs["columns"] = indices
+    else:
+        names = None
+    df = _read_wombat_body(tsv_path, blanks, {**kwargs, **read_kwargs})
+    if df is not None and names is not None:
+        df.columns = names
+    return df
+
+
+def _read_wombat_body(
+    tsv_path: Path, blanks: int, kwargs: Dict[str, Any]
+) -> Optional[pl.DataFrame]:
     if not blanks:
-        return read_tsv_or_none(tsv_path, **kwargs, **read_kwargs)
+        return read_tsv_or_none(tsv_path, **kwargs)
     # The leading blank lines are cut off here rather than through skip_rows:
     # polars 1.17 skips the blank line by itself and then the first row too.
     with open(tsv_path, "rb") as f:
         for _ in range(blanks):
             f.readline()
         rest = f.read()
-    return read_tsv_or_none(io.BytesIO(rest), **kwargs, **read_kwargs)
+    return read_tsv_or_none(io.BytesIO(rest), **kwargs)
 
 
 def count_variants_per_sample(

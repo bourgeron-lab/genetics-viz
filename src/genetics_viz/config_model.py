@@ -46,6 +46,7 @@ class AppConfig:
     reference_fasta: str = ""
     genetrek_url: str = ""
     genetrek_cache_dir: str = ""
+    gene_index_dir: str = ""
 
 
 #: GeneTrek instance used when the config names none. The dev instance, until
@@ -184,6 +185,7 @@ def load_config(config_path: Path) -> AppConfig:
     reference_fasta = str(raw.get("reference_fasta") or "")
     genetrek_url = str(raw.get("genetrek_url") or "")
     genetrek_cache_dir = str(raw.get("genetrek_cache_dir") or "")
+    gene_index_dir = str(raw.get("gene_index_dir") or "")
 
     config = AppConfig(
         config_path=config_path,
@@ -195,6 +197,7 @@ def load_config(config_path: Path) -> AppConfig:
         reference_fasta=reference_fasta,
         genetrek_url=genetrek_url,
         genetrek_cache_dir=genetrek_cache_dir,
+        gene_index_dir=gene_index_dir,
     )
     _app_config = config
 
@@ -244,6 +247,8 @@ def save_config(config: AppConfig) -> None:
         data["genetrek_url"] = config.genetrek_url
     if config.genetrek_cache_dir:
         data["genetrek_cache_dir"] = config.genetrek_cache_dir
+    if config.gene_index_dir:
+        data["gene_index_dir"] = config.gene_index_dir
 
     with open(config.config_path, "w") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -306,6 +311,20 @@ def get_genetrek_cache_dir() -> Optional[Path]:
     if _app_config.genetrek_cache_dir:
         return Path(_app_config.genetrek_cache_dir)
     return _app_config.config_path.parent / ".genetrek"
+
+
+def get_gene_index_dir() -> Optional[Path]:
+    """Return where the cross-cohort gene index is kept, or ``None`` with no config.
+
+    Defaults to ``.gene_index/`` next to the config file, as for the GeneTrek
+    cache: local disk, so lookups never cross the data mount. It holds
+    genotypes, so it is created readable by the app's user only.
+    """
+    if _app_config is None:
+        return None
+    if _app_config.gene_index_dir:
+        return Path(_app_config.gene_index_dir)
+    return _app_config.config_path.parent / ".gene_index"
 
 
 def get_preferences_path() -> Optional[Path]:

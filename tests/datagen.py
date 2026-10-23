@@ -281,6 +281,14 @@ def build_cohort_results(
         ],
     )
     write_tsv(
+        Path(f"{rprefix}.roh_genes.tsv"),
+        ["IID", "chrom", "roh_start", "roh_end", "roh_length_mb", "roh_length_cm", "roh_class",
+         "gene", "gene_id", "gene_start", "gene_end", "gene_fraction_in_roh",
+         "gene_hotspot_fraction", "hotspot_group", "family_id"],
+        [[m[1], "chr2", 1000001, 9000000, 8.0, 12.0, "long", "GENEA", "ENSG0001", 2000000,
+          2100000, 1.0, 0.0, "EUR", m[0]] for m in pedigree if m[1] in children],
+    )  # fmt: skip
+    write_tsv(
         Path(f"{rprefix}.roh_windows.tsv"),
         ["group", "chrom", "start", "end", "n_founders_in_roh", "n_founders", "freq"],
         [("ALL", "chr1", 45300000, 45400000, 2, 4, 0.5), ("ALL", "chr1", 45400000, 45500000, 1, 4, 0.25),
@@ -1384,3 +1392,86 @@ def add_report_case(data: Path, fid: str = "1001") -> None:
         [[fid, "chr22:50721500:G:A", "S3", "curator", "de novo", "present", "", "0",
           "2026-10-01T09:00:00"]],
     )  # fmt: skip
+
+
+# ---------------------------------------------------------------------------
+# A second cohort and a second data directory, for the gene and variant pages
+# ---------------------------------------------------------------------------
+
+#: Cohort OTHER: a trio whose child S9 carries DEMO's SHANK3 de novo again.
+OTHER_PEDIGREE: List[Sequence[str]] = [
+    ("2001", "S7", "0", "0", "1", "1"),
+    ("2001", "S8", "0", "0", "2", "1"),
+    ("2001", "S9", "S7", "S8", "2", "2"),
+]
+
+#: The SHANK3 variant of DEMO's S3, and one only S9 has.
+OTHER_WOMBAT_ROWS = [
+    ("chr22", 50674000, "G", "A", "S9", "2", "0/1", "S7", "S8", "0/0", "0/0",
+     "missense_variant", "SHANK3", "ENSG00000251322", 0.0),
+    ("chr22", 50675000, "C", "T", "S9", "2", "0/1", "S7", "S8", "0/1", "0/0",
+     "synonymous_variant", "SHANK3", "ENSG00000251322", 0.01),
+]  # fmt: skip
+
+#: Validations of the shared variant: present in S3, absent in S9 (with an
+#: earlier, ignored present).
+GENE_CASE_VALIDATIONS = [
+    ["1001", "chr22:50674000:G:A", "S3", "curator", "de novo", "present", "", "0",
+     "2026-10-05T09:00:00"],
+    ["2001", "chr22:50674000:G:A", "S9", "curator", "", "present", "", "1",
+     "2026-10-05T10:00:00"],
+    ["2001", "chr22:50674000:G:A", "S9", "curator", "", "absent", "artefact", "0",
+     "2026-10-06T10:00:00"],
+]  # fmt: skip
+
+GENE_CASE_DIAGNOSTICS = [
+    ("snvs.tsv", ["1001", "chr22:50674000:G:A", "SHANK3", "missense_variant", "S3",
+                  "curator", "2026-10-07T10:00:00", "fits", "0", "pathogenic"]),
+    ("svs.tsv", ["1001", "chr2:165114001-165316000:del", "SCN2A:exonic", "LOSS", "S3",
+                 "curator", "2026-10-07T11:00:00", "", "0", "uncertain"]),
+]  # fmt: skip
+
+
+def add_gene_case(data: Path) -> None:
+    """Cohort OTHER beside DEMO, and curation of the variant they share.
+
+    Opt-in: a third cohort changes the home page and every cohort list.
+    """
+    other = data / "cohorts" / "OTHER"
+    write_tsv(
+        other / "OTHER.pedigree.tsv",
+        ["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"],
+        OTHER_PEDIGREE,
+    )
+    write_tsv(
+        other / "wombat" / "OTHER.rare.vep1.default.results.tsv",
+        WOMBAT_COLUMNS,
+        OTHER_WOMBAT_ROWS,
+    )
+    write_tsv(
+        data / "validations" / "snvs.tsv", VALIDATION_COLUMNS, GENE_CASE_VALIDATIONS
+    )
+    for name, row in GENE_CASE_DIAGNOSTICS:
+        path = data / "diagnostics" / name
+        if not path.exists():
+            write_tsv(path, DIAGNOSTIC_COLUMNS, [])
+        with open(path, "a") as f:
+            f.write("\t".join(row) + "\n")
+
+
+def build_second_data_dir(root: Path) -> Path:
+    """A second data directory whose one cohort, EXTRA, has the SHANK3 variant."""
+    data = root / "data2"
+    extra = data / "cohorts" / "EXTRA"
+    write_tsv(
+        extra / "EXTRA.pedigree.tsv",
+        ["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"],
+        [("3001", "S10", "0", "0", "1", "2")],
+    )
+    write_tsv(
+        extra / "wombat" / "EXTRA.rare.vep1.default.results.tsv",
+        WOMBAT_COLUMNS,
+        [("chr22", 50674000, "G", "A", "S10", "1", "0/1", "0", "0", "./.", "./.",
+          "missense_variant", "SHANK3", "ENSG00000251322", 0.0)],
+    )  # fmt: skip
+    return data

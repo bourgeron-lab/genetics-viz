@@ -5,6 +5,15 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Gene and variant pages, across every cohort.** Type a gene symbol or a variant (`chr22:50674000:G:A`, `22-50674000-G-A`) in the new header box, on any page:
+  - `/gene/<symbol>` lists the gene's small variants (one row per variant with its carriers, families, cohorts and validation tally, then one row per carrier), WisecondorX calls, STR genotypes past normal, ROH segments and diagnostics, from every cohort of every data directory. A previous symbol (`KIAA1109`) opens the current gene (`BLTP1`) and searches both.
+  - `/variant/<variant>` shows who carries it, and every validation and diagnostic ever recorded for it, ignored ones included, even when it is in no cohort table.
+  - A family of another data directory opens there: the link switches your data directory first.
+- **Gene index.** The pages read a local index of the cohort tables, built at startup and checked every 30 min; only tables that changed are read again. It lives in `gene_index_dir` (default `.gene_index/` next to the config file). Families with no cohort-level table are not in it.
+
 ## [0.25.0] - 2026-10-22
 
 ### Security

@@ -5,10 +5,20 @@ from genetics_viz.pages import (
     admin,
     cohort,
     diagnostic,
+    gene,
     login,
     profile,
     search,
     validation,
 )
 
-__all__ = ["admin", "cohort", "diagnostic", "login", "profile", "search", "validation"]
+__all__ = [
+    "admin",
+    "cohort",
+    "diagnostic",
+    "gene",
+    "login",
+    "profile",
+    "search",
+    "validation",
+]

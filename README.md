@@ -10,6 +10,7 @@ A web-based visualization tool for genetics cohort data, providing interactive a
 - 👨‍👩‍👧‍👦 **Family Structure Visualization** - View pedigree information and family relationships
 - 🧬 **Variant Analysis** - Interactive TanStack-powered tables for DNM (de novo mutations) and WOMBAT analysis
 - 🔍 **Cohort-Wide Search** - Search variants across all samples with filters on locus, genesets, impact, individuals (sex, phenotype, parental status), and validation status
+- 🧭 **Gene and Variant Pages** - "Have we seen this before?": every SNV, SV, STR genotype, ROH segment, validation and diagnostic of a gene or a variant, across all cohorts and data directories
 - 📈 **Variant Statistics** - Interactive charts (chromosome distribution, consequence/validation pie charts) and ideogram visualization with cytoband rendering
 - ✅ **Variant Validation** - Track and validate genetic variants with inheritance patterns
 - 🔬 **IGV Integration** - Built-in IGV.js browser for sequence visualization (CRAM files)
@@ -116,6 +117,13 @@ ancestry_reference_dir: /path/to/references/ancestry-pgs
 genetrek_url: https://genetrek-py.dev.pasteur.cloud/
 # genetrek_cache_dir: /path/to/cache
 
+# Optional. Where the gene index behind the gene and variant pages is kept
+# (default: .gene_index/ next to this file). It copies, by gene, every
+# cohort's Wombat, WisecondorX, ExpansionHunter and ROH genes tables, so keep
+# it on local disk and as private as the data. It is built at startup, off
+# the request path, and only tables that changed are read again.
+# gene_index_dir: /path/to/gene_index
+
 # Auto-generated on first run — do not edit manually
 storage_secret: "<hex-string>"
 ```
@@ -172,6 +180,7 @@ The interface provides:
 - **Cohort View** - Family list and overview
 - **Family View** - DNM, WOMBAT, and SV analysis tabs with TanStack tables
 - **Search Page** - Cohort-wide variant search with tabbed filters (Variants and Individuals)
+- **Gene and Variant Pages** - Type a gene symbol or a variant (`chr22:50674000:G:A`) in the header box: `/gene/<symbol>` and `/variant/<variant>` gather it from every cohort of every data directory
 - **Variant Statistics** - Charts and ideogram views for search results
 - **Validation Pages** - Track variant validations (file-specific and all validations)
 - **Diagnostic Pages** - Track variant diagnostic conclusions
