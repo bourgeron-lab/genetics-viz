@@ -584,7 +584,9 @@ def show_sv_dialog(
                 for key, value in (("start", new_start), ("end", new_end)):
                     if value is not None:
                         set_curated(key, value)
-                update_roi()
+                # Before update_roi: it redraws the read panel, deleting the
+                # button this handler runs from, and a notify made from a
+                # deleted element's slot fails.
                 ui.notify(
                     f"Curated position set to {chrom}:{state.bounds['start']}"
                     f"-{state.bounds['end']}"
@@ -595,6 +597,7 @@ def show_sv_dialog(
                     ),
                     type="warning" if approximate else "positive",
                 )
+                update_roi()
 
             refresh_read_evidence()
 
