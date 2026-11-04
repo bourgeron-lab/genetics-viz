@@ -5,6 +5,15 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Vedette tab** in the family page's SVs tab, next to WisecondorX: the family's Vedette calls (`svs/vedette/<FID>.vedette.tsv`), one row per carrier, with every member's genotype and copy number, inheritance, impact level and reason, genes and cohort frequency.
+  - Presets: **Rare** (cohort AF ≤ 1 %, carrier GQ ≥ 20; the opening view), **De novo candidates**, **High impact**, **All calls**. Filters for type, size, AF, GQ, impact level, inheritance, genesets and validation status. All of it is kept in the page link.
+  - The eye opens the SV dialog with Vedette's details: the carrier's own call before merging (FILTER, evidence source, precise or not, SQ, pairs, split reads, CIGAR reads), or a note that the carrier was only re-genotyped. Precise calls get narrow read windows.
+  - **Validations go to `validations/vedette.tsv`**, keyed by locus like the other SVs, with the Vedette site id, caller version and model version, so they can be used to evaluate Vedette. They show on the Validation pages as type "Vedette". Diagnostics are shared with the other SVs.
+- **Read Evidence draws deletions and insertions inside reads** (CIGAR, from 30 bp). Events under a few hundred bp are written that way, with no discordant pair or split read; a deletion's in-read evidence also suggests its breakpoints.
+
 ## [0.26.1] - 2026-10-24
 
 ### Fixed

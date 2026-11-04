@@ -1,0 +1,97 @@
+# Vedette SV caller (Alex's): family tables under families/.../svs/vedette/.
+#
+# Vedette changes quickly. The app reads its columns by name and degrades when
+# one is missing; everything it words or colours is here.
+
+# Where the files are, relative to the family / sample directory.
+family_subdir: svs/vedette
+# <FID>.vedette.tsv and <FID>.vedette.vcf.gz (the VCF only gives the caller
+# version, from its ##source lines).
+family_suffix: .vedette.tsv
+family_vcf_suffix: .vedette.vcf.gz
+# The sample's own calls, every FILTER kept: <ID>.filtered.vcf.gz.
+sample_vcf_suffix: .filtered.vcf.gz
+
+# A carrier's own call matches the family site when they share the type and
+# overlap reciprocally by at least this much.
+own_call_min_overlap: 0.5
+# Without an own call, a site shorter than this is assumed to have
+# base-pair breakpoints (junction evidence); longer ones get the wide read
+# windows of a depth call.
+assume_precise_below_bp: 1000
+
+types:
+  DEL: { label: DEL, color: "#b3362b" }
+  DUP: { label: DUP, color: "#2a6f97" }
+
+# The level part of the `impact` column ("+0.90 — élevé · ..."), matched
+# case-insensitively, or an `impact_level` column holding the code.
+# `rank` orders them (higher = more severe).
+impact_levels:
+  high:
+    label: High
+    color: "#b91c1c"
+    rank: 3
+    match: ["élevé", "eleve", "high"]
+  moderate:
+    label: Moderate
+    color: "#ea580c"
+    rank: 2
+    match: ["modéré", "modere", "moderate"]
+  low:
+    label: Low
+    color: "#ca8a04"
+    rank: 1
+    match: ["faible", "low"]
+  none:
+    label: No coding gene
+    color: "#9ca3af"
+    rank: 0
+    match: ["aucun gène codant", "aucun gene codant", "none"]
+
+# Per-child codes of the `inheritance` column ("S3:denovo; S4:maternal").
+# A founder has none. Unknown codes are shown raw, in grey.
+inheritance:
+  denovo: { label: de novo, color: "#dc2626" }
+  denovo_lowconf: { label: de novo (low conf.), color: "#f97316" }
+  maternal: { label: maternal, color: "#db2777" }
+  paternal: { label: paternal, color: "#2563eb" }
+  biparental: { label: biparental, color: "#7c3aed" }
+  none: { label: none, color: "#6b7280" }
+
+# Genotype badges of the Family column.
+genotype_colors:
+  "0/0": "#d1d5db"
+  "0/1": "#f59e0b"
+  "1/1": "#b91c1c"
+  missing: "#f3f4f6"
+
+# Filter presets. Each sets every filter; a field left out takes its default
+# below. The first is the tab's opening view.
+defaults:
+  types: [DEL, DUP]
+  min_size: null
+  max_size: null
+  max_af: null
+  min_gq: null
+  impact_levels: [high, moderate, low, none]
+  inheritance: []   # empty = any
+presets:
+  rare:
+    label: Rare
+    tooltip: Cohort AF ≤ 1 %, carrier GQ ≥ 20
+    max_af: 0.01
+    min_gq: 20
+  denovo:
+    label: De novo candidates
+    tooltip: de novo (any confidence), cohort AF ≤ 1 %, carrier GQ ≥ 20
+    max_af: 0.01
+    min_gq: 20
+    inheritance: [denovo, denovo_lowconf]
+  impact:
+    label: High impact
+    tooltip: Impact level moderate or high
+    impact_levels: [high, moderate]
+  all:
+    label: All calls
+    tooltip: No filter

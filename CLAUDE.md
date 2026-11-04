@@ -21,7 +21,7 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
 ## Tests and CI
 
 - `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
-- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle and the gene index manifests. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle, the gene index manifests and the Vedette table cache. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
 - An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
 - **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
   - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
@@ -59,6 +59,7 @@ src/genetics_viz/
     sv_validation_panel.py        # SV dialog: validation form (curated position) and history
     sv_cn_panel.py                # SV dialog: copy-number panel (sample ÷ control panel)
     sv_read_panel.py              # SV dialog: samplot-like read-evidence panel
+    vedette_details.py            # SV dialog for a Vedette call: details card, own call, SVSource
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
@@ -77,6 +78,7 @@ src/genetics_viz/
     report.yaml                   # Family report: wording, PGS traits, aneuploidy cut-off, methods
     clinvar_colors.yaml           # ClinVar significance term -> color
     cnv.yaml                      # CN mask/display, single-vs-split read view, read-evidence caps/colours
+    vedette.yaml                  # Vedette: impact levels, inheritance codes, colours, presets
     column_names.yaml             # Column display names, groups, sorting, drop flags
     cytobands_hg38.tsv            # Cytoband data for ideogram rendering
     continuous_scores.yaml        # Continuous score color ranges
@@ -116,7 +118,8 @@ src/genetics_viz/
         wombat_filters.py         # Wombat tab filters: WombatFilters, panel, apply_filters
         wombat_stats.py           # Wombat tab Stats dialog
         dnm_tab.py                # DNM analysis tab (per-family)
-        svs_tab.py                # SV analysis tab (per-family)
+        svs_tab.py                # SV analysis tab (per-family): WisecondorX + Vedette sub-tabs
+        vedette_tab.py            # SVs tab, Vedette sub-tab: carrier rows, presets, filters
         stats_panel.py            # Carrier stats box/bar plots
     validation/
       file.py                     # Per-file validation page
@@ -154,6 +157,7 @@ src/genetics_viz/
     cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
     cnv_plots.py                  # ECharts builder for the copy-number panel
     sv_view.py                    # One read window or one per breakpoint, by SV type and size
+    vedette.py                    # Vedette SV calls: reading, carrier rows, filters/presets, own call
     sv_reads.py                   # pysam: read pairs/split reads classed by orientation
     sv_breakpoints.py             # Suggested breakpoints: clips/splits, pair interval, CN check
     sv_read_plots.py              # ECharts builder for the read-evidence panel
@@ -339,6 +343,18 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - One renderer, `components/diagnostics_panel.py`, for the cohort and standalone family pages; each page wraps it in its own refreshable.
 - STR and UPD keys are unreadable, so `utils/diagnostic_labels.py` words them: an STR is its gene badge, an `STR` tag and the count (`CuratedRepeats` of the member's standing validation, else `~` + the longer allele from the newest catalog's family genotype table); a UPD is `UPD` + `chr<N> · <origin>`. The raw key is in the tooltip.
 
+### Vedette SV Calls
+Vedette is Alex's SV caller, under active development; the tab is there to visualise its calls and record visual validations that feed back into it.
+- **Files**: family `svs/vedette/<FID>.vedette.tsv` (PASS sites: `site_id contig start end svtype size filter cohort_af cohort_carrier_frac cohort_ncarrier genes impact`, `GT_/CN_/GQ_<id>` per member, `inheritance`), `<FID>.vedette.vcf.gz` (read only for the last `##source=`, the caller version); sample `svs/vedette/<ID>.filtered.vcf.gz` (the sample's own calls, every FILTER kept). No cohort level yet, so Vedette is not in the gene index or Search.
+- **Read by column name, degrading** (`utils/vedette.py`): a missing column leaves its field empty, unknown ones are kept raw. `impact` packs score, French level and reason (`+0.90 — élevé · DEL exonique RERE`); `impact_score`/`impact_level`/`impact_reason` columns win if Vedette adds them. Levels and inheritance codes are worded in `config/vedette.yaml`; an unknown one is shown raw, grey. `start` is the VCF `POS`.
+- **One row per carrier** (alt GT), so validation, diagnostics and the dialog work per sample as for WisecondorX. A family is tens of thousands of rows: they and their gene badges are built off-thread (`_load`), the scorer taken on the event loop first. The table is cached on `(path, mtime, size)` (`clear_vedette_cache`).
+- **`site_id` is positional and renumbered when the cohort is merged again**: the key is the locus, `chr:start-end:del|dup`, as WisecondorX's. The site id is only a note in the validation row.
+- **Validations in `validations/vedette.tsv`** (`VEDETTE_VALIDATION_HEADER`: the SV columns + `SiteId CallerVersion ModelVersion`), a `VALIDATION_KINDS` entry of its own so Alex gets a clean, versioned set. The family report and the dialog's suggestions merge it with `svs.tsv` (`merge_validation_maps`). Diagnostics stay in the shared `diagnostics/svs.tsv`.
+- **`show_sv_dialog(source=SVSource(...))`** carries what differs by caller: validation kind and extra columns, details card, breakpoint precision (narrow read windows), title. The default is WisecondorX's. `vedette_source` reads the carrier's own call (one tabix query, matched by type and ≥ 50 % reciprocal overlap); without one, sites under 1 kb are assumed precise.
+- Most carrier rows have **no own call**: the cohort step re-genotypes every sample at every site (85 % of C0733-011-301's proband rows under the Rare preset).
+- **Read evidence draws CIGAR `D`/`I` of ≥ `min_indel_bp`** (`InRead`, grouped by position and length): small events have no pair, split or clip. For a deletion they count as split reads at each end in the suggested breakpoints.
+- Test data: `datagen.VEDETTE_ROWS` (family 1001, written by default), S3's own-call VCF, and `CRAM_INREAD_DELS` reads holding `VEDETTE_DEL` in their CIGAR.
+
 ### CNV Coverage and SV Read Evidence
 - The ghfc-ngs `cnv_coverage` step writes `samples/.../<ID>/coverage/<ID>.cov_b<bin>q<mapq>.{bw,json}`: every bin holds `2 × depth / autosomal median` (about 2 on a normal autosome). The `cnv_panel` step of a controls cohort writes a versioned, self-contained `cohorts/<controls>/cnv_panel/v<version>/` (per-bin median and unscaled MAD for `autosomes`, `XX`, `XY`, plus `panel.json` with PARs and expected ploidy). A cohort fitted against it gets `cohorts/<NAME>/coverage/<NAME>.<tag>.panel_v<version>.fit.tsv`. The contract is documented in ghfc-ngs `documentation/params.md`.
 - **The division happens here, at view time**: CN = expected ploidy × sample / panel median, PAR-aware, in `utils/cnv_coverage.py`. Per-sample files never depend on a panel, so a new panel version rewrites nothing.
@@ -447,7 +463,7 @@ Every cohort right-hand tab but Statistics, and every family tab, has a `Downloa
 ### Shareable Links (view state in the URL)
 The family pages (both), the cohort page and the Search page keep their view in the URL query, so the address bar is a link a curator can send (`components/page_link.py`).
 - **Read at build, written as it changes.** A page takes `request: Request`, builds `PageLink.from_request(request)` and opens with its values; every change calls `link.set(...)` then `link.push()` (`history.replaceState`: no reload, no history entry per click). Only non-default values are written, so a page opened bare is in its usual state.
-- **Keys:** family pages `tab`, `m` (members), the Wombat tab's shown config `wcfg` and its `wlcr`/`wgnomad`/`wmnv`/`wgs`/`wimp`/`wval`/`wsort`/`wpage`, the SV tab `svcalls`; cohort page `view=workflow`, `panel`, and the individuals table's column filters (`fid`, `sid`, `sex`, `pheno`, `diag`, `qc`, `father`, `mother`); Search `q`, the whole form as compact JSON, written when Search runs and run on open.
+- **Keys:** family pages `tab`, `m` (members), the Wombat tab's shown config `wcfg` and its `wlcr`/`wgnomad`/`wmnv`/`wgs`/`wimp`/`wval`/`wsort`/`wpage`, the SV tab `svtab` and `svcalls`, the Vedette sub-tab `vpre` (preset, or `custom` with `vtype`/`vsize`/`vaf`/`vgq`/`vimp`/`vinh`) and `vgs`/`vval`; cohort page `view=workflow`, `panel`, and the individuals table's column filters (`fid`, `sid`, `sex`, `pheno`, `diag`, `qc`, `father`, `mother`); Search `q`, the whole form as compact JSON, written when Search runs and run on open.
 - Lists are comma-joined, `-` is an emptied list (not the same as absent). Consequences shorten to impact levels (`wimp=HIGH`). Search names sources by display name, never by directory: a link carries no server path.
 - Only the shown Wombat config is in the link; the others keep their state while hidden. A linked value the page cannot honour (a tab without data, an unknown config or member) falls back to the default.
 - **The query is in the server's access log**, as the path already is. The fragment would not be, but Python could only read it after the page was built, through a JavaScript round trip.

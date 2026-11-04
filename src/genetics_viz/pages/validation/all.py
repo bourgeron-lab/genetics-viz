@@ -82,7 +82,7 @@ async def validation_all_page() -> None:
                             row_dict["Type"] = vtype
                             row_dict["OriginalVariant"] = row.get("Variant", "")
                             row_dict["IsCurated"] = False
-                            if vtype == "SV":
+                            if vtype in ("SV", "Vedette"):
                                 _apply_curated_sv(row_dict)
                             raw_validations.append(row_dict)
 
@@ -568,6 +568,12 @@ async def validation_all_page() -> None:
                                 # tables: they live on the family page's tabs.
                                 ui.navigate.to(
                                     f"/cohort/{cohort_name}/family/{family_id}"
+                                )
+                            elif variant_type == "Vedette":
+                                # So does a Vedette call (the site's genotypes).
+                                ui.navigate.to(
+                                    f"/cohort/{cohort_name}/family/{family_id}"
+                                    "?tab=svs&svtab=vedette"
                                 )
                             elif variant_type == "SNV":
                                 parts = variant_str.split(":")

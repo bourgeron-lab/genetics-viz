@@ -4,7 +4,8 @@ The SV's start and end are judged separately. Evidence left of the SV's middle
 speaks for its start, and evidence right of it for its end. For each side:
 
 - **Exact position** from soft-clip clusters and split-read junctions, scored
-  as clips + 2 × split reads. Evidence whose orientation does not fit the SV
+  as clips + 2 × split reads. For a deletion, a deletion inside a read's
+  alignment counts as a split read at each of its ends. Evidence whose orientation does not fit the SV
   type counts for ``mismatch_weight`` of that. A deletion's start has reads
   clipped after it and its end reads clipped before it; a tandem duplication
   is the reverse. Inversions, insertions and translocations accept both.
@@ -154,6 +155,16 @@ def _read_evidence(
             cls_ok = expected_split is None or split.cls == expected_split
             add(split.ja, split.ja_side, "split", 2.0, cls_ok)
             add(split.jb, split.jb_side, "split", 2.0, cls_ok)
+        # A deletion inside a read joins its two ends as a split read would:
+        # clipped after the first, before the second. Only for deletions, the
+        # one type it speaks for.
+        if sv_type == "del":
+            for d in cell.indels:
+                if d.kind != "del" or d.low:
+                    continue
+                for _ in range(d.count):
+                    add(d.x1, "right", "split", 2.0, True)
+                    add(d.x2, "left", "split", 2.0, True)
     return sides
 
 

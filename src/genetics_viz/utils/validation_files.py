@@ -14,6 +14,9 @@ VALIDATION_KINDS: List[Tuple[str, str]] = [
     ("SV", "svs.tsv"),
     ("STR", "strs.tsv"),
     ("UPD", "upds.tsv"),
+    # Vedette SV calls (svs/vedette/): keyed as SVs, kept apart for the
+    # caller's development, with its version.
+    ("Vedette", "vedette.tsv"),
 ]
 
 VALIDATION_TYPES: List[str] = [label for label, _ in VALIDATION_KINDS]
@@ -24,11 +27,12 @@ TYPE_COLORS: Dict[str, str] = {
     "SV": "#8b5cf6",
     "STR": "#0d9488",
     "UPD": "#5d4037",
+    "Vedette": "#c2410c",
 }
 
 
 def validation_path(data_dir: Path, vtype: str) -> Path:
-    """``<data_dir>/validations/<file>`` for a type label (``SNV``, ``SV``, ``STR``, ``UPD``)."""
+    """``<data_dir>/validations/<file>`` for a type label (``SNV``, ``SV``, ``STR``, ``UPD``, ``Vedette``)."""
     name = dict(VALIDATION_KINDS)[vtype]
     return data_dir / "validations" / name
 

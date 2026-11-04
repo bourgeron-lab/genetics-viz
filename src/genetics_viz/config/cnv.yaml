@@ -56,6 +56,9 @@ read_evidence:
   # when at least this many reads are clipped there (one is usually noise).
   min_clip_bp: 20
   min_clip_reads: 2
+  # A deletion or insertion inside a read's alignment (CIGAR D / I) is drawn
+  # from this length: small SVs are written that way, not as pairs or clips.
+  min_indel_bp: 30
   # Suggested breakpoints: clips and split-read junctions within this many bp
   # count together, and a side needs clips + 2 x split reads >= the score.
   breakpoint_tolerance_bp: 3
@@ -90,6 +93,8 @@ read_evidence:
     split: "#000000"
     split_inv: "#7c3aed"
     soft_clip: "#f59e0b"
+    in_read_del: "#c80000"
+    in_read_ins: "#7c3aed"
     insert_band: "rgba(156,163,175,0.22)"
     copy_number: "#2563eb"
     copy_number_masked: "#d1d5db"

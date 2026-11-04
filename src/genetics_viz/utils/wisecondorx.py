@@ -36,9 +36,10 @@ def infer_sv_type(row_data: Dict[str, Any]) -> str:
         return "dup"
     if "LOSS" in call:
         return "del"
-    raw_type = str(row_data.get("type", "")).lower()
-    if raw_type in ("dup", "del"):
-        return raw_type
+    for column in ("type", "svtype"):  # svtype: Vedette's DEL/DUP
+        raw_type = str(row_data.get(column, "")).lower()
+        if raw_type in ("dup", "del"):
+            return raw_type
     try:
         ratio = float(row_data.get("ratio", 0))
         return "dup" if ratio > 0 else "del"

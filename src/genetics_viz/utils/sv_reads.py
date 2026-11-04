@@ -19,6 +19,11 @@ position; only positions where several reads are clipped are kept, since that
 is what marks a breakpoint. The two together suggest exact breakpoints
 (``utils/sv_breakpoints.py``).
 
+A deletion or insertion inside a read's alignment (CIGAR ``D`` / ``I`` of at
+least ``min_indel_bp``) is how the aligner writes most events under a few
+hundred bp: no pair, split or clip shows them. Identical ones (same position
+and length) are counted together.
+
 Reads under ``min_mapq`` are left out unless asked for; they are then kept
 and flagged ``low``, to be drawn faded. Repeat-flanked events (22q11.2) have
 most of their evidence there. Read depth at ``coverage_bin_bp`` is computed
@@ -51,6 +56,9 @@ SPLIT_CLASSES = ("split", "split_inv")
 
 _CIGAR_RE = re.compile(r"(\d+)([MIDNSHP=X])")
 _SOFT_CLIP = 4
+_INS, _DEL = 1, 2
+#: CIGAR operations that move along the reference.
+_REF_OPS = (0, 2, 3, 7, 8)
 
 
 @dataclass(frozen=True)
@@ -99,6 +107,19 @@ class SoftClip:
 
 
 @dataclass(frozen=True)
+class InRead:
+    """Reads whose alignment holds the same deletion or insertion."""
+
+    kind: str  # "del" | "ins"
+    #: Reference span: the deleted bases, or ``x1 == x2`` at an insertion.
+    x1: int
+    x2: int
+    length: int
+    count: int
+    low: bool = False
+
+
+@dataclass(frozen=True)
 class Interchrom:
     x: int
     mate: str
@@ -110,6 +131,7 @@ class WindowReads:
     pairs: List[Pair] = field(default_factory=list)
     splits: List[SplitRead] = field(default_factory=list)
     clips: List[SoftClip] = field(default_factory=list)
+    indels: List[InRead] = field(default_factory=list)
     interchrom: List[Interchrom] = field(default_factory=list)
     insert_median: Optional[float] = None
     #: The expected insert range of concordant pairs (``insert_band`` percentiles).
@@ -189,6 +211,7 @@ def collect_window(
     cfg = cfg or READ_CONFIG
     min_mapq = int(cfg.get("min_mapq", 1))
     min_clip = int(cfg.get("min_clip_bp", 20))
+    min_indel = int(cfg.get("min_indel_bp", 30))
     bin_bp = max(1, int(cfg.get("coverage_bin_bp", 25)))
     n_bins = max(1, -(-window.width // bin_bp))
     depth = [0.0] * n_bins
@@ -197,6 +220,7 @@ def collect_window(
     same_chrom: Dict[str, Tuple[int, int, int, str, int, int, bool]] = {}
     proper_inserts: List[int] = []
     clips: Counter = Counter()
+    indels: Counter = Counter()
     seen_split: set[str] = set()
     seen_inter: set[str] = set()
 
@@ -232,6 +256,15 @@ def collect_window(
         if cigar and cigar[-1][0] == _SOFT_CLIP and cigar[-1][1] >= min_clip:
             if window.start <= r_end < window.end:
                 clips[(r_end, "right", low)] += 1
+        ref = r_start
+        for op, n in cigar:
+            if n >= min_indel and op in (_DEL, _INS):
+                x2 = ref + n if op == _DEL else ref
+                if x2 >= window.start and ref <= window.end:
+                    kind = "del" if op == _DEL else "ins"
+                    indels[(kind, ref, x2, n, low)] += 1
+            if op in _REF_OPS:
+                ref += n
 
         name = read.query_name
         sa = _first_sa(read)
@@ -336,6 +369,13 @@ def collect_window(
             if n >= min_reads
         ),
         key=lambda c: c.pos,
+    )
+    out.indels = sorted(
+        (
+            InRead(kind, x1, x2, n, count, low)
+            for (kind, x1, x2, n, low), count in indels.items()
+        ),
+        key=lambda d: (d.x1, d.kind),
     )
     out.depth = [
         [window.start + (i + 0.5) * bin_bp, round(d, 2)] for i, d in enumerate(depth)
