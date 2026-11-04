@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.28.0] - 2026-11-04
 
 ### Added
 - **Diagnostics record the variant's details when they are saved**, so the family report can give the clinician more than the key and the verdict (#37). From the row the diagnostic is saved from, in new columns after the existing ones in `diagnostics/snvs.tsv` and `svs.tsv`:
