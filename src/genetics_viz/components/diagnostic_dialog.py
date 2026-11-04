@@ -4,7 +4,7 @@ import csv
 from genetics_viz.utils.auth import can_write, get_current_user
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from nicegui import ui
 
@@ -12,6 +12,7 @@ from genetics_viz.components.diagnostic_loader import (
     save_diagnostic_entry,
     update_diagnostic_ignore_status,
 )
+from genetics_viz.utils.diagnostic_snapshot import SNAPSHOT_COLUMNS
 
 
 def show_diagnostic_dialog(
@@ -23,6 +24,7 @@ def show_diagnostic_dialog(
     variant_type: str,
     diagnostic_file: Path,
     on_save_callback: Optional[Callable[[str], None]] = None,
+    details: Optional[Mapping[str, str]] = None,
 ) -> None:
     """Show a lightweight diagnostic review dialog.
 
@@ -36,6 +38,9 @@ def show_diagnostic_dialog(
         variant_type: "snv", "sv" or "str"
         diagnostic_file: Path to the diagnostics TSV file
         on_save_callback: Optional callback invoked after save or ignore toggle
+        details: The variant's snapshot from the table row
+            (:mod:`genetics_viz.utils.diagnostic_snapshot`), saved with the
+            diagnostic and shown under the summary. ``None`` saves none.
     """
     with (
         ui.dialog().props("full-width") as dialog,
@@ -60,6 +65,22 @@ def show_diagnostic_dialog(
                     _summary_field("Sample", sample)
                     _summary_field("Family", family_id)
                     _summary_field("Type", variant_type.upper())
+                shown = [
+                    (c, details[c])
+                    for c in SNAPSHOT_COLUMNS
+                    if c != "Source" and details and details.get(c)
+                ]
+                if shown:
+                    ui.label(
+                        f"Recorded with the diagnostic (from {details.get('Source')})"
+                    ).classes("text-xs text-gray-500 uppercase mt-2")
+                    with (
+                        ui.row()
+                        .classes("gap-x-6 gap-y-1 flex-wrap")
+                        .mark("diagnostic-details")
+                    ):
+                        for column, value in shown:
+                            _summary_field(column, value)
 
             # ---- Form ----
             with ui.card().classes("w-full"):
@@ -232,6 +253,7 @@ def show_diagnostic_dialog(
                         timestamp=timestamp,
                         comment=comment,
                         diagnostic=diag_value,
+                        details=details,
                     )
                     ui.notify(f"Diagnostic saved: {diag_value}", type="positive")
                     dialog.close()

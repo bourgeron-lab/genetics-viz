@@ -7,6 +7,7 @@ from nicegui import ui
 
 from genetics_viz.utils.validation_status import row_status
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.utils.diagnostic_snapshot import wisecondorx_snapshot
 from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
@@ -907,6 +908,7 @@ def render_wisecondorx_subtab(
                         full_variant_key = f"{orig_locus}:{sv_type}"
                         diag_file = store.data_dir / "diagnostics" / "svs.tsv"
                         show_diagnostic_dialog(
+                            details=wisecondorx_snapshot(row_data),
                             family_id=family_id,
                             variant_key=full_variant_key,
                             gene=gene,

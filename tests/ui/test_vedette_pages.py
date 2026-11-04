@@ -145,3 +145,27 @@ async def test_download_is_the_rows_shown(user, monkeypatch):
     # The Rare view, highest impact first; badge fields stay out.
     assert [r["sample"] for r in rows] == ["S3", "S2", "S3"]
     assert "family" in reader.fieldnames and "family_badges" not in reader.fieldnames
+
+
+async def test_a_vedette_diagnostic_records_the_carrier_call(
+    user, monkeypatch, data_dir
+):
+    tables = await _open_vedette(user, monkeypatch)
+    table = tables[-1]
+    site4 = next(r for r in table["rows"] if r["id"] == "vedette_site_4|S3")
+    with user.client:
+        table["on_row_action"](
+            {"action": "open_diagnostic", "row": {"id": site4["id"]}}
+        )
+    await user.should_see("Recorded with the diagnostic", retries=30)
+    user.find(marker="diagnostic-save").click()
+    await user.should_see("Diagnostic saved", retries=30)
+
+    with open(data_dir / "diagnostics" / "svs.tsv") as f:
+        [saved] = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
+    assert saved["Variant"] == site4["_variant_key"]
+    assert saved["Source"].startswith("Vedette")
+    assert saved["CopyNumber"] == str(site4["CN"])
+    # S2 carries the same site; the pedigree gives her phenotype.
+    assert saved["Carriers"].startswith("S2 (unaffected, ")
+    assert saved["Zygosity"] in ("het", "hom", "hemi")

@@ -86,9 +86,10 @@ def test_a_headerless_cohort_table_is_read_with_a_family_header(data_dir, tmp_pa
 
     empty = tmp_path / "empty.tsv"
     empty.write_text("")
+    n = len(datagen.WOMBAT_COLUMNS)
     with pytest.raises(
         MissingHeaderError,
-        match="14 columns against its 15; 1 other family file did not fit$",
+        match=f"{n - 1} columns against its {n}; 1 other family file did not fit$",
     ):
         read_cohort_wombat(strict, [narrower, empty])
 

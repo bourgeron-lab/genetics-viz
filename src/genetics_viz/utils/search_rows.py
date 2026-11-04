@@ -666,7 +666,9 @@ def result_columns(
     if wcx is not None:
         all_col_set.update(wcx.columns)
     # Remove internal/coordinate columns kept for filtering
-    all_col_set -= {"_source_type", "chr", "start", "end"}
+    all_col_set -= {"chr", "start", "end"}
+    # _source_type and the picked HGVS (wombat.PICKED_HGVS_COLUMNS) are internal.
+    all_col_set = {c for c in all_col_set if not c.startswith("_")}
     all_col_set.add("gene")
     if wombat is not None:
         all_col_set.add("MOI")

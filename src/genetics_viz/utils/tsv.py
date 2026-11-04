@@ -47,20 +47,39 @@ def append_tsv_rows(
     """Append several records under one lock, as :func:`append_tsv_row`.
 
     With no rows, this only creates the file with its header.
+
+    A file whose header is a strict prefix of ``header`` was written before
+    columns were added at the end; its header line is rewritten first, under
+    the same lock, so the new records' extra fields are named. Older records
+    keep their shorter lines, which ``csv.DictReader`` reads as empty there.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
+    with open(path, "a+") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
             f.seek(0, 2)
             if f.tell() == 0:
                 f.write("\t".join(header) + "\n")
+            else:
+                _extend_header(f, header)
             f.writelines(_tsv_line(fields) for fields in rows)
             # Before unlocking: buffered lines would reach the file only at
             # close, and the next writer would find it empty.
             f.flush()
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _extend_header(f: Any, header: List[str]) -> None:
+    """Rewrite the header of the locked ``a+`` file ``f`` when it is a prefix of ``header``."""
+    f.seek(0)
+    current = f.readline().rstrip("\r\n").split("\t")
+    if len(current) >= len(header) or header[: len(current)] != current:
+        return
+    rest = f.read()
+    f.truncate(0)
+    # Append mode writes at the end, which is now the start.
+    f.write("\t".join(header) + "\n" + rest)
 
 
 def rewrite_tsv_rows(

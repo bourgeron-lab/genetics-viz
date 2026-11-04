@@ -53,6 +53,7 @@ from genetics_viz.utils.sample_qc import denovo_risk, flag_title, load_family_qc
 from genetics_viz.utils.sample_qc_acks import ack_summary, load_acks
 from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.utils.view_presets import VIEW_PRESETS, select_preset_for_config
+from genetics_viz.utils.diagnostic_snapshot import snv_snapshot
 from genetics_viz.utils.wombat import aggregate_by_variant
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,30 @@ class _ConfigView:
         default_factory=lambda: {"sorting": [], "page": 0}
     )
     table: Optional[DataTable] = None
+    family: Optional[Family] = None
+
+    def row_for(self, sent: Dict[str, Any]) -> Dict[str, Any]:
+        """The Python row of a row sent back by the table, else the one sent."""
+        key, sample = sent.get("Variant"), sent.get("sample")
+        return next(
+            (
+                r
+                for r in self.all_rows
+                if r.get("Variant") == key and r.get("sample") == sample
+            ),
+            sent,
+        )
+
+    def diagnostic_details(self, row: Dict[str, Any], source: str) -> Dict[str, str]:
+        samples = self.family.samples if self.family else []
+        sex = next((s.sex for s in samples if s.sample_id == row.get("sample")), None)
+        return snv_snapshot(
+            row,
+            source=source,
+            rows=self.all_rows,
+            phenotypes={s.sample_id: s.phenotype for s in samples},
+            sex=sex,
+        )
 
 
 class _WombatLink:
@@ -394,6 +419,7 @@ def _render_config_panel(
             selected_preset={"name": initial_preset["name"]},
             filters=filters,
             table_state=table_state,
+            family=family,
         )
         wombat_link.register(config_name, view)
 
@@ -548,7 +574,11 @@ def _render_table(
         key = variant_key(row_data)
 
         if action == "open_diagnostic":
+            row = view.row_for(row_data)
             show_diagnostic_dialog(
+                details=view.diagnostic_details(
+                    row, f"Wombat {config_name} ({wf['vep_config']})"
+                ),
                 family_id=family_id,
                 variant_key=key,
                 gene=row_data.get("VEP_SYMBOL", ""),

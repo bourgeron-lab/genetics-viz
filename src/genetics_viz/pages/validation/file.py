@@ -11,6 +11,7 @@ from nicegui import ui
 
 from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.utils.diagnostic_snapshot import snv_snapshot, wisecondorx_snapshot
 from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
     load_diagnostic_map,
@@ -533,7 +534,14 @@ async def validation_file_page(filename: str) -> None:
                             else:
                                 vtype = "snv"
 
+                            source = f"File to validate {filename}.tsv"
                             show_diagnostic_dialog(
+                                # Only the columns the file happens to have.
+                                details=(
+                                    wisecondorx_snapshot(row_data, source=source)
+                                    if vtype == "sv"
+                                    else snv_snapshot(row_data, source=source)
+                                ),
                                 family_id=family_id,
                                 variant_key=variant_str,
                                 gene=gene,

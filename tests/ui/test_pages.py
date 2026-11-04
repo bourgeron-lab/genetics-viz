@@ -95,6 +95,40 @@ async def test_wombat_sub_tab_builds_its_table_when_opened(user, monkeypatch):
     assert len(tables) == 2
 
 
+async def test_wombat_diagnostic_records_the_variant_details(
+    user, monkeypatch, data_dir
+):
+    """The row's HGVS, genotype reading and MOI are saved with the diagnostic."""
+    from genetics_viz.components.diagnostic_loader import DIAGNOSTIC_HEADER
+
+    await login(user, "curator")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Wombat Configuration: default", retries=30)
+    shank3 = next(r for r in tables[0]["rows"] if r["VEP_SYMBOL"] == "SHANK3")
+    # What the browser sends back: the row's own cells, not the hidden ones.
+    sent = {k: v for k, v in shank3.items() if not k.startswith("_")}
+    with user.client:
+        tables[0]["on_row_action"]({"action": "open_diagnostic", "row": sent})
+    await user.should_see("Recorded with the diagnostic", retries=30)
+    await user.should_see("c.3679G>A")
+    user.find(marker="diagnostic-save").click()
+    await user.should_see("Diagnostic saved", retries=30)
+
+    header, line = (data_dir / "diagnostics" / "snvs.tsv").read_text().splitlines()
+    assert header.split("\t") == DIAGNOSTIC_HEADER
+    saved = dict(zip(DIAGNOSTIC_HEADER, line.split("\t")))
+    assert saved["Source"] == "Wombat default (vep1)"
+    assert (saved["MANE"], saved["HGVSc"], saved["HGVSp"]) == (
+        "NM_033517.1",
+        "c.3679G>A",
+        "p.Gly1227Arg",
+    )
+    assert (saved["Zygosity"], saved["Segregation"]) == ("het", "de novo")
+    # The MOI badge in words, not its label ("AD ✓").
+    assert saved["MOI"].startswith("SHANK3: consistent with autosomal dominant")
+
+
 async def open_family_roh(user, monkeypatch, username):
     await login(user, username)
     tables = capture_tables(monkeypatch)
@@ -378,7 +412,8 @@ async def test_curator_saves_an_str_diagnostic(user, monkeypatch, data_dir):
     assert fields[:5] == [
         "1001", "chr4:3074876-3074933:HTT", "HTT", "pathogenic", "S3"
     ]  # fmt: skip
-    assert fields[-1] == "uncertain"
+    assert fields[9] == "uncertain"
+    assert fields[10:] == [""] * 14  # an STR has no snapshot
     # The section refreshes in place; the family table waits for the close.
     await user.should_see("uncertain", retries=30)
     assert len(tables) == built
@@ -461,6 +496,9 @@ async def test_sv_diagnostic_saved_from_search_is_read_back(
 
     lines = (data_dir / "diagnostics" / "svs.tsv").read_text().splitlines()
     assert lines[1].split("\t")[:2] == ["1001", "chr2:165114001-165316000:del"]
+    saved = dict(zip(lines[0].split("\t"), lines[1].split("\t")))
+    assert saved["Source"] == "WisecondorX (DEMO)"
+    assert saved["GeneOverlap"] and saved["CopyNumber"]
     for _ in range(100):
         if len(tables) > built:
             break

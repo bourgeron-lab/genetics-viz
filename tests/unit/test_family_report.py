@@ -153,6 +153,61 @@ def test_diagnostics_keep_pathogenic_and_uncertain(store, data_dir):
     assert section.glance == "1 pathogenic · 1 uncertain significance"
 
 
+def test_diagnostics_show_the_details_saved_with_them(store, data_dir, monkeypatch):
+    from genetics_viz.components import diagnostic_loader as dl
+
+    datagen.add_report_case(data_dir)
+    section = _report(store).section("diagnostics")
+    # Recorded before the details existed: said so, the SV's key still read.
+    snv, sv = section.rows
+    assert snv["details"] == "Not recorded (saved before v0.28.0)."
+    assert snv["_finding_note"] == "stop gained"
+    assert sv["finding"].startswith("DEL chr2:")
+
+    monkeypatch.setattr(dl, "can_write", lambda: True)
+    dl.save_diagnostic_entry(
+        data_dir / "diagnostics" / "snvs.tsv", "1001", "chr22:50721500:G:A",
+        "SHANK3", "stop_gained", "S3", "curator2", "2026-10-09T10:00:00", "",
+        "pathogenic",
+        details={
+            "Source": "Wombat default", "Transcript": "ENST00000710353.1",
+            "MANE": "NM_033517.1", "HGVSc": "c.3700G>T", "HGVSp": "p.Glu1234Ter",
+            "Zygosity": "het", "Segregation": "de novo",
+            "Carriers": "S4 (affected, 0/1)", "ClinVar": "pathogenic",
+            "gnomAD_AF": "absent", "MOI": "AD consistent",
+        },
+    )  # fmt: skip
+    dl.save_diagnostic_entry(
+        data_dir / "diagnostics" / "svs.tsv", "1001",
+        "chr2:165114001-165316000:del", "SCN2A", "LOSS", "S3", "curator2",
+        "2026-10-09T11:00:00", "", "uncertain",
+        details={
+            "Source": "WisecondorX", "GeneOverlap": "SCN2A:exonic, SCN3A:intronic",
+            "CopyNumber": "≈1.0 (log2 ratio -1.00, z -8.0)",
+        },
+    )  # fmt: skip
+    report = _report(store)
+    snv, sv = report.section("diagnostics").rows
+    assert snv["_finding_note"].split("\n") == [
+        "NM_033517.1(SHANK3):c.3700G>T p.(Glu1234Ter)",
+        "stop gained",
+    ]
+    assert snv["details"].split("\n") == [
+        "Heterozygous, de novo",
+        "Also carried by: S4 (affected, 0/1)",
+        "ClinVar: pathogenic",
+        "Not in gnomAD",
+        "Mode of inheritance: AD consistent",
+    ]
+    assert sv["details"].split("\n") == [
+        "Copy number ≈1.0 (log2 ratio -1.00, z -8.0)",
+        "Genes: SCN2A (exonic), SCN3A (intronic)",
+    ]
+    assert report.section("diagnostics").footnotes[0].startswith("Genotype and")
+    html = render_report_html(report)
+    assert "p.(Glu1234Ter)" in html and "Genotype and evidence" in html
+
+
 def test_family_without_results_degrades(store):
     report = _report(store, "1002")
     by_key = {s.key: s for s in report.sections}
