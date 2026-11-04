@@ -43,6 +43,9 @@ class SVViewState:
     #: (utils/sv_view.py). Shared by the IGV reads and the read panel.
     read_mode: str = "auto"
     low_mapq: bool = False
+    #: Whether the caller gives base-pair breakpoints (narrow read windows).
+    #: WisecondorX's sit on 1 kb bins.
+    precise: bool = False
 
     def __post_init__(self) -> None:
         if not self.bounds:
@@ -63,14 +66,14 @@ class SVViewState:
         )
 
     def read_windows(self) -> Tuple[str, List[Window]]:
-        # WisecondorX breakpoints sit on 1 kb bins: wider windows.
+        # Imprecise breakpoints (WisecondorX's 1 kb bins): wider windows.
         return read_view_windows(
             self.sv_type,
             self.chrom,
             self.bounds["start"],
             self.bounds["end"],
             mode=self.read_mode,
-            precise=False,
+            precise=self.precise,
         )
 
     def describe_read_mode(self, used_mode: str) -> str:

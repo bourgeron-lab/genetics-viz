@@ -34,6 +34,7 @@ from genetics_viz.utils import (
     user_preferences,
     str_eh,
     sharding,
+    vedette,
 )
 
 #: Test accounts: username -> (password, role). Test values only.
@@ -65,6 +66,7 @@ def _reset_globals() -> None:
     gene_scoring.clear_scorer_cache()
     gene_index.clear_gene_index()
     login_throttle.clear_login_throttle()
+    vedette.clear_vedette_cache()
     change_monitor._change_callbacks.clear()
 
 

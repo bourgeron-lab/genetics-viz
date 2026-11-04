@@ -7,6 +7,8 @@ per breakpoint). Each cell is a single grid with two y-axes:
   - each discordant pair as a thin line between its two read bodies;
   - each split read as its two aligned parts joined by an arc;
   - soft-clip clusters as bars at the foot;
+  - deletions inside reads (CIGAR) as a thick line over the deleted bases,
+    insertions as diamonds, both at the height of their length;
   - interchromosomal mates as triangles at the top;
   - the expected band of concordant inserts, shaded.
 - **Right, copy number:** read from the normalised coverage bigWig, divided by
@@ -34,6 +36,8 @@ SERIES_NAMES = {
     "split": "Split read",
     "split_inv": "Split read (inverted)",
     "soft_clip": "Soft clips",
+    "in_read_del": "Deletion in reads (CIGAR)",
+    "in_read_ins": "Insertion in reads (CIGAR)",
     "interchromosomal": "Interchromosomal mate",
     "insert_band": "Expected insert",
     "copy_number": "Copy number",
@@ -183,7 +187,9 @@ def read_option(
             y
             for c in cells
             if c.reads is not None
-            for y in [p.y for p in c.reads.pairs] + [s.y * rise for s in c.reads.splits]
+            for y in [p.y for p in c.reads.pairs]
+            + [s.y * rise for s in c.reads.splits]
+            + [d.length for d in c.reads.indels]
         ]
         y_top = max(heights + [2000]) * 1.5
         titles.append(
@@ -578,6 +584,8 @@ def _cell_series(
             }
         )
 
+    out += _indel_series(reads, on_ins, colors)
+
     if reads.interchrom:
         out.append(
             {
@@ -590,6 +598,78 @@ def _cell_series(
                 "data": [
                     {"value": [m.x, y_top], "tip": f"Mate on {m.mate}"}
                     for m in reads.interchrom
+                ],
+            }
+        )
+    return out
+
+
+def _indel_series(
+    reads: WindowReads, on_ins: Dict[str, int], colors: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """Deletions and insertions inside reads, at the height of their length.
+
+    Identical ones are one item, thicker (or bigger) the more reads hold it.
+    """
+    out: List[Dict[str, Any]] = []
+    floor = INSERT_FLOOR * 1.1
+
+    def tip(d) -> str:
+        what = "deletion" if d.kind == "del" else "insertion"
+        where = f"{_fmt(d.x1)}-{_fmt(d.x2)}" if d.kind == "del" else _fmt(d.x1)
+        return (
+            f"{d.count} read{'s' if d.count > 1 else ''} with a {d.length} bp "
+            f"{what} at {where}" + (", MAPQ < min" if d.low else "")
+        )
+
+    dels = [d for d in reads.indels if d.kind == "del"]
+    for low in (False, True):
+        group = [d for d in dels if d.low == low]
+        if not group:
+            continue
+        fade = LOW_MAPQ_OPACITY if low else 1.0
+        out.append(
+            {
+                "type": "lines",
+                "coordinateSystem": "cartesian2d",
+                **on_ins,
+                "name": SERIES_NAMES["in_read_del"],
+                "z": 4,
+                "lineStyle": {
+                    "color": colors.get("in_read_del", "#c80000"),
+                    "opacity": 0.9 * fade,
+                },
+                "data": [
+                    {
+                        "coords": [
+                            [d.x1, max(d.length, floor)],
+                            [d.x2, max(d.length, floor)],
+                        ],
+                        "lineStyle": {"width": round(2 + min(6, d.count), 1)},
+                        "tip": tip(d),
+                    }
+                    for d in group
+                ],
+            }
+        )
+    ins = [d for d in reads.indels if d.kind == "ins"]
+    if ins:
+        out.append(
+            {
+                "type": "scatter",
+                "name": SERIES_NAMES["in_read_ins"],
+                **on_ins,
+                "symbol": "diamond",
+                "z": 5,
+                "itemStyle": {"color": colors.get("in_read_ins", "#7c3aed")},
+                "data": [
+                    {
+                        "value": [d.x1, max(d.length, floor)],
+                        "symbolSize": 6 + min(10, 2 * d.count),
+                        "itemStyle": {"opacity": LOW_MAPQ_OPACITY if d.low else 1.0},
+                        "tip": tip(d),
+                    }
+                    for d in ins
                 ],
             }
         )

@@ -5,7 +5,7 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from nicegui import ui
 
@@ -63,6 +63,8 @@ def render_sv_validation(
     bounds: Dict[str, int],
     on_bounds_changed: Callable[[], None],
     on_saved: Callable[[], None],
+    header: Sequence[str] = SV_VALIDATION_HEADER,
+    extra_fields: Optional[Dict[str, str]] = None,
 ) -> SVValidationForm:
     """The "SV Validation" form, then the sample's previous validations.
 
@@ -70,7 +72,11 @@ def render_sv_validation(
     and calls ``on_bounds_changed``. A save records the session user; with
     ``present`` it also records the parents the inheritance names, in one
     locked write. ``on_saved`` runs after a save.
+
+    ``header`` is the file's columns; ``extra_fields`` fills those beyond the
+    SV ones (Vedette's caller version), on every row written.
     """
+    extra = extra_fields or {}
     ui.label("SV Validation").classes("text-xl font-semibold mb-2 mt-4")
 
     with ui.card().classes("w-full p-4 mb-4"):
@@ -200,18 +206,39 @@ def render_sv_validation(
                             sample_parents,
                             validated_samples(validation_file, family_id, variant_key),
                         )
-                    curated = [curated_start, curated_end]
-                    rows = [
-                        [family_id, variant_key, sample, user, inheritance]
-                        + [validation_status, *curated, comment, "0"]
-                        + [timestamp]
+                    common = {
+                        **{k: clean_tsv_field(str(v)) for k, v in extra.items()},
+                        "FID": family_id,
+                        "Variant": variant_key,
+                        "User": user,
+                        "CuratedStart": curated_start,
+                        "CuratedEnd": curated_end,
+                        "Ignore": "0",
+                        "Timestamp": timestamp,
+                    }
+                    records = [
+                        {
+                            **common,
+                            "Sample": sample,
+                            "Inheritance": inheritance,
+                            "Validation": validation_status,
+                            "Comment": comment,
+                        }
                     ] + [
-                        [family_id, variant_key, parent_id, user, "unknown"]
-                        + ["present", *curated, f"(inherited from {sample})"]
-                        + ["0", timestamp]
+                        {
+                            **common,
+                            "Sample": parent_id,
+                            "Inheritance": "unknown",
+                            "Validation": "present",
+                            "Comment": f"(inherited from {sample})",
+                        }
                         for parent_id in parent_samples_added
                     ]
-                    append_tsv_rows(validation_file, SV_VALIDATION_HEADER, rows)
+                    append_tsv_rows(
+                        validation_file,
+                        list(header),
+                        [[r.get(col, "") for col in header] for r in records],
+                    )
 
                     # Notify user about saved validations
                     notify_message = f"SV validation saved: {validation_status}"

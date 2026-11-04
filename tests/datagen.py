@@ -642,6 +642,7 @@ def build_data_dir(root: Path) -> Path:
     build_qc_acks(data)
     build_wombat_results(data)
     build_cnv_results(data, demo)
+    build_vedette_results(data)
     return data
 
 
@@ -966,6 +967,8 @@ CRAM_SIGNATURES = (
 )  # fmt: skip
 CRAM_SPLITS = 2
 CRAM_CLIPPED = 3
+#: Reads with Vedette's small deletion in their CIGAR (VEDETTE_DEL).
+CRAM_INREAD_DELS = 4
 #: Concordant pairs every 22 bp over +-1.7 kb of each breakpoint, every other
 #: one dropped inside the (heterozygous) loss: depth about 9x, halved inside.
 CRAM_CONCORDANT_STEP = 22
@@ -1032,6 +1035,11 @@ def build_cram(path: Path) -> None:
         add(f"split{i}", 0, "chr2", CNV_LOSS[0] - 60, "chr2",
             CNV_LOSS[0] - 300, 0, cigar="60M40S",
             tags=(("SA", f"chr2,{CNV_LOSS[1] + 1},+,60S40M,60,0;"),))  # fmt: skip
+    # Vedette's small deletion, written inside the reads' alignments.
+    for i in range(CRAM_INREAD_DELS):
+        add(f"indel{i}", 0, "chr2", VEDETTE_DEL[0] - 40, "chr2",
+            VEDETTE_DEL[0] - 40, 0,
+            cigar=f"40M{VEDETTE_DEL[1] - VEDETTE_DEL[0]}D60M")  # fmt: skip
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with pysam.AlignmentFile(
@@ -1475,3 +1483,84 @@ def build_second_data_dir(root: Path) -> Path:
           "missense_variant", "SHANK3", "ENSG00000251322", 0.0)],
     )  # fmt: skip
     return data
+
+
+# ---------------------------------------------------------------------------
+# Vedette SV calls (family table, family VCF header, S3's own calls)
+# ---------------------------------------------------------------------------
+
+#: S3's de novo deletion, under 1 kb: base-pair breakpoints, in the reads'
+#: CIGAR (build_cram). 0-based start of the deleted bases, and its end.
+VEDETTE_DEL = (165_600_000, 165_600_120)
+VEDETTE_SOURCE = "vedette-cohort-1.1.0"
+
+VEDETTE_COLUMNS = [
+    "site_id", "contig", "start", "end", "svtype", "size", "filter", "cohort_af",
+    "cohort_carrier_frac", "cohort_ncarrier", "genes", "impact",
+    "GT_S1", "CN_S1", "GQ_S1", "GT_S2", "CN_S2", "GQ_S2", "GT_S3", "CN_S3", "GQ_S3",
+    "inheritance",
+]  # fmt: skip
+#: As the caller writes it: impact in French, inheritance for children only,
+#: a gene list it truncated ("(+2)").
+VEDETTE_ROWS = [
+    ["vedette_site_1", "chr2", VEDETTE_DEL[0], VEDETTE_DEL[1], "DEL", 120, "PASS",
+     0.002, 0.004, 2, "SCN2A",
+     "+0.90 — élevé · DEL exonique SCN2A (NDD candidat, s_het 0.12)",
+     "0/0", 2, 40, "0/0", 2, 38, "0/1", 1, 45, "S3:denovo"],
+    ["vedette_site_2", "chr2", 165_200_000, 165_200_400, "DUP", 400, "PASS",
+     0.05, 0.09, 40, "SCN2A", "+0.00 — faible · intronique",
+     "0/1", 3, 30, "0/0", 2, 41, "0/1", 3, 25, "S3:paternal"],
+    ["vedette_site_3", "chr2", 170_000_000, 170_000_080, "DEL", 80, "PASS",
+     0.3, 0.5, 300, "", "-0.60 — aucun gène codant",
+     "0/1", 2, 10, "0/1", 2, 12, "0/1", 2, 9, "S3:biparental"],
+    ["vedette_site_4", "chrX", 2_800_000, 2_800_300, "DEL", 300, "PASS",
+     0.008, 0.015, 7, "XRG, PLAIN, SHANK3 (+2)",
+     "+0.45 — modéré · DEL exonique XRG (NDD candidat, s_het 0.05)",
+     "0/0", 1, 30, "0/1", 1, 50, "1/1", 0, 40, "S3:maternal"],
+]  # fmt: skip
+
+_VEDETTE_SAMPLE_VCF = """##fileformat=VCFv4.2
+##source=vedette-1.1.0
+##contig=<ID=chr2,length=242193529>
+##contig=<ID=chrX,length=156040895>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=LowSQ,Description="Calibrated quality below threshold">
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="Type">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End">
+##INFO=<ID=SOURCE,Number=1,Type=String,Description="Evidence source">
+##INFO=<ID=IMPRECISE,Number=0,Type=Flag,Description="Imprecise">
+##INFO=<ID=CIPOS,Number=2,Type=Integer,Description="CI around POS">
+##INFO=<ID=MODEL_VER,Number=1,Type=String,Description="Model version">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="GQ">
+##FORMAT=<ID=SQ,Number=1,Type=Float,Description="SQ">
+##FORMAT=<ID=PE,Number=1,Type=Integer,Description="PE">
+##FORMAT=<ID=SR,Number=1,Type=Integer,Description="SR">
+##FORMAT=<ID=CG,Number=1,Type=Integer,Description="CG">
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS3
+chr2\t{del_start}\tvedette_DEL_7\tN\t<DEL>\t.\tPASS\tEND={del_end};SVTYPE=DEL;SOURCE=JUNCTION;MODEL_VER=v5n\tGT:GQ:SQ:PE:SR:CG\t0/1:45:12.5:3:5:4
+chrX\t2800010\tvedette_DEL_9\tN\t<DEL>\t.\tLowSQ\tEND=2800290;SVTYPE=DEL;SOURCE=DEPTH;IMPRECISE;CIPOS=-250,250;MODEL_VER=v5n\tGT:GQ:SQ:PE:SR:CG\t1/1:40:3.1:0:0:0
+"""
+
+
+def build_vedette_results(data: Path) -> None:
+    """Family 1001's Vedette table and VCF header, and S3's own calls."""
+    import pysam
+
+    vdir = family_dir(data, "1001") / "svs" / "vedette"
+    write_tsv(vdir / "1001.vedette.tsv", VEDETTE_COLUMNS, VEDETTE_ROWS)
+    with gzip.open(vdir / "1001.vedette.vcf.gz", "wt") as f:
+        f.write(
+            "##fileformat=VCFv4.2\n##source=vedette-merge-1.1.0\n"
+            f"##source={VEDETTE_SOURCE}\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\n"
+        )
+    sdir = sample_dir(data, "S3") / "svs" / "vedette"
+    sdir.mkdir(parents=True, exist_ok=True)
+    plain = sdir / "S3.filtered.vcf"
+    plain.write_text(
+        _VEDETTE_SAMPLE_VCF.format(del_start=VEDETTE_DEL[0], del_end=VEDETTE_DEL[1])
+    )
+    pysam.tabix_compress(str(plain), str(plain) + ".gz", force=True)
+    pysam.tabix_index(str(plain) + ".gz", preset="vcf", force=True)
+    plain.unlink()

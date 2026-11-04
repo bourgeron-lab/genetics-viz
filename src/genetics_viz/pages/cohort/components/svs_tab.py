@@ -21,6 +21,8 @@ from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.export import export_filename, is_export_column, rows_to_tsv
 from genetics_viz.components.page_link import PageLink
+from genetics_viz.pages.cohort.components.vedette_tab import render_vedette_subtab
+from genetics_viz.utils.vedette import probe_vedette
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -61,12 +63,12 @@ _GENE_BADGE_COLUMNS = {
 
 
 def probe_svs_data(data_dir: Path, family_id: str) -> bool:
-    """Check whether SVs data exists for this family."""
+    """Check whether SVs data exists for this family (WisecondorX or Vedette)."""
     svs_dir = get_family_path(data_dir, family_id) / "svs"
     aberrations_file = (
         svs_dir / "wisecondorx" / f"{family_id}_aberrations.annotated.bed"
     )
-    return aberrations_file.exists()
+    return aberrations_file.exists() or probe_vedette(data_dir, family_id)
 
 
 def render_svs_tab(
@@ -85,7 +87,8 @@ def render_svs_tab(
         cohort_name: Cohort name
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
-        link: The page link: the WisecondorX call types shown (``svcalls``)
+        link: The page link: the sub-tab (``svtab``), the WisecondorX call
+            types shown (``svcalls``) and the Vedette filters (``v…``)
     """
     svs_dir = get_family_path(store.data_dir, family_id) / "svs"
 
@@ -103,20 +106,65 @@ def render_svs_tab(
         df = parse_wisecondorx_bed_for_display(wcx_file)
         wcx_count = 0 if df is None else len(df)
 
+    has_vedette = probe_vedette(store.data_dir, family_id)
+
     # Create subtabs for different SV callers
-    with ui.tabs().classes("w-full") as svs_subtabs:
+    with ui.tabs().classes("w-full").mark("svs-subtabs") as svs_subtabs:
         if wcx_count is not None and wcx_count > 0:
             wisecondorx_tab = ui.tab("WisecondorX", label=f"WisecondorX ({wcx_count})")
         else:
             wisecondorx_tab = ui.tab("WisecondorX")
-            if wcx_count == 0:
-                # File exists but empty — disable to signal "step ran, no results"
-                wisecondorx_tab.props("disable")
-            elif wcx_count is None:
-                # File doesn't exist
-                wisecondorx_tab.props("disable")
+            # Empty file ("step ran, no results") or no file: disabled.
+            wisecondorx_tab.props("disable")
+        vedette_tab = ui.tab("Vedette")
+        if not has_vedette:
+            vedette_tab.props("disable")
 
-    with ui.tab_panels(svs_subtabs, value=wisecondorx_tab).classes("w-full"):
+    # The linked sub-tab, else the first one with data.
+    wcx_usable = bool(wcx_count)
+    if has_vedette and (
+        (link is not None and link.get("svtab") == "vedette") or not wcx_usable
+    ):
+        first_tab = vedette_tab
+    else:
+        first_tab = wisecondorx_tab
+    vedette_state = {"loaded": first_tab is vedette_tab}
+
+    def on_subtab_change(e) -> None:
+        if e.value == "Vedette" and not vedette_state["loaded"]:
+            vedette_state["loaded"] = True
+            vedette_content.refresh()
+        if link is not None:
+            link.set(
+                "svtab",
+                "vedette" if e.value == "Vedette" else "wisecondorx",
+                default="vedette" if not wcx_usable else "wisecondorx",
+            )
+            link.push()
+
+    svs_subtabs.on_value_change(on_subtab_change)
+
+    with ui.tab_panels(svs_subtabs, value=first_tab).classes("w-full"):
+        with ui.tab_panel(vedette_tab):
+            # Built on first view: its table is read off-thread.
+            @ui.refreshable
+            def vedette_content() -> None:
+                if not has_vedette:
+                    ui.label("No Vedette data available").classes(
+                        "text-gray-500 italic"
+                    )
+                elif vedette_state["loaded"]:
+                    render_vedette_subtab(
+                        store=store,
+                        family_id=family_id,
+                        cohort_name=cohort_name,
+                        selected_members=selected_members,
+                        data_table_refreshers=data_table_refreshers,
+                        link=link,
+                    )
+
+            vedette_content()
+
         # WisecondorX subtab
         with ui.tab_panel(wisecondorx_tab):
             if wcx_count is None:

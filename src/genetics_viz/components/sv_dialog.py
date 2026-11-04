@@ -11,9 +11,14 @@
 
 The views share one ``SVViewState``. Its ``bounds`` dict is the SV's current
 position: every curated change moves it, and the read views follow.
+
+An ``SVSource`` says what differs by caller: the validation file and its extra
+columns, the details card, and whether breakpoints are base-pair resolved
+(narrow read windows). The default is WisecondorX's.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from nicegui import ui
 
@@ -36,13 +41,36 @@ from genetics_viz.components.sv_validation_panel import (
     SVValidationForm,
     render_sv_validation,
 )
+from genetics_viz.components.validation_loader import (
+    SV_VALIDATION_HEADER,
+    load_validation_map,
+    merge_validation_maps,
+)
 from genetics_viz.utils.cnv_coverage import CNRequest, find_sample_coverage
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.pipeline_params import load_params
+from genetics_viz.utils.validation_files import validation_path
 from genetics_viz.utils.wisecondorx import infer_sv_type
 
 _PARENT_MISSING = ("-", "0")
+
+
+@dataclass
+class SVSource:
+    """What the dialog takes from the caller of the SV."""
+
+    #: ``validations/<file>`` kind (``SV``, ``Vedette``).
+    validation_kind: str = "SV"
+    header: Sequence[str] = field(default_factory=lambda: list(SV_VALIDATION_HEADER))
+    #: Written on every validation row, for the columns beyond the SV ones.
+    extra_fields: Dict[str, str] = field(default_factory=dict)
+    #: Base-pair breakpoints: narrow read windows.
+    precise: bool = False
+    #: Draws the details card instead of WisecondorX's.
+    render_details: Optional[Callable[[], None]] = None
+    #: Shown in the title (``Vedette``).
+    label: str = ""
 
 
 def _expanded_locus(chrom: str, start: int, end: int) -> str:
@@ -82,6 +110,7 @@ def show_sv_dialog(
     on_validation_saved: Optional[callable] = None,
     family_members_override: Optional[List[str]] = None,
     sample_parents_override: Optional[Dict[str, Optional[str]]] = None,
+    source: Optional[SVSource] = None,
 ) -> None:
     """Show SV visualization dialog with IGV viewer.
 
@@ -96,18 +125,25 @@ def show_sv_dialog(
         on_validation_saved: Optional callback to invoke after validation is saved
         family_members_override: Optional pre-computed family member IDs (for standalone pages)
         sample_parents_override: Optional pre-computed parent IDs (for standalone pages)
+        source: The caller's validation file, details and precision
+            (WisecondorX's by default)
     """
+    source = source or SVSource()
     store = get_data_store()
     start_pos = int(start)
     end_pos = int(end)
     locus = f"{chrom}:{start}-{end}"
 
     # Check for curated boundaries from validations
-    from genetics_viz.components.validation_loader import load_validation_map
-
-    validation_file = store.data_dir / "validations" / "svs.tsv"
+    validation_file = validation_path(store.data_dir, source.validation_kind)
     validation_map = load_validation_map(validation_file, family_id)
-    all_validation_map = load_validation_map(validation_file, family_id=None)
+    # Suggestions come from every caller's curated positions.
+    all_validation_map = merge_validation_maps(
+        *(
+            load_validation_map(validation_path(store.data_dir, kind), None)
+            for kind in ("SV", "Vedette")
+        )
+    )
 
     # Determine SV type for variant key (dup for gain, del for loss)
     sv_type = infer_sv_type(sv_data)
@@ -132,7 +168,8 @@ def show_sv_dialog(
             # Header with close button
             with ui.row().classes("items-center justify-between w-full mb-4"):
                 with ui.row().classes("items-center gap-2"):
-                    ui.label(f"🧬 SV: {locus} - {sample}").classes(
+                    title = f"{source.label} SV" if source.label else "SV"
+                    ui.label(f"🧬 {title}: {locus} - {sample}").classes(
                         "text-2xl font-bold text-blue-900"
                     )
                     if curated_locus:
@@ -218,11 +255,12 @@ def show_sv_dialog(
                 end=end,
                 sample=sample,
                 sv_type=sv_type,
-                call=sv_data.get("call", ""),
+                call=sv_data.get("call") or ("GAIN" if sv_type == "dup" else "LOSS"),
                 igv_locus=igv_locus,
                 roi_start=curated_start or start,
                 roi_end=curated_end or end,
                 label_for=get_relationship_label,
+                precise=source.precise,
             )
 
             # Automatically add parents if available
@@ -337,7 +375,10 @@ def show_sv_dialog(
 
             refresh_additional_samples()
 
-            render_sv_details(sv_data, locus, get_gene_scorer())
+            if source.render_details is not None:
+                source.render_details()
+            else:
+                render_sv_details(sv_data, locus, get_gene_scorer())
 
             # Filled once the validation form is built, further down.
             form: Dict[str, Optional[SVValidationForm]] = {"value": None}
@@ -407,7 +448,7 @@ def show_sv_dialog(
                         params=cohort_params,
                         chrom=chrom,
                         roi=(int(state.roi_start), int(state.roi_end)),
-                        call=str(sv_data.get("call", "")),
+                        call=str(state.call),
                         label_for=get_relationship_label,
                     )
 
@@ -575,6 +616,8 @@ def show_sv_dialog(
                 bounds=state.bounds,
                 on_bounds_changed=update_roi,
                 on_saved=on_saved,
+                header=source.header,
+                extra_fields=source.extra_fields,
             )
 
         dialog.open()

@@ -39,6 +39,7 @@ from genetics_viz.components.diagnostic_loader import load_family_diagnostics
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
+    merge_validation_maps,
 )
 
 from . import roh as roh_utils
@@ -899,6 +900,14 @@ def _diagnostics(
                 validation_maps[kind] = load_validation_map(
                     validation_path(data_dir, kind), family_id
                 )
+                if kind == "SV":
+                    # Vedette calls are keyed as SVs, in a file of their own.
+                    validation_maps[kind] = merge_validation_maps(
+                        validation_maps[kind],
+                        load_validation_map(
+                            validation_path(data_dir, "Vedette"), family_id
+                        ),
+                    )
             except (KeyError, OSError):
                 validation_maps[kind] = {}
         validations = []

@@ -19,6 +19,13 @@ SV_VALIDATION_HEADER = [
     "CuratedStart", "CuratedEnd", "Comment", "Ignore", "Timestamp",
 ]  # fmt: skip
 
+#: ``validations/vedette.tsv``: the SV columns, then what Vedette's development
+#: needs to tell validations apart. ``SiteId`` is a note only: Vedette renumbers
+#: its sites when the cohort is merged again, so the key stays the locus.
+VEDETTE_VALIDATION_HEADER = SV_VALIDATION_HEADER + [
+    "SiteId", "CallerVersion", "ModelVersion",
+]  # fmt: skip
+
 
 def validated_samples(
     validation_file: Path, family_id: str, variant_key: str
@@ -114,6 +121,15 @@ def load_validation_map(
                 )
 
     return validation_map
+
+
+def merge_validation_maps(*maps: Dict) -> Dict:
+    """One map from several files' maps (lists of a shared key concatenated)."""
+    out: Dict = {}
+    for m in maps:
+        for key, values in m.items():
+            out.setdefault(key, []).extend(values)
+    return out
 
 
 def add_validation_status_to_row(

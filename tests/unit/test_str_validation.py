@@ -30,7 +30,7 @@ def _save(data_dir, **kw):
 
 
 def test_kinds_include_str_and_upd(tmp_path):
-    assert VALIDATION_TYPES == ["SNV", "SV", "STR", "UPD"]
+    assert VALIDATION_TYPES == ["SNV", "SV", "STR", "UPD", "Vedette"]
     assert validation_path(tmp_path, "STR") == tmp_path / "validations" / "strs.tsv"
 
 
