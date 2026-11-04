@@ -28,6 +28,31 @@ diagnostic_verdicts:
   uncertain: { label: "Uncertain significance", color: "#ef6c00" }
   conflicting: { label: "Curators disagree", color: "#f9a825" }
 
+# The "Genotype and evidence" column: what the table row showed when the
+# diagnostic was saved (utils/diagnostic_snapshot.py).
+diagnostic_details:
+  zygosity:
+    het: "heterozygous"
+    hom: "homozygous"
+    hemi: "hemizygous"
+  segregation:
+    de novo: "de novo"
+    paternal: "inherited from the father"
+    maternal: "inherited from the mother"
+    both: "inherited from both parents"
+    either: "both parents carry it"
+  # A diagnostic saved before the details were recorded with it.
+  missing: "Not recorded (saved before v0.28.0)."
+  note: >-
+    Genotype and evidence are as the analysis table showed them when the
+    curator recorded the finding: HGVS on the MANE Select transcript (else
+    the canonical one), zygosity and segregation from the family's genotypes,
+    other family members carrying the variant, ClinVar significance (review
+    status is not in the tables), gnomAD allele frequency and filtering
+    allele frequency (FAF95), and whether the variant fits the gene's mode of
+    inheritance in GeneTrek. For a structural variant, the genes it overlaps
+    and the copy number.
+
 # Polygenic scores shown, in this order. `id` is the column of the pipeline's
 # pgs_zscore table.
 pgs_traits:

@@ -57,6 +57,7 @@ from .ancestry_plots import zoom_window
 from .cohort_state import read_cohort_state
 from .cytobands import CHROM_ORDER, CYTOBANDS, get_cytoband_range, norm_chrom
 from .diagnostic_labels import describe_str, describe_upd
+from .diagnostic_snapshot import has_snapshot
 from .export import person
 from .pedigree_labels import PHENO_COLORS, normalize_pheno, normalize_sex
 from .pipeline_params import load_params
@@ -873,6 +874,111 @@ def _sv_text(variant: str) -> str:
     return f"{kind} {chrom}:{start}-{end} ({', '.join(p for p in (band, size) if p)})"
 
 
+def _snapshots(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The merged row's records that carry a snapshot, newest first."""
+    return [r for r in entry.get("_entries", []) if has_snapshot(r)]
+
+
+def hgvs_text(record: Dict[str, Any], gene: str = "") -> str:
+    """``NM_030817.3(APOLD1):c.655C>T p.(Gln219Ter)``, from a snapshot record.
+
+    The MANE Select RefSeq ID is shown when there is one (its c. is the
+    Ensembl transcript's, by definition of MANE), else the Ensembl ID.
+    """
+    c = (record.get("HGVSc") or "").strip()
+    if not c:
+        return ""
+    transcript = (record.get("MANE") or record.get("Transcript") or "").strip()
+    text = (
+        f"{transcript}({gene}):{c}"
+        if transcript and gene
+        else (f"{transcript}:{c}" if transcript else c)
+    )
+    p = (record.get("HGVSp") or "").strip()
+    if p.startswith("p.") and not p.startswith("p.("):
+        # A protein change from VEP is predicted, so in parentheses (HGVS).
+        p = f"p.({p[2:]})"
+    return f"{text} {p}" if p else text
+
+
+def _af(value: str) -> str:
+    number = _float(value)
+    if number is None:
+        return value
+    return "0" if number == 0 else f"{number:.2g}"
+
+
+def _gene_overlap(text: str, limit: int = 8) -> str:
+    """``SCN2A:exonic,SCN3A:intronic`` → ``SCN2A (exonic), SCN3A (intronic)``."""
+    parts = []
+    for g in (t.strip() for t in text.split(",")):
+        symbol, _, where = g.partition(":")
+        if symbol and symbol not in ("-", "."):
+            parts.append(f"{symbol} ({where})" if where else symbol)
+    if len(parts) > limit:
+        return ", ".join(parts[:limit]) + f" (+{len(parts) - limit})"
+    return ", ".join(parts)
+
+
+def diagnostic_details(entry: Dict[str, Any], samples: List[str]) -> str:
+    """The "Genotype and evidence" cell of one merged diagnostic, one fact a line.
+
+    Per individual (their newest snapshot): zygosity and segregation. Then,
+    from the newest snapshot: carriers, ClinVar, gnomAD, mode of inheritance,
+    gene overlap and copy number. An entry without any snapshot says so.
+    """
+    wording = CONFIG.get("diagnostic_details") or {}
+    records = _snapshots(entry)
+    if not records:
+        return str(wording.get("missing", ""))
+    zyg_words = wording.get("zygosity") or {}
+    seg_words = wording.get("segregation") or {}
+    lines = []
+    for sample in samples:
+        own = next((r for r in records if r.get("Sample") == sample), None)
+        if own is None:
+            continue
+        parts = [
+            zyg_words.get(own.get("Zygosity") or "", own.get("Zygosity") or ""),
+            seg_words.get(own.get("Segregation") or "", own.get("Segregation") or ""),
+        ]
+        said = ", ".join(p for p in parts if p)
+        if said:
+            lines.append(
+                f"{sample}: {said}" if len(samples) > 1 else said[:1].upper() + said[1:]
+            )
+    newest = records[0]
+    carriers = "; ".join(
+        dict.fromkeys(
+            c.strip()
+            for r in records
+            for c in (r.get("Carriers") or "").split(";")
+            if c.strip() and c.split("(")[0].strip() not in samples
+        )
+    )
+    if carriers:
+        lines.append(f"Also carried by: {carriers}")
+    if newest.get("ClinVar"):
+        lines.append(f"ClinVar: {newest['ClinVar']}")
+    af, faf = newest.get("gnomAD_AF") or "", newest.get("gnomAD_FAF95") or ""
+    if af == "absent":
+        lines.append("Not in gnomAD")
+    elif af or faf:
+        lines.append(
+            "gnomAD "
+            + ", ".join(
+                t for t in (af and f"AF {_af(af)}", faf and f"FAF95 {_af(faf)}") if t
+            )
+        )
+    if newest.get("MOI"):
+        lines.append(f"Mode of inheritance: {newest['MOI']}")
+    if newest.get("CopyNumber"):
+        lines.append(f"Copy number {newest['CopyNumber']}")
+    if newest.get("GeneOverlap"):
+        lines.append(f"Genes: {_gene_overlap(newest['GeneOverlap'])}")
+    return "\n".join(lines)
+
+
 def _diagnostics(
     data_dir: Path, family_id: str, diagnostics: List[Dict[str, Any]]
 ) -> Section:
@@ -929,6 +1035,18 @@ def _diagnostics(
             impact = consequence_text(impact)
         elif source != "sv":
             impact = ""
+        samples = [s.strip() for s in (e.get("Sample") or "").split(",") if s.strip()]
+        details, hgvs = "", ""
+        if source in ("snv", "sv"):
+            details = diagnostic_details(e, samples)
+            hgvs = next(
+                (
+                    t
+                    for r in _snapshots(e)
+                    if (t := hgvs_text(r, _genes(e.get("Gene", "")).split(", ")[0]))
+                ),
+                "",
+            )
         rows.append(
             {
                 "verdict": verdicts[verdict].get("label", verdict),
@@ -936,6 +1054,12 @@ def _diagnostics(
                 "_rank": list(verdicts).index(verdict),
                 "kind": kind,
                 "finding": finding,
+                # Under the finding: HGVS, then the consequences. An SV's
+                # GAIN/LOSS is already its DEL/DUP.
+                "_finding_note": "\n".join(
+                    t for t in (hgvs, impact if source == "snv" else "") if t
+                ),
+                "details": details,
                 "genes": _genes(e.get("Gene", "")) if source != "str" else "",
                 "impact": impact,
                 "samples": e.get("Sample", ""),
@@ -954,12 +1078,17 @@ def _diagnostics(
             ("kind", "Type"),
             ("finding", "Finding"),
             ("genes", "Gene(s)"),
-            ("impact", "Consequence"),
             ("samples", "Individual(s)"),
+            ("details", "Genotype and evidence"),
             ("validation", "Validation (inheritance)"),
             ("comment", "Curator comment"),
         ],
         rows=rows,
+        footnotes=(
+            [str((CONFIG.get("diagnostic_details") or {}).get("note", ""))]
+            if any(r["details"] for r in rows)
+            else []
+        ),
         attention=any(r["_rank"] == 0 for r in rows),
         glance=" · ".join(
             f"{n} {label.lower()}"

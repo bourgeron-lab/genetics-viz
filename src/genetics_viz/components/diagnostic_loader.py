@@ -2,20 +2,25 @@
 
 import csv
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
+from genetics_viz.utils.diagnostic_snapshot import SNAPSHOT_COLUMNS, snapshot_values
 from genetics_viz.utils.tsv import append_tsv_row, append_tsv_rows, set_ignore
 
 # Verdict used when curators disagree on the same variant for the same sample.
 CONFLICTING_DIAGNOSTIC = "conflicting"
 
-# TSV header for diagnostics files
+# TSV header for diagnostics files: the record, then the variant's details as
+# the table row showed them when it was saved (utils/diagnostic_snapshot.py).
+# A file written before the details existed has its header extended on the
+# next save (tsv.append_tsv_rows); its older records have no details.
 DIAGNOSTIC_HEADER = [
     "FID", "Variant", "Gene", "Impact", "Sample",
     "User", "Timestamp", "Comment", "Ignore", "Diagnostic",
+    *SNAPSHOT_COLUMNS,
 ]  # fmt: skip
 
 
@@ -121,8 +126,12 @@ def save_diagnostic_entry(
     timestamp: str,
     comment: str,
     diagnostic: str,
+    details: Optional[Mapping[str, Any]] = None,
 ) -> None:
     """Append a diagnostic entry to the TSV file with file locking.
+
+    ``details`` is the variant's snapshot (:mod:`diagnostic_snapshot`), keyed
+    by :data:`SNAPSHOT_COLUMNS`; ``None`` leaves those fields empty.
 
     Raises ``PermissionError`` for a reader: the dialog hides its save button
     from them, and this is the backend half of that guard.
@@ -133,7 +142,8 @@ def save_diagnostic_entry(
         diagnostic_file,
         DIAGNOSTIC_HEADER,
         [family_id, variant_key, gene, impact, sample]
-        + [user, timestamp, comment, "0", diagnostic],
+        + [user, timestamp, comment, "0", diagnostic]
+        + snapshot_values(details),
     )
 
 

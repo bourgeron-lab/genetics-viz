@@ -13,6 +13,7 @@ from nicegui import ui
 
 from genetics_viz.components.column_selector import build_column_selector
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.utils.diagnostic_snapshot import snv_snapshot, wisecondorx_snapshot
 from genetics_viz.components.search_stats import show_stats_dialog
 from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.tanstack_table import DataTable
@@ -74,6 +75,8 @@ class SearchResults:
     sample_to_family: Dict[str, str]
     data_dir: Path
     page_client: Any
+    #: ``pedigree_data_from_cohort``: sample -> FID, Father, Mother, Sex, Phenotype
+    pedigree: Dict[str, Dict[str, str]] = field(default_factory=dict)
     #: Table state for persistence across refreshes
     table_state: Dict[str, Any] = field(
         default_factory=lambda: {"sorting": [], "page": 0}
@@ -371,6 +374,35 @@ def _sv_gene_and_impact(row_data: Dict[str, Any]) -> tuple[str, str]:
     return gene, impact
 
 
+def _diagnostic_details(
+    res: SearchResults, sent: Dict[str, Any], family_id: str
+) -> Dict[str, str]:
+    """The snapshot saved with a diagnostic, from the Python row of ``sent``."""
+    source_type = sent.get("_source_type", "wombat")
+    row = next(
+        (
+            r
+            for r in res.rows
+            if r.get("Variant") == sent.get("Variant")
+            and r.get("sample") == sent.get("sample")
+            and r.get("_source_type", "wombat") == source_type
+        ),
+        sent,
+    )
+    if source_type == "wisecondorx":
+        return wisecondorx_snapshot(row, source=f"WisecondorX ({res.cohort_name})")
+    family = {
+        sid: ped for sid, ped in res.pedigree.items() if ped.get("FID") == family_id
+    }
+    return snv_snapshot(
+        row,
+        source=f"Search, Wombat ({res.cohort_name})",
+        rows=(r for r in res.rows if r.get("sample") in family),
+        phenotypes={sid: ped.get("Phenotype") for sid, ped in family.items()},
+        sex=family.get(str(row.get("sample")), {}).get("Sex"),
+    )
+
+
 def _on_row_action(res: SearchResults, e: Dict[str, Any], refresh_all_rows) -> None:
     """Handle row action click: a diagnostic, or the SNV/SV dialog."""
     action = e.get("action", "")
@@ -394,6 +426,7 @@ def _on_row_action(res: SearchResults, e: Dict[str, Any], refresh_all_rows) -> N
             # SV diagnostic
             gene, impact = _sv_gene_and_impact(row_data)
             show_diagnostic_dialog(
+                details=_diagnostic_details(res, row_data, family_id),
                 family_id=family_id,
                 variant_key=sv_variant_key(row_data),
                 gene=gene,
@@ -406,6 +439,7 @@ def _on_row_action(res: SearchResults, e: Dict[str, Any], refresh_all_rows) -> N
         else:
             # SNV diagnostic
             show_diagnostic_dialog(
+                details=_diagnostic_details(res, row_data, family_id),
                 family_id=family_id,
                 variant_key=variant_str,
                 gene=row_data.get("VEP_SYMBOL", ""),

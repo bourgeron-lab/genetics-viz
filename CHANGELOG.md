@@ -5,6 +5,19 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Diagnostics record the variant's details when they are saved**, so the family report can give the clinician more than the key and the verdict (#37). From the row the diagnostic is saved from, in new columns after the existing ones in `diagnostics/snvs.tsv` and `svs.tsv`:
+  - small variants (Wombat tab, Search): HGVS c. and p. on the MANE Select transcript (else the canonical one), with its RefSeq ID; zygosity; segregation (de novo, paternal, maternal, both); the other family members carrying it, with their phenotype; ClinVar significance; gnomAD AF and FAF95, or "absent"; whether it fits the gene's mode of inheritance in GeneTrek;
+  - SVs: the genes overlapped with their overlap (WisecondorX), copy number (Vedette; estimated from the log2 ratio for WisecondorX autosomes), and for Vedette zygosity, segregation and carriers.
+
+  The diagnostic dialog lists them before saving. STR and UPD diagnostics have none: the report already words them from their own files.
+- **Family report**: the findings table has a "Genotype and evidence" column, and the HGVS and consequences under each finding. A diagnostic saved before this version says "Not recorded"; saving it again records the details.
+
+### Changed
+- The diagnostic files gain their new columns on the next save: the header line is extended in place, and older records stay as they are. ClinVar review status is not in the Wombat tables, so it is not recorded.
+
 ## [0.27.0] - 2026-11-04
 
 ### Added

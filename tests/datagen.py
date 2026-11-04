@@ -758,12 +758,37 @@ WOMBAT_ROWS = [
      "missense_variant", "PLAIN", "ENSG00000000004", 0.001),
 ]  # fmt: skip
 
+#: Transcript, ClinVar and gnomAD columns, as VEP and Wombat write them. Each
+#: row above is the gene's MANE Select transcript; other rows get ``.``.
+TRANSCRIPT_COLUMNS = [
+    "VEP_Feature", "VEP_HGVSc", "VEP_HGVSp", "VEP_MANE_SELECT", "VEP_CANONICAL",
+    "VEP_CLIN_SIG", "AF_joint",
+]  # fmt: skip
+_TRANSCRIPTS = {
+    50674000: ("ENST00000710353.1", "ENST00000710353.1:c.3679G>A",
+               "ENSP00000518234.1:p.Gly1227Arg", "NM_033517.1", "YES",
+               "pathogenic", "."),
+    1000: ("ENST00000000002.1", "ENST00000000002.1:c.10A>C",
+           "ENSP00000000002.1:p.Leu4%3D", "NM_000002.1", "YES", ".", "1.2e-05"),
+}  # fmt: skip
+_NO_TRANSCRIPT = (".",) * len(TRANSCRIPT_COLUMNS)
+WOMBAT_COLUMNS = [*WOMBAT_COLUMNS, *TRANSCRIPT_COLUMNS]
+WOMBAT_ROWS = [r + _TRANSCRIPTS.get(r[1], _NO_TRANSCRIPT) for r in WOMBAT_ROWS]
+#: The SHANK3 de novo again, on another transcript: Wombat writes one row per
+#: transcript, and the family table merges them (``aggregate_by_variant``).
+SHANK3_OTHER_TRANSCRIPT = WOMBAT_ROWS[0][: -len(TRANSCRIPT_COLUMNS)] + (
+    "ENST00000445220.6", "ENST00000445220.6:c.3550G>A",
+    "ENSP00000414728.2:p.Gly1184Arg", ".", ".", "pathogenic", ".",
+)  # fmt: skip
+
 
 def build_wombat_results(data: Path) -> None:
     """Family 1001's Wombat tables (two configs) and the DEMO cohort's two."""
     wombat = family_dir(data, "1001") / "wombat"
     write_tsv(
-        wombat / "1001.rare.vep1.annotated.default.tsv", WOMBAT_COLUMNS, WOMBAT_ROWS
+        wombat / "1001.rare.vep1.annotated.default.tsv",
+        WOMBAT_COLUMNS,
+        [*WOMBAT_ROWS, SHANK3_OTHER_TRANSCRIPT],
     )
     # A second config, so the family page has a second Wombat sub-tab
     write_tsv(
@@ -1420,6 +1445,7 @@ OTHER_WOMBAT_ROWS = [
     ("chr22", 50675000, "C", "T", "S9", "2", "0/1", "S7", "S8", "0/1", "0/0",
      "synonymous_variant", "SHANK3", "ENSG00000251322", 0.01),
 ]  # fmt: skip
+OTHER_WOMBAT_ROWS = [r + _NO_TRANSCRIPT for r in OTHER_WOMBAT_ROWS]
 
 #: Validations of the shared variant: present in S3, absent in S9 (with an
 #: earlier, ignored present).

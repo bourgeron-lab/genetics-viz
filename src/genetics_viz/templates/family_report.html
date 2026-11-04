@@ -54,8 +54,9 @@
        padding: 3px 4px; font-weight: 600; }
   /* "anywhere" also lowers a cell's minimum width, so one long value (a VEP
      list, a locus) wraps instead of pushing the table off the page. */
+  /* pre-line: a cell listing several facts puts one on a line. */
   td { border-bottom: 1px solid #e5e7eb; padding: 3px 4px; vertical-align: top;
-       overflow-wrap: anywhere; }
+       overflow-wrap: anywhere; white-space: pre-line; }
   tr.muted td { color: #9ca3af; }
   tr.attention td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
   .chip { display: inline-block; color: white; border-radius: 3px; padding: 0 4px;

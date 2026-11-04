@@ -370,6 +370,7 @@ async def _run_search(
                     sample_to_family=sample_to_family,
                     data_dir=store.data_dir,
                     page_client=page_client,
+                    pedigree=pedigree_data,
                 )
             )
 

@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from nicegui import ui
 
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
+from genetics_viz.utils.diagnostic_snapshot import vedette_snapshot
 from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
     load_diagnostic_map,
@@ -484,7 +485,18 @@ def _build(
             ui.notify("Missing carrier", type="warning")
             return
         if e.get("action") == "open_diagnostic":
+            cohort = store.get_cohort(cohort_name) if cohort_name else None
+            family = cohort.families.get(family_id) if cohort else None
             show_diagnostic_dialog(
+                details=vedette_snapshot(
+                    row,
+                    source=f"Vedette {version}".strip(),
+                    rows=all_rows,
+                    phenotypes={
+                        s.sample_id: s.phenotype
+                        for s in (family.samples if family else [])
+                    },
+                ),
                 family_id=family_id,
                 variant_key=row["_variant_key"],
                 gene=", ".join(row.get("_genes", [])),

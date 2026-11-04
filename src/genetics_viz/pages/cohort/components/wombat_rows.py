@@ -163,7 +163,8 @@ def build_rows(
 def wombat_columns(df_columns: List[str]) -> List[str]:
     """Every column the table can show: Variant and MOI first, the curation last.
 
-    ``df_columns`` are the aggregated table's. The coordinates are folded into Variant, and ``n_grouped`` is not shown.
+    ``df_columns`` are the aggregated table's. The coordinates are folded into Variant; ``n_grouped`` and the ``_`` columns
+    (the picked HGVS, for diagnostics) are not shown.
     """
     return reorder_columns_by_group(
         ["Variant", "MOI"]
@@ -171,6 +172,7 @@ def wombat_columns(df_columns: List[str]) -> List[str]:
             col
             for col in df_columns
             if col not in ["#CHROM", "POS", "REF", "ALT", "n_grouped"]
+            and not col.startswith("_")
         ]
         + ["Validation", "Diagnostic"]
     )

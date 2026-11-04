@@ -153,3 +153,24 @@ def test_rewrite_can_drop_rows_and_shrink_the_file(tmp_path):
 
     assert rewrite_tsv_rows(path, keep_first)
     assert len(path.read_text().splitlines()) == 2
+
+
+def test_a_header_missing_trailing_columns_is_extended(tmp_path):
+    path = tmp_path / "c.tsv"
+    path.write_text("a\tb\n1\t2\n")
+    append_tsv_row(path, ["a", "b", "c"], ["3", "4", "5"])
+    assert path.read_text() == "a\tb\tc\n1\t2\n3\t4\t5\n"
+    # Already extended: written once.
+    append_tsv_row(path, ["a", "b", "c"], ["6", "7", "8"])
+    assert path.read_text().count("a\tb\tc") == 1
+
+
+def test_a_header_that_is_not_a_prefix_is_left_alone(tmp_path):
+    path = tmp_path / "c.tsv"
+    path.write_text("a\tx\n1\t2\n")
+    append_tsv_row(path, ["a", "b", "c"], ["3", "4", "5"])
+    assert path.read_text().splitlines()[0] == "a\tx"
+    # A shorter writer never cuts the header down.
+    path.write_text("a\tb\tc\n")
+    append_tsv_row(path, ["a", "b"], ["1", "2"])
+    assert path.read_text().splitlines()[0] == "a\tb\tc"
