@@ -1521,41 +1521,64 @@ def build_second_data_dir(root: Path) -> Path:
 #: VEDETTE_DEL[0] its VCF POS (the base before the event).
 VEDETTE_DEL = (165_600_000, 165_600_120)
 VEDETTE_START = VEDETTE_DEL[0] + 1
-VEDETTE_VERSION = "1.5.0"
+VEDETTE_VERSION = "1.11.0"
 VEDETTE_CALLER = f"vedette-{VEDETTE_VERSION}"
 VEDETTE_MEMBERS = ["S1", "S2", "S3"]
 
-#: The family export's columns (Vedette docs/EXPORT.md, schema 1).
+#: Per-member column prefixes, in the export's order (v1.9: own call added).
+VEDETTE_MEMBER_PREFIXES = (
+    "GT", "CN", "GQ", "INH", "DNQ", "OWN", "SQ", "SRC", "PRECISE",
+)  # fmt: skip
+#: The family export's columns (Vedette docs/EXPORT.md, schema 1, v1.9).
 VEDETTE_COLUMNS = [
-    "row_id", "kind", "site_ids", "contig", "start", "end", "vcf_pos", "svtype", "size",
-    "filter", "rescue", "n_sites", "sqmax", "cohort_carrier_frac", "ref_carrier_frac",
-    "lcr_ovl", "segdup_ovl", "support", "own_call", "mosaic_cn",
+    "row_id", "kind", "site_ids", "site_key", "contig", "start", "end", "vcf_pos",
+    "svtype", "size", "filter", "rescue", "n_sites", "sqmax", "cohort_carrier_frac",
+    "ref_carrier_frac", "af", "nsamples", "precise_frac", "sqmean", "hwe_p",
+    "cn_disc", "ref_af", "lcr_ovl", "segdup_ovl", "support", "own_call", "mosaic_cn",
     "impact_score", "impact_level", "impact_reason", "impact",
     "exonic_genes", "exonic_gene_ids", "genic_genes", "genic_gene_ids",
     "carriers", "qc_alerts", "genes", "inheritance",
-] + [f"{p}_{m}" for m in VEDETTE_MEMBERS for p in ("GT", "CN", "GQ", "INH", "DNQ")]  # fmt: skip
+] + [f"{p}_{m}" for m in VEDETTE_MEMBERS for p in VEDETTE_MEMBER_PREFIXES]  # fmt: skip
 
 
-def _vedette_row(row_id, kind, contig, start, end, svtype, members, **kw):
-    """One export row; ``members`` maps a member to (GT, CN, GQ, INH, DNQ)."""
+def _vedette_row(row_id, kind, contig, start, end, svtype, members, own=None,
+                 details=None, **kw):  # fmt: skip
+    """One export row (a dict of the TSV's columns).
+
+    ``members`` maps a member to (GT, CN, GQ, INH, DNQ); ``own`` to its own
+    call (OWN, SQ, SRC, PRECISE); ``details`` to the own-call fields only the
+    Parquet holds. A ``site`` row's ``site_key`` defaults to its bounds.
+    """
     row = dict.fromkeys(VEDETTE_COLUMNS, "")
     row.update(
         row_id=row_id, kind=kind, contig=contig, start=start, end=end,
         vcf_pos=start - 1, svtype=svtype, size=end - start + 1, **kw,
     )  # fmt: skip
-    if kind == "site" and not row["site_ids"]:
-        row["site_ids"] = row_id
+    if kind == "site":
+        row["site_ids"] = row["site_ids"] or row_id
+        row["site_key"] = row["site_key"] or f"{contig}:{start}-{end}:{svtype.lower()}"
     inherit = []
     for m, cells in members.items():
         for prefix, value in zip(("GT", "CN", "GQ", "INH", "DNQ"), cells):
             row[f"{prefix}_{m}"] = value
         if cells[3]:
             inherit.append(f"{m}:{cells[3]}")
+    for m, cells in (own or {}).items():
+        for prefix, value in zip(("OWN", "SQ", "SRC", "PRECISE"), cells):
+            row[f"{prefix}_{m}"] = value
     row["inheritance"] = "; ".join(inherit)
-    return [row[c] for c in VEDETTE_COLUMNS]
+    row["_details"] = details or {}
+    return row
+
+
+_NONE = ("none", "", "", "")
 
 
 _REF = ("0/0", 2, 40, "", "")
+#: The cohort site behind S3's de novo deletion, before the row's bounds were
+#: refined on the carriers' own calls: what validations are keyed on.
+VEDETTE_SITE_KEY = f"chr2:{VEDETTE_START - 3}-{VEDETTE_DEL[1] + 2}:del"
+VEDETTE_NONPASS = "vedette_site_6"
 #: One of each kind, as Vedette v1.4 writes them: a de novo deletion in SCN2A
 #: (own call PASS), two cohort sites collapsed into one paternal DUP, a common
 #: re-genotyped DEL, a maternal chrX DEL whose complete gene list the old
@@ -1564,8 +1587,18 @@ VEDETTE_ROWS = [
     _vedette_row(
         "vedette_site_1", "site", "chr2", VEDETTE_START, VEDETTE_DEL[1], "DEL",
         {"S1": _REF, "S2": ("0/0", 2, 38, "", ""), "S3": ("0/1", 1, 45, "denovo", 38)},
+        own={"S1": _NONE, "S2": _NONE, "S3": ("pass", 12.5, "JUNCTION", 1)},
+        details={"S3": {
+            "own_call_id": "vedette_DEL_7", "own_filter": "PASS",
+            "own_start": VEDETTE_START, "own_end": VEDETTE_DEL[1], "own_gq": 45,
+            "pe": 3, "sr": 5, "cg": 4, "rd": 0.52, "cnq": 0.97,
+            "own_model_version": "v5n",
+        }},
+        site_key=VEDETTE_SITE_KEY,
         filter="PASS", n_sites=1, sqmax=12.5, cohort_carrier_frac=0.004,
-        ref_carrier_frac=0.001, lcr_ovl=0, segdup_ovl=0, support="strong",
+        ref_carrier_frac=0.001, af=0.002, nsamples=3, precise_frac=1.0, sqmean=9.1,
+        hwe_p=1.0, cn_disc=0.0, ref_af=0.0005, lcr_ovl=0, segdup_ovl=0,
+        support="strong",
         own_call="pass", impact_score="0.90", impact_level="high",
         impact_reason="DEL exonique SCN2A (NDD candidat, s_het 0.12)",
         impact="+0.90 — élevé · DEL exonique SCN2A (NDD candidat, s_het 0.12)",
@@ -1576,6 +1609,7 @@ VEDETTE_ROWS = [
         "vedette_site_2", "site", "chr2", 165_200_001, 165_200_400, "DUP",
         {"S1": ("0/1", 3, 30, "", ""), "S2": ("0/0", 2, 41, "", ""),
          "S3": ("0/1", 3, 25, "paternal", "")},
+        own={"S1": _NONE, "S2": _NONE, "S3": _NONE},
         site_ids="vedette_site_2;vedette_site_3", filter="PASS", n_sites=2,
         sqmax=6.0, cohort_carrier_frac=0.09, support="weak", own_call="none",
         impact_score="0.00", impact_level="low", impact_reason="intronique",
@@ -1586,6 +1620,7 @@ VEDETTE_ROWS = [
         "vedette_site_4", "site", "chr2", 170_000_001, 170_000_080, "DEL",
         {"S1": ("0/1", 2, 10, "", ""), "S2": ("0/1", 2, 12, "", ""),
          "S3": ("0/1", 2, 9, "biparental", "")},
+        own={"S1": ("filtered", 2.0, "DEPTH", 0), "S2": _NONE, "S3": _NONE},
         filter="PASS", n_sites=1, cohort_carrier_frac=0.5, support="weak",
         own_call="filtered", impact_score="-0.60", impact_level="none",
         impact="-0.60 — aucun gène codant", carriers="S1;S2;S3",
@@ -1594,6 +1629,12 @@ VEDETTE_ROWS = [
         "vedette_site_5", "site", "chrX", 2_800_001, 2_800_300, "DEL",
         {"S1": ("0/0", 1, 30, "", ""), "S2": ("0/1", 1, 50, "", ""),
          "S3": ("1/1", 0, 40, "maternal", "")},
+        own={"S1": _NONE, "S2": _NONE, "S3": ("filtered", 3.1, "DEPTH", 0)},
+        details={"S3": {
+            "own_call_id": "vedette_DEL_9", "own_filter": "LowSQ",
+            "own_start": 2_800_011, "own_end": 2_800_290, "cipos": [-250, 250],
+            "own_gq": 40, "pe": 0, "sr": 0, "cg": 0, "own_model_version": "v5n",
+        }},
         filter="PASS", n_sites=1, cohort_carrier_frac=0.008, support="strong",
         own_call="filtered", impact_score="0.45", impact_level="moderate",
         impact_reason="DEL exonique XRG (NDD candidat, s_het 0.05)",
@@ -1618,6 +1659,18 @@ VEDETTE_ROWS = [
         "mosaic_S3_chr2_180000001", "mosaic", "chr2", 180_000_001, 182_000_000,
         "DUP", {}, filter="PASS", rescue="MOSAÏQUE", mosaic_cn=2.4, carriers="S3",
         qc_alerts="mosaïque",
+    ),
+    # A rare non-PASS site (exported from v1.7.0): hidden unless asked for.
+    _vedette_row(
+        VEDETTE_NONPASS, "site", "chr2", 190_000_001, 190_000_150, "DEL",
+        {"S1": ("0/1", 1, 35, "", ""), "S2": ("0/0", 2, 40, "", ""),
+         "S3": ("0/1", 1, 30, "paternal", "")},
+        own={"S1": _NONE, "S2": _NONE, "S3": _NONE},
+        filter="CohortArtifact", n_sites=1, cohort_carrier_frac=0.12, support="strong",
+        own_call="none", impact_score="0.45", impact_level="moderate",
+        impact_reason="DEL exonique SHANK3", impact="+0.45 — modéré · DEL exonique SHANK3",
+        exonic_genes="SHANK3", exonic_gene_ids="ENSG00000251322", carriers="S1;S3",
+        genes="SHANK3",
     ),
 ]  # fmt: skip
 
@@ -1658,18 +1711,112 @@ chrX\t2800010\tvedette_DEL_9\tN\t<DEL>\t.\tLowSQ\tEND=2800290;SVTYPE=DEL;SOURCE=
 """
 
 
+#: Parquet types of the row-level columns (strings otherwise), as Vedette's.
+_VEDETTE_INT = {"start", "end", "vcf_pos", "size", "n_sites", "nsamples"}
+_VEDETTE_FLOAT = {
+    "sqmax", "cohort_carrier_frac", "ref_carrier_frac", "af", "precise_frac",
+    "sqmean", "hwe_p", "cn_disc", "ref_af", "lcr_ovl", "segdup_ovl", "mosaic_cn",
+    "impact_score",
+}  # fmt: skip
+_VEDETTE_LISTS = {
+    "site_ids", "exonic_genes", "exonic_gene_ids", "genic_genes", "genic_gene_ids",
+    "carriers",
+}  # fmt: skip
+#: Left out of the Parquet: display columns, and the TSV's member columns.
+_VEDETTE_TSV_ONLY = {"impact", "genes", "inheritance"}
+
+
+def _typed(column: str, value):
+    if value == "" or value is None:
+        return [] if column in _VEDETTE_LISTS else None
+    if column in _VEDETTE_LISTS:
+        return [v for v in str(value).split(";") if v]
+    if column in _VEDETTE_INT:
+        return int(value)
+    if column in _VEDETTE_FLOAT:
+        return float(value)
+    return str(value)
+
+
+def build_vedette_parquet(path: Path) -> Path:
+    """The export in long form: one line per row x member, typed (v1.9.0)."""
+    import polars as pl
+
+    row_columns = [
+        c for c in VEDETTE_COLUMNS
+        if c not in _VEDETTE_TSV_ONLY and c.split("_")[0] not in VEDETTE_MEMBER_PREFIXES
+    ]  # fmt: skip
+    lines = []
+    for row in VEDETTE_ROWS:
+        base = {c: _typed(c, row[c]) for c in row_columns}
+        carriers = set(base["carriers"])
+        for m in VEDETTE_MEMBERS:
+            detail = row["_details"].get(m, {})
+            precise = row.get(f"PRECISE_{m}", "")
+            lines.append(
+                {
+                    **base,
+                    "sample": m,
+                    "carrier": m in carriers,
+                    "gt": row.get(f"GT_{m}") or None,
+                    "gq": _typed("start", row.get(f"GQ_{m}", "")),
+                    "cn": _typed("start", row.get(f"CN_{m}", "")),
+                    "inheritance": row.get(f"INH_{m}") or None,
+                    "dnq": _typed("start", row.get(f"DNQ_{m}", "")),
+                    "member_own_call": row.get(f"OWN_{m}") or None,
+                    "sq": _typed("sqmax", row.get(f"SQ_{m}", "")),
+                    "source": row.get(f"SRC_{m}") or None,
+                    "precise": None if precise == "" else bool(precise),
+                    "own_call_id": detail.get("own_call_id"),
+                    "own_filter": detail.get("own_filter"),
+                    "own_start": detail.get("own_start"),
+                    "own_end": detail.get("own_end"),
+                    "cipos": detail.get("cipos"),
+                    "ciend": detail.get("ciend"),
+                    "own_gq": detail.get("own_gq"),
+                    "pe": detail.get("pe"),
+                    "sr": detail.get("sr"),
+                    "cg": detail.get("cg"),
+                    "rd": detail.get("rd"),
+                    "cnq": detail.get("cnq"),
+                    "own_model_version": detail.get("own_model_version"),
+                }
+            )
+    schema = {
+        **{c: pl.Int64 for c in _VEDETTE_INT},
+        **{c: pl.Float64 for c in _VEDETTE_FLOAT},
+        **{c: pl.List(pl.String) for c in _VEDETTE_LISTS},
+        "carrier": pl.Boolean, "gq": pl.Int64, "cn": pl.Int64, "dnq": pl.Int64,
+        "sq": pl.Float64, "precise": pl.Boolean, "own_start": pl.Int64,
+        "own_end": pl.Int64, "cipos": pl.List(pl.Int64), "ciend": pl.List(pl.Int64),
+        "own_gq": pl.Int64, "pe": pl.Int64, "sr": pl.Int64, "cg": pl.Int64,
+        "rd": pl.Float64, "cnq": pl.Float64,
+    }  # fmt: skip
+    df = pl.DataFrame(lines, schema_overrides=schema, infer_schema_length=None)
+    df.write_parquet(path)
+    return path
+
+
 def build_vedette_results(data: Path) -> None:
     """Family 1001's Vedette export (v1.4 format) and S3's own calls."""
     import pysam
 
     vdir = family_dir(data, "1001") / "svs" / "vedette"
-    write_tsv(vdir / "1001.vedette.tsv", VEDETTE_COLUMNS, VEDETTE_ROWS)
+    write_tsv(
+        vdir / "1001.vedette.tsv",
+        VEDETTE_COLUMNS,
+        [[row[c] for c in VEDETTE_COLUMNS] for row in VEDETTE_ROWS],
+    )
+    build_vedette_parquet(vdir / "1001.vedette.parquet")
     write_tsv(vdir / "1001.vedette.qc.tsv", VEDETTE_QC_COLUMNS, VEDETTE_QC_ROWS)
     (vdir / "1001.vedette.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "vedette_version": VEDETTE_VERSION,
+                "pon": "dp_founders300",
+                "parquet": "1001.vedette.parquet",
+                "export_nonpass_max_carrier_frac": 0.2,
                 "family_id": "1001",
                 "members": VEDETTE_MEMBERS,
                 "rows": len(VEDETTE_ROWS),

@@ -60,6 +60,7 @@ from genetics_viz.utils.vedette import (
     apply_filters,
     carrier_rows,
     default_preset,
+    family_parquet_file,
     family_vedette_file,
     filters_from_params,
     filters_to_params,
@@ -75,7 +76,8 @@ from genetics_viz.utils.vedette import (
     qc_flag_label,
     read_export_info,
     read_member_qc,
-    read_vedette_table,
+    is_nonpass,
+    read_family_rows,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +96,8 @@ _COLUMNS: List[Tuple[str, str, bool]] = [
     ("DNQ", "DNQ", False),
     ("family", "Family (GT·CN)", True),
     ("own_call", "Own call", True),
+    ("SQ", "Own call SQ", False),
+    ("source", "Own call source", False),
     ("support", "CN support", False),
     ("impact_score", "Impact", True),
     ("impact_level", "Level", True),
@@ -107,19 +111,28 @@ _COLUMNS: List[Tuple[str, str, bool]] = [
     ("lcr_ovl", "LCR overlap", False),
     ("segdup_ovl", "Segdup overlap", False),
     ("filter", "Filter", False),
+    ("af", "Cohort AF", False),
+    ("nsamples", "Samples merged", False),
+    ("precise_frac", "Precise fraction", False),
+    ("sqmean", "SQ mean", False),
+    ("hwe_p", "HWE p", False),
+    ("cn_disc", "CN discordance", False),
+    ("ref_af", "Reference AF", False),
+    ("site_key", "Site key", False),
     ("rescue", "Rescue", False),
     ("qc_alerts", "QC alerts", False),
     ("Validation", "Validation", True),
     ("Diagnostic", "Diagnostic", True),
     ("site_id", "Row id", False),
     # Exports before Vedette v1.4.0 only.
-    ("cohort_af", "Cohort AF", False),
+    ("cohort_af", "Cohort AF (old export)", False),
     ("cohort_ncarrier", "Cohort carriers", False),
 ]
 _NUMBER_COLUMNS = {
     "size", "CN", "GQ", "DNQ", "impact_score", "cohort_carrier_frac",
     "ref_carrier_frac", "sqmax", "n_sites", "mosaic_cn", "lcr_ovl", "segdup_ovl",
-    "cohort_af", "cohort_ncarrier",
+    "cohort_af", "cohort_ncarrier", "SQ", "af", "nsamples", "precise_frac",
+    "sqmean", "hwe_p", "cn_disc", "ref_af",
 }  # fmt: skip
 #: Coded columns drawn as a badge, and the row field holding its colour.
 _BADGE_COLUMNS = {
@@ -129,6 +142,7 @@ _BADGE_COLUMNS = {
     "own_call": "_own_call_color",
     "support": "_support_color",
     "impact_level": "_impact_color",
+    "filter": "_filter_color",
 }
 _INITIAL_SORTING = [{"id": "impact_score", "desc": True}]
 
@@ -160,16 +174,16 @@ def _member_labels(store: Any, cohort_name: str, family_id: str) -> Dict[str, st
 
 def _load(
     data_dir: Path, family_id: str, labels: Dict[str, str], scorer: Any
-) -> Tuple[List[Dict[str, Any]], ExportInfo, List[MemberQC]]:
-    """Carrier rows with their gene badges, the export's JSON and the members'
-    QC (blocking).
+) -> Tuple[List[Dict[str, Any]], ExportInfo, List[MemberQC], Path]:
+    """Carrier rows with their gene badges, the export's JSON, the members'
+    QC and the file the rows came from: Parquet or TSV (blocking).
 
     A family has thousands of carrier rows: built here, off-thread. ``scorer``
     is the user's, taken on the event loop.
     """
     info = read_export_info(data_dir, family_id)
-    df = read_vedette_table(family_vedette_file(data_dir, family_id))
-    rows = carrier_rows(df, labels=labels, members=info.members)
+    table, members, own_details = read_family_rows(data_dir, family_id, info)
+    rows = carrier_rows(table, labels=labels, members=members, own_details=own_details)
     for row in rows:
         # Exonic genes bordered, as for WisecondorX calls.
         row["GeneBadges"] = build_gene_badges(
@@ -177,7 +191,12 @@ def _load(
         )
         row["_genetrek_url"] = search_url([row["chr:start-end"]])
         row["_original_locus"] = row["chr:start-end"]
-    return rows, info, read_member_qc(data_dir, family_id)
+    source = (
+        family_parquet_file(data_dir, family_id, info)
+        if isinstance(table, list)
+        else family_vedette_file(data_dir, family_id)
+    )
+    return rows, info, read_member_qc(data_dir, family_id), source
 
 
 def _badge_html(text: str, color: str) -> str:
@@ -207,7 +226,7 @@ def render_vedette_subtab(
         labels = _member_labels(store, cohort_name, family_id)
         scorer = get_gene_scorer()  # reads the session: on the event loop
         try:
-            rows, info, qc = await asyncio.to_thread(
+            rows, info, qc, source = await asyncio.to_thread(
                 _load, store.data_dir, family_id, labels, scorer
             )
         except Exception as e:  # a degraded state, shown, never raised
@@ -222,7 +241,7 @@ def render_vedette_subtab(
                 store,
                 family_id,
                 cohort_name,
-                path,
+                source,
                 rows,
                 info,
                 qc,
@@ -370,6 +389,33 @@ def _build(
                     if active
                     else "outline color=blue size=sm"
                 ).tooltip(cfg.get("tooltip", "")).mark(f"vedette-preset-{name}")
+            if n_nonpass:
+                ui.switch(
+                    f"Show non-PASS sites ({n_nonpass})",
+                    value=filters.show_nonpass,
+                    on_change=toggle_nonpass,
+                ).props("dense").classes("ml-4 text-sm").mark(
+                    "vedette-nonpass"
+                ).tooltip(
+                    "Cohort sites Vedette filtered (CohortArtifact, …) but "
+                    "exported because they are rare in the cohort"
+                    + (
+                        f" (carried by ≤ {info.nonpass_max_carrier_frac:.0%})"
+                        if info.nonpass_max_carrier_frac is not None
+                        else ""
+                    )
+                )
+
+    n_nonpass = sum(1 for r in all_rows if is_nonpass(r))
+
+    def toggle_nonpass(e) -> None:
+        filters.show_nonpass = bool(e.value)
+        # The FILTER column says which rows they are.
+        if filters.show_nonpass and "filter" not in shown["value"]:
+            shown["value"] = [
+                c for c, _, _ in _COLUMNS if c in {*shown["value"], "filter"}
+            ]
+        changed()
 
     presets_row()
 
@@ -592,8 +638,11 @@ def _build(
         rows = filter_by_status(rows, filters.validations)
         rows.sort(key=lambda r: -(r.get("impact_score") or -99.0))
         n_events = len({r["site_id"] for r in rows})
+        hidden = (
+            "" if filters.show_nonpass or not n_nonpass else ", non-PASS sites hidden"
+        )
         with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
-            ui.label(f"Data ({len(rows)} rows, {n_events} events)").classes(
+            ui.label(f"Data ({len(rows)} rows, {n_events} events{hidden})").classes(
                 "text-lg font-semibold text-blue-700"
             ).mark("vedette-count")
             ui.space()
@@ -645,6 +694,7 @@ def _render_versions(info: ExportInfo) -> None:
         ("Schema", "" if info.schema_version is None else str(info.schema_version)),
         ("Cohort run", info.cohort),
         ("Written", info.generated.replace("T", " ")),
+        ("Panel of normals", info.pon),
     ]
     with ui.row().classes("gap-4 items-center flex-wrap"):
         for label, value in parts:

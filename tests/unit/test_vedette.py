@@ -12,6 +12,8 @@ from datagen import (
     CRAM_INREAD_DELS,
     VEDETTE_CALLER,
     VEDETTE_DEL,
+    VEDETTE_NONPASS,
+    VEDETTE_SITE_KEY,
     VEDETTE_START,
     cram_reference,
     family_dir,
@@ -35,10 +37,14 @@ SUB = "sub_S3_chr2_175000001"
 
 
 def _rows(data_dir):
+    """As the tab reads them: the Parquet file when it is there."""
     info = v.read_export_info(data_dir, "1001")
-    df = v.read_vedette_table(v.family_vedette_file(data_dir, "1001"))
+    table, members, details = v.read_family_rows(data_dir, "1001", info)
     return v.carrier_rows(
-        df, labels={"S1": "father", "S2": "mother"}, members=info.members
+        table,
+        labels={"S1": "father", "S2": "mother"},
+        members=members,
+        own_details=details,
     )
 
 
@@ -97,6 +103,8 @@ def test_one_row_per_event_and_carrier(data_dir):
         ("vedette_site_5", "S3"),
         (SUB, "S3"),
         (MOSAIC, "S3"),
+        (VEDETTE_NONPASS, "S1"),
+        (VEDETTE_NONPASS, "S3"),
     ]
     by = _by_id(rows)
     first = by[("vedette_site_1", "S3")]
@@ -106,7 +114,13 @@ def test_one_row_per_event_and_carrier(data_dir):
         VEDETTE_DEL[1],
         120,
     )
-    assert first["_variant_key"] == f"chr2:{VEDETTE_START}-{VEDETTE_DEL[1]}:del"
+    # Keyed by the cohort site (site_key), not by the row's refined bounds.
+    assert first["_variant_key"] == VEDETTE_SITE_KEY != first["_locus_key"]
+    assert first["_locus_key"] == f"chr2:{VEDETTE_START}-{VEDETTE_DEL[1]}:del"
+    # The cohort site's INFO, and the carrier's own call (v1.9.0).
+    assert (first["af"], first["nsamples"], first["precise_frac"]) == (0.002, 3, 1.0)
+    assert (first["SQ"], first["source"], first["_precise"]) == (12.5, "JUNCTION", True)
+    assert first["_own_call_is_member"] and first["_own_detail"]["pe"] == 3
     assert (first["GT"], first["CN"], first["GQ"], first["DNQ"]) == ("0/1", 1, 45, 38)
     assert first["inheritance"] == "de novo" and first["impact_level"] == "High"
     assert (first["impact_score"], first["impact_reason"]) == (
@@ -159,6 +173,68 @@ def test_export_info_and_member_qc(data_dir):
     # A family without an export.
     assert v.read_export_info(data_dir, "1002").caller == ""
     assert v.read_member_qc(data_dir, "1002") == []
+
+
+def test_parquet_and_tsv_give_the_same_rows(data_dir):
+    info = v.read_export_info(data_dir, "1001")
+    assert (info.pon, info.parquet, info.nonpass_max_carrier_frac) == (
+        "dp_founders300",
+        "1001.vedette.parquet",
+        0.2,
+    )
+    table, members, details = v.read_family_rows(data_dir, "1001", info)
+    assert isinstance(table, list) and members == ["S1", "S2", "S3"]
+    assert set(details) == {("vedette_site_1", "S3"), ("vedette_site_5", "S3")}
+    from_parquet = v.carrier_rows(table, members=members, own_details=details)
+    from_tsv = v.carrier_rows(
+        v.read_vedette_table(v.family_vedette_file(data_dir, "1001")),
+        members=info.members,
+    )
+
+    def shown(rows):
+        return [{k: val for k, val in r.items() if k != "_own_detail"} for r in rows]
+
+    # Same rows; only the Parquet has the own calls' details.
+    assert shown(from_parquet) == shown(from_tsv)
+    # Without the Parquet file, the TSV is read.
+    v.family_parquet_file(data_dir, "1001", info).unlink()
+    table, _, details = v.read_family_rows(data_dir, "1001", info)
+    assert not isinstance(table, list) and details == {}
+
+
+def test_own_call_comes_from_the_export(data_dir):
+    by = _by_id(_rows(data_dir))
+    # Parquet: the whole own call, no VCF opened.
+    own = v.resolve_own_call(data_dir / "nowhere", by[("vedette_site_1", "S3")])
+    assert (own.origin, own.call_id, own.start, own.end) == (
+        "parquet",
+        "vedette_DEL_7",
+        VEDETTE_START,
+        VEDETTE_DEL[1],
+    )
+    assert own.passed and own.fields["CG"] == 4 and own.fields["SQ"] == 12.5
+    filtered = v.resolve_own_call(data_dir / "nowhere", by[("vedette_site_5", "S3")])
+    assert filtered.filters == ["LowSQ"] and filtered.cipos == (-250, 250)
+    assert not filtered.precise
+    # "none": re-genotyped only, nothing to look up.
+    assert v.resolve_own_call(data_dir, by[("vedette_site_2", "S3")]) is None
+    # Precision from the export, else the own call, else the size.
+    assert v.row_is_precise(by[("vedette_site_5", "S3")], None) is False
+    assert v.row_is_precise(by[(MOSAIC, "S3")], None) is False  # 2 Mb
+    # From the TSV alone: the code says pass, the VCF gives the rest.
+    info = v.read_export_info(data_dir, "1001")
+    tsv = _by_id(
+        v.carrier_rows(
+            v.read_vedette_table(v.family_vedette_file(data_dir, "1001")),
+            members=info.members,
+        )
+    )
+    own = v.resolve_own_call(data_dir, tsv[("vedette_site_1", "S3")])
+    assert (own.origin, own.call_id) == ("vcf", "vedette_DEL_7")
+    # No VCF either: what the TSV says.
+    partial = v.resolve_own_call(data_dir / "nowhere", tsv[("vedette_site_1", "S3")])
+    assert (partial.origin, partial.call_id, partial.source) == ("tsv", "", "JUNCTION")
+    assert partial.passed and partial.fields == {"SQ": 12.5}
 
 
 def test_a_newer_schema_is_flagged():
@@ -230,6 +306,15 @@ def test_presets(data_dir):
     assert keys(v.VedetteFilters.preset("denovo")) == [("vedette_site_1", "S3")]
     assert len(keys(v.VedetteFilters.preset("impact"))) == 3
     assert len(keys(v.VedetteFilters.preset("all"))) == 10
+    # Non-PASS cohort sites are hidden unless asked for, whatever the preset.
+    shown = v.VedetteFilters.preset("all")
+    shown.show_nonpass = True
+    assert len(keys(shown)) == 12
+    impact = v.VedetteFilters.preset("impact")
+    impact.show_nonpass = True
+    assert (VEDETTE_NONPASS, "S3") in keys(impact)
+    assert v.is_nonpass(_by_id(rows)[(VEDETTE_NONPASS, "S1")])
+    assert not v.is_nonpass(_by_id(rows)[(SUB, "S3")])  # LowSQ is its kind
     # The page's member selection applies on top.
     assert keys(v.VedetteFilters.preset("all"), members=["S1"]) == [
         ("vedette_site_2", "S1"),
@@ -249,8 +334,19 @@ def test_each_filter(data_dir):
     f.kinds = ["subthreshold"]
     assert {r["site_id"] for r in v.apply_filters(rows, f)} == {SUB}
     f = v.VedetteFilters.preset("all")
-    f.own_calls = ["none"]  # re-genotyped only
-    assert {r["site_id"] for r in v.apply_filters(rows, f)} == {"vedette_site_2"}
+    f.own_calls = ["none"]  # the carrier itself re-genotyped only (v1.9.0)
+    assert {(r["site_id"], r["sample"]) for r in v.apply_filters(rows, f)} == {
+        ("vedette_site_2", "S1"),
+        ("vedette_site_2", "S3"),
+        ("vedette_site_4", "S2"),
+        ("vedette_site_4", "S3"),
+        ("vedette_site_5", "S2"),
+    }
+    f.own_calls = ["filtered"]
+    assert {(r["site_id"], r["sample"]) for r in v.apply_filters(rows, f)} == {
+        ("vedette_site_4", "S1"),
+        ("vedette_site_5", "S3"),
+    }
     f = v.VedetteFilters.preset("all")
     f.min_size, f.max_size = 100, 350
     assert {r["site_id"] for r in v.apply_filters(rows, f)} == {
@@ -289,11 +385,15 @@ def test_link_round_trip():
     custom = v.VedetteFilters.preset("rare")
     custom.max_freq, custom.min_size, custom.inheritance = 0.05, 200, ["maternal", ""]
     custom.kinds, custom.own_calls = ["site", "mosaic"], ["pass"]
+    custom.show_nonpass = True
     custom.genesets, custom.validations = ["tier:1"], ["present"]
     params, back = through(custom)
     assert params["vpre"] == "custom"
     assert (back.max_freq, back.min_size, back.max_size) == (0.05, 200, None)
     assert back.kinds == ["site", "mosaic"] and back.own_calls == ["pass"]
+    assert back.show_nonpass and params["vnp"] == "1"
+    _, plain = through(v.VedetteFilters.preset("rare"))
+    assert not plain.show_nonpass
     assert back.inheritance == ["maternal", ""] and back.min_gq == 20
     assert back.genesets == ["tier:1"] and back.validations == ["present"]
 

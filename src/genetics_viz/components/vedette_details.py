@@ -26,9 +26,8 @@ from genetics_viz.utils.genetrek import search_url
 from genetics_viz.utils.vedette import (
     ExportInfo,
     OwnCall,
-    assume_precise,
-    find_own_call,
-    sample_vedette_vcf,
+    resolve_own_call,
+    row_is_precise,
 )
 
 _FIELD_LABELS = {
@@ -58,6 +57,13 @@ def _field(label: str, value: Any) -> None:
         ui.label("-" if value in (None, "") else str(value)).classes(
             "text-base text-gray-900 font-medium"
         )
+
+
+_OWN_ORIGIN = {
+    "parquet": "from Vedette's export",
+    "tsv": "from Vedette's export (code, SQ and source only)",
+    "vcf": "matched in the sample's VCF",
+}
 
 
 def _fmt_af(value: Optional[float]) -> str:
@@ -152,7 +158,26 @@ def render_vedette_details(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
                 ):
                     if row.get(key):
                         _field(label, f"{row[key]:.0%}")
-                _field("filter", row.get("filter"))
+                flt = row.get("filter") or ""
+                if flt and flt != "PASS":
+                    with ui.column().classes("gap-0"):
+                        ui.label("filter").classes(
+                            "text-xs font-semibold text-gray-500"
+                        )
+                        ui.html(_badge(flt, "#9ca3af"), sanitize=False)
+                else:
+                    _field("filter", flt)
+                for label, key, fmt in (
+                    ("cohort AF", "af", ".4g"),
+                    ("samples merged", "nsamples", "d"),
+                    ("precise fraction", "precise_frac", ".0%"),
+                    ("SQ mean", "sqmean", ".3g"),
+                    ("HWE p", "hwe_p", ".2g"),
+                    ("CN discordance", "cn_disc", ".0%"),
+                    ("reference AF", "ref_af", ".4g"),
+                ):
+                    if row.get(key) is not None:
+                        _field(label, format(row[key], fmt))
                 if row.get("rescue"):
                     _field("rescue", row["rescue"])
                 ids = row.get("site_ids") or []
@@ -160,6 +185,8 @@ def render_vedette_details(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
                     "cohort sites" if len(ids) > 1 else "site",
                     ", ".join(ids) or row.get("site_id"),
                 )
+                if row.get("site_key"):
+                    _field("site key", row["site_key"])
 
             if row.get("qc_alerts"):
                 ui.label(f"Vedette alerts: {row['qc_alerts']}").classes(
@@ -215,9 +242,18 @@ def _render_own_call(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
     with ui.column().classes("gap-2").mark("vedette-own-call"):
         with ui.row().classes("items-center gap-3 flex-wrap"):
             ui.label(f"{sample}'s own call").classes("text-sm font-semibold")
-            ui.label(f"{own.call_id} · {own.start:,}-{own.end:,}").classes(
-                "text-sm font-mono"
+            where = " · ".join(
+                part
+                for part in (
+                    own.call_id,
+                    f"{own.start:,}-{own.end:,}"
+                    if own.start is not None and own.end is not None
+                    else "",
+                )
+                if part
             )
+            if where:
+                ui.label(where).classes("text-sm font-mono")
             filters = ", ".join(own.filters) or "PASS"
             ui.html(
                 _badge(filters, "#16a34a" if own.passed else "#9ca3af"),
@@ -234,6 +270,9 @@ def _render_own_call(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
             )
             if own.model:
                 ui.label(f"model {own.model}").classes("text-xs text-gray-500")
+            ui.label(_OWN_ORIGIN.get(own.origin, "")).classes(
+                "text-xs text-gray-400 italic"
+            )
         with ui.row().classes("gap-6 flex-wrap"):
             for key, label in _FIELD_LABELS.items():
                 if key in own.fields:
@@ -250,19 +289,16 @@ def _render_own_call(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
 def vedette_source(
     data_dir: Path, family_id: str, row: Dict[str, Any], info: ExportInfo
 ) -> SVSource:
-    """The dialog's source for a carrier row: own call read here (one tabix query).
+    """The dialog's source for a carrier row.
 
-    Validations record the row id, the caller version and the model version:
-    the export's (JSON), else the own call's ``MODEL_VER``.
+    The own call comes from the export when it carries it (Vedette v1.9.0),
+    else from one tabix query of the sample's VCF. Validations are keyed by
+    the row's ``_variant_key`` (the cohort site's ``site_key`` when there is
+    one) and record the row id, the caller version and the model version: the
+    export's (JSON), else the own call's ``MODEL_VER``.
     """
-    own = find_own_call(
-        sample_vedette_vcf(data_dir, row["sample"]),
-        row["contig"],
-        int(row["start"]),
-        int(row["end"]),
-        row["svtype"],
-    )
-    precise = own.precise if own is not None else assume_precise(row.get("size"))
+    own = resolve_own_call(data_dir, row)
+    precise = row_is_precise(row, own)
     return SVSource(
         validation_kind="Vedette",
         header=list(VEDETTE_VALIDATION_HEADER),
@@ -277,4 +313,5 @@ def vedette_source(
         label="Vedette",
         # Vedette's start is the first affected base: curated starts match it.
         start_offset=1,
+        variant_key=row.get("_variant_key"),
     )
