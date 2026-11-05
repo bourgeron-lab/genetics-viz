@@ -1516,37 +1516,126 @@ def build_second_data_dir(root: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 #: S3's de novo deletion, under 1 kb: base-pair breakpoints, in the reads'
-#: CIGAR (build_cram). 0-based start of the deleted bases, and its end.
+#: CIGAR (build_cram). 0-based start of the deleted bases, and its end; the
+#: export's 1-based inclusive bounds are VEDETTE_START-VEDETTE_DEL[1], and
+#: VEDETTE_DEL[0] its VCF POS (the base before the event).
 VEDETTE_DEL = (165_600_000, 165_600_120)
-VEDETTE_SOURCE = "vedette-cohort-1.1.0"
+VEDETTE_START = VEDETTE_DEL[0] + 1
+VEDETTE_VERSION = "1.5.0"
+VEDETTE_CALLER = f"vedette-{VEDETTE_VERSION}"
+VEDETTE_MEMBERS = ["S1", "S2", "S3"]
 
+#: The family export's columns (Vedette docs/EXPORT.md, schema 1).
 VEDETTE_COLUMNS = [
-    "site_id", "contig", "start", "end", "svtype", "size", "filter", "cohort_af",
-    "cohort_carrier_frac", "cohort_ncarrier", "genes", "impact",
-    "GT_S1", "CN_S1", "GQ_S1", "GT_S2", "CN_S2", "GQ_S2", "GT_S3", "CN_S3", "GQ_S3",
-    "inheritance",
-]  # fmt: skip
-#: As the caller writes it: impact in French, inheritance for children only,
-#: a gene list it truncated ("(+2)").
+    "row_id", "kind", "site_ids", "contig", "start", "end", "vcf_pos", "svtype", "size",
+    "filter", "rescue", "n_sites", "sqmax", "cohort_carrier_frac", "ref_carrier_frac",
+    "lcr_ovl", "segdup_ovl", "support", "own_call", "mosaic_cn",
+    "impact_score", "impact_level", "impact_reason", "impact",
+    "exonic_genes", "exonic_gene_ids", "genic_genes", "genic_gene_ids",
+    "carriers", "qc_alerts", "genes", "inheritance",
+] + [f"{p}_{m}" for m in VEDETTE_MEMBERS for p in ("GT", "CN", "GQ", "INH", "DNQ")]  # fmt: skip
+
+
+def _vedette_row(row_id, kind, contig, start, end, svtype, members, **kw):
+    """One export row; ``members`` maps a member to (GT, CN, GQ, INH, DNQ)."""
+    row = dict.fromkeys(VEDETTE_COLUMNS, "")
+    row.update(
+        row_id=row_id, kind=kind, contig=contig, start=start, end=end,
+        vcf_pos=start - 1, svtype=svtype, size=end - start + 1, **kw,
+    )  # fmt: skip
+    if kind == "site" and not row["site_ids"]:
+        row["site_ids"] = row_id
+    inherit = []
+    for m, cells in members.items():
+        for prefix, value in zip(("GT", "CN", "GQ", "INH", "DNQ"), cells):
+            row[f"{prefix}_{m}"] = value
+        if cells[3]:
+            inherit.append(f"{m}:{cells[3]}")
+    row["inheritance"] = "; ".join(inherit)
+    return [row[c] for c in VEDETTE_COLUMNS]
+
+
+_REF = ("0/0", 2, 40, "", "")
+#: One of each kind, as Vedette v1.4 writes them: a de novo deletion in SCN2A
+#: (own call PASS), two cohort sites collapsed into one paternal DUP, a common
+#: re-genotyped DEL, a maternal chrX DEL whose complete gene list the old
+#: export cut, a sub-threshold call and a mosaic gain.
 VEDETTE_ROWS = [
-    ["vedette_site_1", "chr2", VEDETTE_DEL[0], VEDETTE_DEL[1], "DEL", 120, "PASS",
-     0.002, 0.004, 2, "SCN2A",
-     "+0.90 — élevé · DEL exonique SCN2A (NDD candidat, s_het 0.12)",
-     "0/0", 2, 40, "0/0", 2, 38, "0/1", 1, 45, "S3:denovo"],
-    ["vedette_site_2", "chr2", 165_200_000, 165_200_400, "DUP", 400, "PASS",
-     0.05, 0.09, 40, "SCN2A", "+0.00 — faible · intronique",
-     "0/1", 3, 30, "0/0", 2, 41, "0/1", 3, 25, "S3:paternal"],
-    ["vedette_site_3", "chr2", 170_000_000, 170_000_080, "DEL", 80, "PASS",
-     0.3, 0.5, 300, "", "-0.60 — aucun gène codant",
-     "0/1", 2, 10, "0/1", 2, 12, "0/1", 2, 9, "S3:biparental"],
-    ["vedette_site_4", "chrX", 2_800_000, 2_800_300, "DEL", 300, "PASS",
-     0.008, 0.015, 7, "XRG, PLAIN, SHANK3 (+2)",
-     "+0.45 — modéré · DEL exonique XRG (NDD candidat, s_het 0.05)",
-     "0/0", 1, 30, "0/1", 1, 50, "1/1", 0, 40, "S3:maternal"],
+    _vedette_row(
+        "vedette_site_1", "site", "chr2", VEDETTE_START, VEDETTE_DEL[1], "DEL",
+        {"S1": _REF, "S2": ("0/0", 2, 38, "", ""), "S3": ("0/1", 1, 45, "denovo", 38)},
+        filter="PASS", n_sites=1, sqmax=12.5, cohort_carrier_frac=0.004,
+        ref_carrier_frac=0.001, lcr_ovl=0, segdup_ovl=0, support="strong",
+        own_call="pass", impact_score="0.90", impact_level="high",
+        impact_reason="DEL exonique SCN2A (NDD candidat, s_het 0.12)",
+        impact="+0.90 — élevé · DEL exonique SCN2A (NDD candidat, s_het 0.12)",
+        exonic_genes="SCN2A", exonic_gene_ids="ENSG00000136531", carriers="S3",
+        genes="SCN2A",
+    ),
+    _vedette_row(
+        "vedette_site_2", "site", "chr2", 165_200_001, 165_200_400, "DUP",
+        {"S1": ("0/1", 3, 30, "", ""), "S2": ("0/0", 2, 41, "", ""),
+         "S3": ("0/1", 3, 25, "paternal", "")},
+        site_ids="vedette_site_2;vedette_site_3", filter="PASS", n_sites=2,
+        sqmax=6.0, cohort_carrier_frac=0.09, support="weak", own_call="none",
+        impact_score="0.00", impact_level="low", impact_reason="intronique",
+        impact="+0.00 — faible · intronique", genic_genes="SCN2A",
+        genic_gene_ids="ENSG00000136531", carriers="S1;S3", genes="SCN2A",
+    ),
+    _vedette_row(
+        "vedette_site_4", "site", "chr2", 170_000_001, 170_000_080, "DEL",
+        {"S1": ("0/1", 2, 10, "", ""), "S2": ("0/1", 2, 12, "", ""),
+         "S3": ("0/1", 2, 9, "biparental", "")},
+        filter="PASS", n_sites=1, cohort_carrier_frac=0.5, support="weak",
+        own_call="filtered", impact_score="-0.60", impact_level="none",
+        impact="-0.60 — aucun gène codant", carriers="S1;S2;S3",
+    ),
+    _vedette_row(
+        "vedette_site_5", "site", "chrX", 2_800_001, 2_800_300, "DEL",
+        {"S1": ("0/0", 1, 30, "", ""), "S2": ("0/1", 1, 50, "", ""),
+         "S3": ("1/1", 0, 40, "maternal", "")},
+        filter="PASS", n_sites=1, cohort_carrier_frac=0.008, support="strong",
+        own_call="filtered", impact_score="0.45", impact_level="moderate",
+        impact_reason="DEL exonique XRG (NDD candidat, s_het 0.05)",
+        impact="+0.45 — modéré · DEL exonique XRG (NDD candidat, s_het 0.05)",
+        exonic_genes="XRG;PLAIN;SHANK3;BLTP1;ARONLY;BOTH;XRG2",
+        exonic_gene_ids="ENSG00000000001;ENSG00000000004;ENSG00000251322;"
+        "ENSG00000138688;ENSG00000000002;ENSG00000000003;ENSG00000000009",
+        carriers="S2;S3", genes="XRG, PLAIN, SHANK3, BLTP1, ARONLY, BOTH (+1)",
+    ),
+    _vedette_row(
+        "sub_S3_chr2_175000001", "subthreshold", "chr2", 175_000_001, 175_000_500,
+        "DEL", {"S1": ("", "", "", "", ""), "S2": ("", "", "", "", ""),
+                "S3": ("0/1", 1, 15, "", "")},
+        filter="LowSQ", rescue="SOUS-SEUIL NDD", sqmax=3.1, own_call="lowsq",
+        impact_score="0.30", impact_level="low",
+        impact_reason="DEL exonique BLTP1 (NDD candidat, s_het 0.02)",
+        impact="+0.30 — faible · DEL exonique BLTP1 (NDD candidat, s_het 0.02)",
+        exonic_genes="BLTP1", exonic_gene_ids="ENSG00000138688", carriers="S3",
+        genes="BLTP1",
+    ),
+    _vedette_row(
+        "mosaic_S3_chr2_180000001", "mosaic", "chr2", 180_000_001, 182_000_000,
+        "DUP", {}, filter="PASS", rescue="MOSAÏQUE", mosaic_cn=2.4, carriers="S3",
+        qc_alerts="mosaïque",
+    ),
+]  # fmt: skip
+
+VEDETTE_QC_COLUMNS = [
+    "sample", "wave_score", "pass_sites_carried", "carrier_excess",
+    "denovo_candidates", "karyotype", "flags", "flags_text",
+]  # fmt: skip
+#: S3 flagged as family C0733-011-301's affected daughter is on the real data.
+VEDETTE_QC_ROWS = [
+    ["S1", "0.051", 5847, "1.63", "", "XY", "", ""],
+    ["S2", "0.048", 6299, "1.76", "", "XX", "", ""],
+    ["S3", "0.201", 19626, "5.47", 458, "XY", "carrier_load;denovo_outlier;wavy",
+     "charge 5.5× · de novo 458 · ondulé"],
 ]  # fmt: skip
 
 _VEDETTE_SAMPLE_VCF = """##fileformat=VCFv4.2
-##source=vedette-1.1.0
+##source=vedette-1.5.0
+##vedette_coords=padded
 ##contig=<ID=chr2,length=242193529>
 ##contig=<ID=chrX,length=156040895>
 ##FILTER=<ID=PASS,Description="All filters passed">
@@ -1564,28 +1653,39 @@ _VEDETTE_SAMPLE_VCF = """##fileformat=VCFv4.2
 ##FORMAT=<ID=SR,Number=1,Type=Integer,Description="SR">
 ##FORMAT=<ID=CG,Number=1,Type=Integer,Description="CG">
 #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS3
-chr2\t{del_start}\tvedette_DEL_7\tN\t<DEL>\t.\tPASS\tEND={del_end};SVTYPE=DEL;SOURCE=JUNCTION;MODEL_VER=v5n\tGT:GQ:SQ:PE:SR:CG\t0/1:45:12.5:3:5:4
+chr2\t{del_pos}\tvedette_DEL_7\tN\t<DEL>\t.\tPASS\tEND={del_end};SVTYPE=DEL;SOURCE=JUNCTION;MODEL_VER=v5n\tGT:GQ:SQ:PE:SR:CG\t0/1:45:12.5:3:5:4
 chrX\t2800010\tvedette_DEL_9\tN\t<DEL>\t.\tLowSQ\tEND=2800290;SVTYPE=DEL;SOURCE=DEPTH;IMPRECISE;CIPOS=-250,250;MODEL_VER=v5n\tGT:GQ:SQ:PE:SR:CG\t1/1:40:3.1:0:0:0
 """
 
 
 def build_vedette_results(data: Path) -> None:
-    """Family 1001's Vedette table and VCF header, and S3's own calls."""
+    """Family 1001's Vedette export (v1.4 format) and S3's own calls."""
     import pysam
 
     vdir = family_dir(data, "1001") / "svs" / "vedette"
     write_tsv(vdir / "1001.vedette.tsv", VEDETTE_COLUMNS, VEDETTE_ROWS)
-    with gzip.open(vdir / "1001.vedette.vcf.gz", "wt") as f:
-        f.write(
-            "##fileformat=VCFv4.2\n##source=vedette-merge-1.1.0\n"
-            f"##source={VEDETTE_SOURCE}\n"
-            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\tS3\n"
+    write_tsv(vdir / "1001.vedette.qc.tsv", VEDETTE_QC_COLUMNS, VEDETTE_QC_ROWS)
+    (vdir / "1001.vedette.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "vedette_version": VEDETTE_VERSION,
+                "family_id": "1001",
+                "members": VEDETTE_MEMBERS,
+                "rows": len(VEDETTE_ROWS),
+                "generated": "2026-11-05T07:30:00",
+                "cohort": "DEMO",
+                "model_version": "v5n",
+                "min_carrier_gq": 0,
+                "events_pass_only": True,
+            }
         )
+    )
     sdir = sample_dir(data, "S3") / "svs" / "vedette"
     sdir.mkdir(parents=True, exist_ok=True)
     plain = sdir / "S3.filtered.vcf"
     plain.write_text(
-        _VEDETTE_SAMPLE_VCF.format(del_start=VEDETTE_DEL[0], del_end=VEDETTE_DEL[1])
+        _VEDETTE_SAMPLE_VCF.format(del_pos=VEDETTE_DEL[0], del_end=VEDETTE_DEL[1])
     )
     pysam.tabix_compress(str(plain), str(plain) + ".gz", force=True)
     pysam.tabix_index(str(plain) + ".gz", preset="vcf", force=True)

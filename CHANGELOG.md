@@ -5,6 +5,19 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The Vedette tab reads Vedette's new family export** (Vedette v1.4.0 and later), and still opens older files:
+  - one row per event, as on Vedette's own page: cohort sites carried by the same members are shown once, with the sites behind them. Calls under the threshold in NDD genes, mosaic and chromosomal events are listed too, with a Kind column and filter;
+  - complete gene lists, exonic genes bordered (the old file cut them after six), DNQ for de novo calls, an "Own call" column and filter (own call PASS, filtered, or carried through the cohort's re-genotyping only), and Vedette's impact level "Benign (ClinGen)";
+  - members Vedette's QC flags (carrier load, de novo outlier, wavy coverage, …) are listed above the table;
+  - caller, model and schema versions come from the export; validations record them.
+- Coordinates follow Vedette's: first and last affected base. In the Vedette SV dialog, the start the reads suggest (and "Use as curated position" saves) is the first deleted base too, one after the last base kept; WisecondorX calls keep their convention. The frequency filter is now the cohort carrier fraction (the Rare and De novo presets: ≤ 1 %), and a row missing a value (no GQ on a mosaic event) is no longer filtered out by it.
+
+### Fixed
+- The SV dialog no longer misses a carrier's own Vedette call when the sample's VCF does not declare every optional field.
+
 ## [0.28.0] - 2026-11-04
 
 ### Added

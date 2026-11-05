@@ -34,7 +34,7 @@ async def _open_vedette(user, monkeypatch, role="curator", query=""):
     else:
         n = 0
     await user.should_see("Vedette calls", retries=60)
-    await user.should_see(datagen.VEDETTE_SOURCE, retries=10)
+    await user.should_see(datagen.VEDETTE_CALLER, retries=10)
     for _ in range(200):
         if any(r.get("site_id") for t in tables[n:] for r in t["rows"]):
             break
@@ -45,12 +45,18 @@ async def _open_vedette(user, monkeypatch, role="curator", query=""):
 async def test_vedette_tab_opens_on_rare_calls_and_presets_switch(user, monkeypatch):
     tables = await _open_vedette(user, monkeypatch)
     table = tables[-1]
-    # Rare (the opening preset): AF <= 1 %, GQ >= 20; highest impact first.
+    # Rare (the opening preset): carrier fraction <= 1 %, GQ >= 20, a missing
+    # value filtering nothing (the mosaic row); highest impact first.
     assert _keys(table) == [
         ("vedette_site_1", "S3"),
-        ("vedette_site_4", "S2"),
-        ("vedette_site_4", "S3"),
+        ("vedette_site_5", "S2"),
+        ("vedette_site_5", "S3"),
+        ("mosaic_S3_chr2_180000001", "S3"),
     ]
+    assert {"kind", "own_call", "cohort_carrier_frac"} <= set(table["columns"])
+    # Vedette's QC flags S3, as it flags family C0733-011-301's affected daughter.
+    await user.should_see("Vedette QC flags", retries=10)
+    await user.should_see("carrier_load", retries=10)
     assert {"chr:start-end", "family", "inheritance", "Validation"} <= set(
         table["columns"]
     )
@@ -61,7 +67,7 @@ async def test_vedette_tab_opens_on_rare_calls_and_presets_switch(user, monkeypa
 
     n = len(tables)
     user.find(marker="vedette-preset-all").click()
-    assert len((await _table(tables, n))["rows"]) == 8
+    assert len((await _table(tables, n))["rows"]) == 10
 
 
 async def test_a_link_opens_the_sub_tab_with_its_preset(user, monkeypatch):
@@ -70,8 +76,8 @@ async def test_a_link_opens_the_sub_tab_with_its_preset(user, monkeypatch):
     )
     assert _keys(tables[-1]) == [
         ("vedette_site_1", "S3"),
-        ("vedette_site_4", "S2"),
-        ("vedette_site_4", "S3"),
+        ("vedette_site_5", "S2"),
+        ("vedette_site_5", "S3"),
     ]
 
 
@@ -95,7 +101,16 @@ async def test_dialog_shows_the_own_call_and_saves_to_vedette_tsv(
             break
         await asyncio.sleep(0.05)
     assert "Deletion in reads (CIGAR)" in names
-    await user.should_see(f"Start: {datagen.VEDETTE_DEL[0]:,}", retries=30)
+    # The first deleted base, as Vedette's start (the reads' last base kept + 1).
+    await user.should_see(f"Start: {datagen.VEDETTE_START:,}", retries=30)
+    user.find(kind=ui.button, content="Use as curated position").click()
+    await user.should_see("from the reads", retries=30)
+    start_input = next(iter(user.find(kind=ui.input, content="Curated start").elements))
+    end_input = next(iter(user.find(kind=ui.input, content="Curated end").elements))
+    assert (start_input.value, end_input.value) == (
+        str(datagen.VEDETTE_START),
+        str(datagen.VEDETTE_DEL[1]),
+    )
 
     user.find(kind=ui.button, content="Save Validation").click()
     saved = data_dir / "validations" / "vedette.tsv"
@@ -106,15 +121,19 @@ async def test_dialog_shows_the_own_call_and_saves_to_vedette_tsv(
     header, *rows = [line.split("\t") for line in saved.read_text().splitlines()]
     record = dict(zip(header, rows[0]))
     assert record["Variant"] == (
-        f"chr2:{datagen.VEDETTE_DEL[0]}-{datagen.VEDETTE_DEL[1]}:del"
+        f"chr2:{datagen.VEDETTE_START}-{datagen.VEDETTE_DEL[1]}:del"
     )
     assert (record["Sample"], record["Validation"], record["User"]) == (
         "S3",
         "present",
         "curator",
     )
+    assert (record["CuratedStart"], record["CuratedEnd"]) == (
+        str(datagen.VEDETTE_START),
+        str(datagen.VEDETTE_DEL[1]),
+    )
     assert record["SiteId"] == "vedette_site_1"
-    assert record["CallerVersion"] == datagen.VEDETTE_SOURCE
+    assert record["CallerVersion"] == datagen.VEDETTE_CALLER
     assert record["ModelVersion"] == "v5n"
     # Nothing went to the WisecondorX file.
     assert not (data_dir / "validations" / "svs.tsv").exists()
@@ -143,7 +162,7 @@ async def test_download_is_the_rows_shown(user, monkeypatch):
     reader = csv.DictReader(io.StringIO(response.content.decode()), delimiter="\t")
     rows = list(reader)
     # The Rare view, highest impact first; badge fields stay out.
-    assert [r["sample"] for r in rows] == ["S3", "S2", "S3"]
+    assert [r["sample"] for r in rows] == ["S3", "S2", "S3", "S3"]
     assert "family" in reader.fieldnames and "family_badges" not in reader.fieldnames
 
 
@@ -152,7 +171,7 @@ async def test_a_vedette_diagnostic_records_the_carrier_call(
 ):
     tables = await _open_vedette(user, monkeypatch)
     table = tables[-1]
-    site4 = next(r for r in table["rows"] if r["id"] == "vedette_site_4|S3")
+    site4 = next(r for r in table["rows"] if r["id"] == "vedette_site_5|S3")
     with user.client:
         table["on_row_action"](
             {"action": "open_diagnostic", "row": {"id": site4["id"]}}

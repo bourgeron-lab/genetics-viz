@@ -1,9 +1,11 @@
 """SVs tab, Vedette sub-tab: the family's Vedette calls, one row per carrier.
 
-The table is read off-thread (``svs/vedette/<FID>.vedette.tsv``, a few MB),
-then filtered in Python: members (the page's selection), presets and the
-Filters card (type, size, cohort AF, carrier GQ, impact level, inheritance,
-genesets, validation). The filters are in the page link (``v…`` keys).
+The family export (``svs/vedette/<FID>.vedette.tsv``, ``.qc.tsv``, ``.json``;
+format in Vedette's ``docs/EXPORT.md``) is read off-thread, then filtered in
+Python: members (the page's selection), presets and the Filters card (type,
+kind, own call, size, cohort carrier fraction, carrier GQ, impact level,
+inheritance, genesets, validation). The filters are in the page link (``v…``
+keys). Members Vedette flags in its QC file are listed above the table.
 
 A row opens the SV dialog with the Vedette source (``vedette_details.py``):
 Vedette's details card, base-pair read windows when the call is precise, and
@@ -52,9 +54,10 @@ from genetics_viz.utils.validation_status import FILTER_STATUSES, filter_by_stat
 from genetics_viz.utils.vedette import (
     LINK_KEYS,
     VEDETTE_CONFIG,
+    ExportInfo,
+    MemberQC,
     VedetteFilters,
     apply_filters,
-    caller_version,
     carrier_rows,
     default_preset,
     family_vedette_file,
@@ -63,44 +66,69 @@ from genetics_viz.utils.vedette import (
     impact_level_codes,
     inheritance_codes,
     inheritance_info,
+    kind_codes,
+    kind_info,
     level_info,
+    own_call_codes,
+    own_call_info,
     preset_names,
+    qc_flag_label,
+    read_export_info,
+    read_member_qc,
     read_vedette_table,
 )
 
 logger = logging.getLogger(__name__)
 
-#: (id, header, shown by default)
+#: (id, header, shown by default). Columns an export lacks stay empty.
 _COLUMNS: List[Tuple[str, str, bool]] = [
     ("chr:start-end", "Locus", True),
     ("svtype", "Type", True),
+    ("kind", "Kind", True),
     ("size", "Size", True),
     ("sample", "Carrier", True),
     ("GT", "GT", True),
     ("CN", "CN", True),
     ("GQ", "GQ", True),
     ("inheritance", "Inheritance", True),
+    ("DNQ", "DNQ", False),
     ("family", "Family (GT·CN)", True),
+    ("own_call", "Own call", True),
+    ("support", "CN support", False),
     ("impact_score", "Impact", True),
     ("impact_level", "Level", True),
     ("genes", "Genes", True),
     ("impact_reason", "Impact reason", True),
-    ("cohort_af", "Cohort AF", True),
-    ("cohort_ncarrier", "Cohort carriers", True),
-    ("cohort_carrier_frac", "Carrier fraction", False),
+    ("cohort_carrier_frac", "Cohort carrier fraction", True),
+    ("ref_carrier_frac", "Reference carrier fraction", False),
+    ("sqmax", "SQ max", False),
+    ("n_sites", "Cohort sites", False),
+    ("mosaic_cn", "Mosaic CN", False),
+    ("lcr_ovl", "LCR overlap", False),
+    ("segdup_ovl", "Segdup overlap", False),
+    ("filter", "Filter", False),
+    ("rescue", "Rescue", False),
+    ("qc_alerts", "QC alerts", False),
     ("Validation", "Validation", True),
     ("Diagnostic", "Diagnostic", True),
-    ("site_id", "Site", False),
-    ("filter", "Filter", False),
+    ("site_id", "Row id", False),
+    # Exports before Vedette v1.4.0 only.
+    ("cohort_af", "Cohort AF", False),
+    ("cohort_ncarrier", "Cohort carriers", False),
 ]
 _NUMBER_COLUMNS = {
-    "size",
-    "CN",
-    "GQ",
-    "impact_score",
-    "cohort_af",
-    "cohort_ncarrier",
-    "cohort_carrier_frac",
+    "size", "CN", "GQ", "DNQ", "impact_score", "cohort_carrier_frac",
+    "ref_carrier_frac", "sqmax", "n_sites", "mosaic_cn", "lcr_ovl", "segdup_ovl",
+    "cohort_af", "cohort_ncarrier",
+}  # fmt: skip
+#: Coded columns drawn as a badge, and the row field holding its colour.
+_BADGE_COLUMNS = {
+    "svtype": "_type_color",
+    "kind": "_kind_color",
+    "inheritance": "_inheritance_color",
+    "own_call": "_own_call_color",
+    "support": "_support_color",
+    "impact_level": "_impact_color",
 }
 _INITIAL_SORTING = [{"id": "impact_score", "desc": True}]
 
@@ -132,19 +160,24 @@ def _member_labels(store: Any, cohort_name: str, family_id: str) -> Dict[str, st
 
 def _load(
     data_dir: Path, family_id: str, labels: Dict[str, str], scorer: Any
-) -> Tuple[List[Dict[str, Any]], str]:
-    """Carrier rows with their gene badges, and the caller version (blocking).
+) -> Tuple[List[Dict[str, Any]], ExportInfo, List[MemberQC]]:
+    """Carrier rows with their gene badges, the export's JSON and the members'
+    QC (blocking).
 
-    A family has tens of thousands of carrier rows: built here, off-thread.
-    ``scorer`` is the user's, taken on the event loop.
+    A family has thousands of carrier rows: built here, off-thread. ``scorer``
+    is the user's, taken on the event loop.
     """
+    info = read_export_info(data_dir, family_id)
     df = read_vedette_table(family_vedette_file(data_dir, family_id))
-    rows = carrier_rows(df, labels=labels)
+    rows = carrier_rows(df, labels=labels, members=info.members)
     for row in rows:
-        row["GeneBadges"] = build_gene_badges(row["_genes"], scorer)
+        # Exonic genes bordered, as for WisecondorX calls.
+        row["GeneBadges"] = build_gene_badges(
+            row["_genes"], scorer, bordered=row["_exonic"]
+        )
         row["_genetrek_url"] = search_url([row["chr:start-end"]])
         row["_original_locus"] = row["chr:start-end"]
-    return rows, caller_version(data_dir, family_id)
+    return rows, info, read_member_qc(data_dir, family_id)
 
 
 def _badge_html(text: str, color: str) -> str:
@@ -174,7 +207,7 @@ def render_vedette_subtab(
         labels = _member_labels(store, cohort_name, family_id)
         scorer = get_gene_scorer()  # reads the session: on the event loop
         try:
-            rows, version = await asyncio.to_thread(
+            rows, info, qc = await asyncio.to_thread(
                 _load, store.data_dir, family_id, labels, scorer
             )
         except Exception as e:  # a degraded state, shown, never raised
@@ -191,7 +224,8 @@ def render_vedette_subtab(
                 cohort_name,
                 path,
                 rows,
-                version,
+                info,
+                qc,
                 selected_members,
                 data_table_refreshers,
                 link,
@@ -206,7 +240,8 @@ def _build(
     cohort_name: str,
     path: Path,
     all_rows: List[Dict[str, Any]],
-    version: str,
+    info: ExportInfo,
+    qc: List[MemberQC],
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
     link: Optional[PageLink],
@@ -222,20 +257,25 @@ def _build(
         with ui.row().classes("gap-4"):
             ui.label("File Path:").classes("font-semibold")
             ui.label(str(path)).classes("text-sm text-gray-600 font-mono")
-        if version:
-            with ui.row().classes("gap-4"):
-                ui.label("Caller:").classes("font-semibold")
-                ui.label(version).classes("text-sm text-gray-600 font-mono")
-        ui.html(tier_legend_html(scorer), sanitize=False).classes("mt-3")
+        _render_versions(info)
+        ui.html(tier_legend_html(scorer, exonic_border=True), sanitize=False).classes(
+            "mt-3"
+        )
         with ui.row().classes("gap-2 mt-2 items-center flex-wrap"):
-            ui.label("Impact:").classes("text-sm font-semibold")
-            for code in impact_level_codes():
-                info = level_info(code)
-                ui.html(_badge_html(info["label"], info["color"]), sanitize=False)
-            ui.label("Inheritance:").classes("text-sm font-semibold ml-4")
-            for code in inheritance_codes():
-                info = inheritance_info(code)
-                ui.html(_badge_html(info["label"], info["color"]), sanitize=False)
+            for title, codes, describe in (
+                ("Impact:", impact_level_codes(), level_info),
+                ("Inheritance:", inheritance_codes(), inheritance_info),
+                ("Kind:", kind_codes(), kind_info),
+                ("Own call:", own_call_codes(), own_call_info),
+            ):
+                ui.label(title).classes("text-sm font-semibold ml-2")
+                for code in codes:
+                    shown_info = describe(code)
+                    ui.html(
+                        _badge_html(shown_info["label"], shown_info["color"]),
+                        sanitize=False,
+                    )
+    _render_member_qc(qc)
 
     if not all_rows:
         ui.label("No Vedette calls in this family").classes("text-gray-500 italic")
@@ -311,15 +351,7 @@ def _build(
 
     def apply_preset(name: str) -> None:
         preset = VedetteFilters.preset(name)
-        for attr in (
-            "types",
-            "min_size",
-            "max_size",
-            "max_af",
-            "min_gq",
-            "impact_levels",
-            "inheritance",
-        ):
+        for attr in VedetteFilters._PRESET_FIELDS:
             setattr(filters, attr, getattr(preset, attr))
         filter_controls.refresh()
         changed()
@@ -361,6 +393,25 @@ def _build(
 
         return handler
 
+    def code_menu(
+        label: str,
+        attr: str,
+        codes: List[str],
+        describe: Callable[[str], Dict[str, str]],
+        hint: str = "",
+    ) -> None:
+        """A button whose menu ticks codes of one coded column."""
+        with ui.button(label, icon="filter_list").props("outline color=blue size=sm"):
+            with ui.menu(), ui.column().classes("p-2 gap-0"):
+                if hint:
+                    ui.label(hint).classes("text-xs text-gray-500")
+                for code in codes:
+                    ui.checkbox(
+                        describe(code)["label"],
+                        value=code in getattr(filters, attr),
+                        on_change=toggle(attr, code),
+                    ).classes("text-sm").mark(f"vedette-{attr}-{code}")
+
     @ui.refreshable
     def filter_controls() -> None:
         with ui.row().classes("gap-4 items-center flex-wrap p-2"):
@@ -378,16 +429,21 @@ def _build(
                 on_change=set_value("max_size", int),
             ).props("dense outlined debounce=600").classes("w-32")  # fmt: skip
             ui.number(
-                "Max cohort AF", value=filters.max_af, min=0, max=1, step=0.001,
-                on_change=set_value("max_af", float),
-            ).props("dense outlined debounce=600").classes("w-32").mark(
-                "vedette-max-af"
+                "Max cohort carrier fraction", value=filters.max_freq, min=0, max=1,
+                step=0.001, on_change=set_value("max_freq", float),
+            ).props("dense outlined debounce=600").classes("w-48").mark(
+                "vedette-max-freq"
             )  # fmt: skip
             ui.number(
                 "Min carrier GQ", value=filters.min_gq, min=0,
                 on_change=set_value("min_gq", int),
             ).props("dense outlined debounce=600").classes("w-32").mark(
                 "vedette-min-gq"
+            )  # fmt: skip
+            code_menu("Kind", "kinds", kind_codes(), kind_info)
+            code_menu(
+                "Own call", "own_calls", own_call_codes(), own_call_info,
+                hint="None ticked: any",
             )  # fmt: skip
             with ui.button("Impact", icon="filter_list").props(
                 "outline color=blue size=sm"
@@ -453,12 +509,8 @@ def _build(
                     curatedField="IsCurated",
                     tooltipField="_curated_tooltip",
                 )
-            elif col == "svtype":
-                c.update(cellType="badge", colorField="_type_color")
-            elif col == "inheritance":
-                c.update(cellType="badge", colorField="_inheritance_color")
-            elif col == "impact_level":
-                c.update(cellType="badge", colorField="_impact_color")
+            elif col in _BADGE_COLUMNS:
+                c.update(cellType="badge", colorField=_BADGE_COLUMNS[col])
             elif col == "family":
                 c.update(cellType="badge_list", badgesField="family_badges")
             elif col == "genes":
@@ -490,7 +542,7 @@ def _build(
             show_diagnostic_dialog(
                 details=vedette_snapshot(
                     row,
-                    source=f"Vedette {version}".strip(),
+                    source=f"Vedette {info.caller}".strip(),
                     rows=all_rows,
                     phenotypes={
                         s.sample_id: s.phenotype
@@ -516,7 +568,7 @@ def _build(
             sample=row["sample"],
             sv_data=row,
             on_validation_saved=on_saved,
-            source=vedette_source(data_dir, family_id, row, version),
+            source=vedette_source(data_dir, family_id, row, info),
         )
 
     def export() -> str:
@@ -539,9 +591,9 @@ def _build(
         )
         rows = filter_by_status(rows, filters.validations)
         rows.sort(key=lambda r: -(r.get("impact_score") or -99.0))
-        n_sites = len({r["site_id"] for r in rows})
+        n_events = len({r["site_id"] for r in rows})
         with ui.row().classes("items-center gap-4 mt-4 mb-2 w-full"):
-            ui.label(f"Data ({len(rows)} rows, {n_sites} sites)").classes(
+            ui.label(f"Data ({len(rows)} rows, {n_events} events)").classes(
                 "text-lg font-semibold text-blue-700"
             ).mark("vedette-count")
             ui.space()
@@ -583,3 +635,59 @@ def _build(
 
     data_table_refreshers.append(render_table.refresh)
     render_table()
+
+
+def _render_versions(info: ExportInfo) -> None:
+    """Caller, model and schema versions, and a warning on a newer schema."""
+    parts = [
+        ("Caller", info.caller),
+        ("Model", info.model_version),
+        ("Schema", "" if info.schema_version is None else str(info.schema_version)),
+        ("Cohort run", info.cohort),
+        ("Written", info.generated.replace("T", " ")),
+    ]
+    with ui.row().classes("gap-4 items-center flex-wrap"):
+        for label, value in parts:
+            if value:
+                ui.label(f"{label}:").classes("font-semibold")
+                ui.label(value).classes("text-sm text-gray-600 font-mono")
+    if info.newer_schema:
+        ui.label(
+            f"This export uses schema {info.schema_version}, newer than the one "
+            "this app was written for: some columns may be missing or misread."
+        ).classes("text-sm text-orange-700").mark("vedette-schema-warning")
+    elif info.schema_version is None:
+        ui.label(
+            "Export written before Vedette v1.4.0: one row per site, coordinates "
+            "one base to the right, truncated gene lists."
+        ).classes("text-sm text-gray-500 italic")
+
+
+def _render_member_qc(qc: List[MemberQC]) -> None:
+    """The members Vedette's QC flags, above the table."""
+    flagged = [m for m in qc if m.flags]
+    if not flagged:
+        return
+    with (
+        ui.card()
+        .classes("w-full p-3 mt-2 bg-amber-50 border border-amber-300")
+        .mark("vedette-qc")
+    ):
+        ui.label("Vedette QC flags: read these members' calls with care").classes(
+            "font-semibold text-amber-900"
+        )
+        for m in flagged:
+            facts = []
+            if m.carrier_excess is not None:
+                facts.append(f"{m.carrier_excess:g}× the cohort median of PASS sites")
+            if m.denovo_candidates is not None:
+                facts.append(f"{m.denovo_candidates} de novo candidates")
+            if m.wave_score is not None:
+                facts.append(f"wave score {m.wave_score:g}")
+            if m.karyotype:
+                facts.append(f"karyotype {m.karyotype}")
+            with ui.row().classes("items-center gap-2 flex-wrap"):
+                ui.label(m.sample).classes("font-mono font-semibold")
+                for code in m.flags:
+                    ui.badge(code).props("color=amber-9").tooltip(qc_flag_label(code))
+                ui.label(" · ".join(facts)).classes("text-sm text-gray-700")
