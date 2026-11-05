@@ -24,6 +24,7 @@ from genetics_viz.utils.gene_scoring import (
 )
 from genetics_viz.utils.genetrek import search_url
 from genetics_viz.utils.vedette import (
+    ExportInfo,
     OwnCall,
     assume_precise,
     find_own_call,
@@ -70,7 +71,7 @@ def render_vedette_details(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
     with ui.card().classes("w-full mb-4"):
         with ui.column().classes("p-4 gap-4 w-full"):
             with ui.row().classes("gap-4 items-center flex-wrap"):
-                ui.html(tier_legend_html(scorer), sanitize=False)
+                ui.html(tier_legend_html(scorer, exonic_border=True), sanitize=False)
                 ui.link(
                     "Region in GeneTrek",
                     search_url([row.get("chr:start-end", "")]),
@@ -85,6 +86,20 @@ def render_vedette_details(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
                         _badge(row.get("svtype", ""), row.get("_type_color", "#999")),
                         sanitize=False,
                     )
+                for label, code_field, color_field in (
+                    ("kind", "kind", "_kind_color"),
+                    ("own call", "own_call", "_own_call_color"),
+                    ("CN support", "support", "_support_color"),
+                ):
+                    if row.get(code_field):
+                        with ui.column().classes("gap-0"):
+                            ui.label(label).classes(
+                                "text-xs font-semibold text-gray-500"
+                            )
+                            ui.html(
+                                _badge(row[code_field], row[color_field]),
+                                sanitize=False,
+                            )
                 _field("size (bp)", f"{row.get('size', 0):,}")
                 _field("carrier", row.get("sample"))
                 _field(
@@ -96,8 +111,13 @@ def render_vedette_details(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
                         "text-xs font-semibold text-gray-500"
                     )
                     if row.get("inheritance"):
+                        dnq = row.get("DNQ")
                         ui.html(
-                            _badge(row["inheritance"], row["_inheritance_color"]),
+                            _badge(
+                                row["inheritance"]
+                                + (f" · DNQ {dnq}" if dnq is not None else ""),
+                                row["_inheritance_color"],
+                            ),
                             sanitize=False,
                         )
                     else:
@@ -113,10 +133,38 @@ def render_vedette_details(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
                         score = row.get("impact_score")
                         if score is not None:
                             ui.label(f"{score:+.2f}").classes("text-base font-medium")
-                _field("cohort AF", _fmt_af(row.get("cohort_af")))
-                _field("carrier fraction", _fmt_af(row.get("cohort_carrier_frac")))
-                _field("carriers", row.get("cohort_ncarrier"))
-                _field("site", row.get("site_id"))
+                _field(
+                    "cohort carrier fraction", _fmt_af(row.get("cohort_carrier_frac"))
+                )
+                if row.get("ref_carrier_frac") is not None:
+                    _field(
+                        "reference carrier fraction", _fmt_af(row["ref_carrier_frac"])
+                    )
+                if row.get("cohort_af") is not None:  # exports before v1.4.0
+                    _field("cohort AF", _fmt_af(row["cohort_af"]))
+                if row.get("sqmax") is not None:
+                    _field("SQ max", f"{row['sqmax']:g}")
+                if row.get("mosaic_cn") is not None:
+                    _field("mosaic CN", f"{row['mosaic_cn']:g}")
+                for label, key in (
+                    ("LCR overlap", "lcr_ovl"),
+                    ("segdup overlap", "segdup_ovl"),
+                ):
+                    if row.get(key):
+                        _field(label, f"{row[key]:.0%}")
+                _field("filter", row.get("filter"))
+                if row.get("rescue"):
+                    _field("rescue", row["rescue"])
+                ids = row.get("site_ids") or []
+                _field(
+                    "cohort sites" if len(ids) > 1 else "site",
+                    ", ".join(ids) or row.get("site_id"),
+                )
+
+            if row.get("qc_alerts"):
+                ui.label(f"Vedette alerts: {row['qc_alerts']}").classes(
+                    "text-sm text-amber-800"
+                )
 
             if row.get("impact_reason"):
                 ui.label(row["impact_reason"]).classes("text-sm text-gray-700")
@@ -125,7 +173,14 @@ def render_vedette_details(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
                 with ui.column().classes("gap-1"):
                     ui.label("genes").classes("text-xs font-semibold text-gray-500")
                     ui.html(
-                        gene_badges_html(build_gene_badges(genes, scorer, cap=None)),
+                        gene_badges_html(
+                            build_gene_badges(
+                                genes,
+                                scorer,
+                                cap=None,
+                                bordered=row.get("_exonic") or (),
+                            )
+                        ),
                         sanitize=False,
                     )
                     if "(+" in (row.get("genes") or ""):
@@ -153,8 +208,8 @@ def _render_own_call(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
     sample = row.get("sample", "")
     if own is None:
         ui.label(
-            f"{sample} has no own call of this type here: re-genotyped at the "
-            "cohort site."
+            f"{sample} has no own call of this type here: carried through the "
+            "cohort's re-genotyping only."
         ).classes("text-sm text-gray-600 italic").mark("vedette-own-call")
         return
     with ui.column().classes("gap-2").mark("vedette-own-call"):
@@ -193,9 +248,13 @@ def _render_own_call(row: Dict[str, Any], own: Optional[OwnCall]) -> None:
 
 
 def vedette_source(
-    data_dir: Path, family_id: str, row: Dict[str, Any], caller_version: str
+    data_dir: Path, family_id: str, row: Dict[str, Any], info: ExportInfo
 ) -> SVSource:
-    """The dialog's source for a carrier row: own call read here (one tabix query)."""
+    """The dialog's source for a carrier row: own call read here (one tabix query).
+
+    Validations record the row id, the caller version and the model version:
+    the export's (JSON), else the own call's ``MODEL_VER``.
+    """
     own = find_own_call(
         sample_vedette_vcf(data_dir, row["sample"]),
         row["contig"],
@@ -209,10 +268,13 @@ def vedette_source(
         header=list(VEDETTE_VALIDATION_HEADER),
         extra_fields={
             "SiteId": row.get("site_id", ""),
-            "CallerVersion": caller_version,
-            "ModelVersion": own.model if own is not None else "",
+            "CallerVersion": info.caller,
+            "ModelVersion": info.model_version
+            or (own.model if own is not None else ""),
         },
         precise=precise,
         render_details=lambda: render_vedette_details(row, own),
         label="Vedette",
+        # Vedette's start is the first affected base: curated starts match it.
+        start_offset=1,
     )

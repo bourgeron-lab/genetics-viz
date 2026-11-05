@@ -71,6 +71,9 @@ class SVSource:
     render_details: Optional[Callable[[], None]] = None
     #: Shown in the title (``Vedette``).
     label: str = ""
+    #: Added to the start the reads suggest (0-based: the last base kept).
+    #: 1 for a caller whose start is the first affected base, 1-based.
+    start_offset: int = 0
 
 
 def _expanded_locus(chrom: str, start: int, end: int) -> str:
@@ -566,6 +569,7 @@ def show_sv_dialog(
                         on_use_breakpoints=lambda s_, e_, approx: use_read_breakpoints(
                             s_, e_, approx
                         ),
+                        start_offset=source.start_offset,
                     )
 
             def refresh_read_evidence():

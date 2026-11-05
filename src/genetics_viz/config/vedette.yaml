@@ -1,32 +1,62 @@
-# Vedette SV caller (Alex's): family tables under families/.../svs/vedette/.
+# Vedette SV caller (Alex's): family exports under families/.../svs/vedette/.
 #
-# Vedette changes quickly. The app reads its columns by name and degrades when
-# one is missing; everything it words or colours is here.
+# Format: docs/EXPORT.md of the vedette repository (from v1.4.0). The app reads
+# columns by name and degrades when one is missing, so files written before
+# v1.4.0 (one row per PASS site, no JSON) still open. Everything it words or
+# colours is here.
 
 # Where the files are, relative to the family / sample directory.
 family_subdir: svs/vedette
-# <FID>.vedette.tsv and <FID>.vedette.vcf.gz (the VCF only gives the caller
-# version, from its ##source lines).
+# <FID>.vedette.tsv (rows), <FID>.vedette.qc.tsv (one row per member),
+# <FID>.vedette.json (schema and caller versions, member order).
 family_suffix: .vedette.tsv
+family_qc_suffix: .vedette.qc.tsv
+family_json_suffix: .vedette.json
+# Only read when there is no JSON (exports before v1.4.0): its ##source line
+# gives the caller version.
 family_vcf_suffix: .vedette.vcf.gz
 # The sample's own calls, every FILTER kept: <ID>.filtered.vcf.gz.
 sample_vcf_suffix: .filtered.vcf.gz
 
-# A carrier's own call matches the family site when they share the type and
+# The export's schema_version this app was written for. A newer one is read
+# anyway (columns by name), with a warning above the table.
+supported_schema_version: 1
+
+# A carrier's own call matches the family row when they share the type and
 # overlap reciprocally by at least this much.
 own_call_min_overlap: 0.5
-# Without an own call, a site shorter than this is assumed to have
-# base-pair breakpoints (junction evidence); longer ones get the wide read
-# windows of a depth call.
+# Without an own call, a row shorter than this is assumed to have base-pair
+# breakpoints (junction evidence); longer ones get the wide read windows of a
+# depth call.
 assume_precise_below_bp: 1000
 
 types:
   DEL: { label: DEL, color: "#b3362b" }
   DUP: { label: DUP, color: "#2a6f97" }
 
-# The level part of the `impact` column ("+0.90 — élevé · ..."), matched
-# case-insensitively, or an `impact_level` column holding the code.
-# `rank` orders them (higher = more severe).
+# `kind` of a row: cohort sites (collapsed into events), calls under the
+# threshold in NDD genes, mosaic and chromosomal events.
+kinds:
+  site: { label: site, color: "#475569" }
+  subthreshold: { label: sub-threshold, color: "#a16207" }
+  mosaic: { label: mosaic, color: "#7c3aed" }
+  chromosomal: { label: chromosomal, color: "#0f766e" }
+
+# `own_call` of a row: whether a member's own call (before merging) passed.
+own_calls:
+  pass: { label: own call PASS, color: "#16a34a" }
+  filtered: { label: own call filtered, color: "#ca8a04" }
+  none: { label: re-genotyped only, color: "#9ca3af" }
+  lowsq: { label: sub-threshold call, color: "#a16207" }
+
+# `support`: a carrier's re-genotyped copy number agrees with the type.
+support:
+  strong: { label: CN agrees, color: "#16a34a" }
+  weak: { label: CN does not agree, color: "#9ca3af" }
+
+# `impact_level` codes (from v1.4.0), or the level of the French `impact`
+# label of older exports, matched case-insensitively. `rank` orders them
+# (higher = more severe).
 impact_levels:
   high:
     label: High
@@ -48,9 +78,16 @@ impact_levels:
     color: "#9ca3af"
     rank: 0
     match: ["aucun gène codant", "aucun gene codant", "none"]
+  benign:
+    label: Benign (ClinGen)
+    color: "#15803d"
+    rank: -1
+    match: ["bénin", "benin", "benign"]
 
-# Per-child codes of the `inheritance` column ("S3:denovo; S4:maternal").
-# A founder has none. Unknown codes are shown raw, in grey.
+# Per-child codes (`INH_<id>`, or the `inheritance` column of older exports).
+# A founder has none. `karyotype_<K>` (a de novo call on a sex chromosome the
+# child's karyotype explains) is worded "karyotype <K>". Unknown codes are
+# shown raw, in grey.
 inheritance:
   denovo: { label: de novo, color: "#dc2626" }
   denovo_lowconf: { label: de novo (low conf.), color: "#f97316" }
@@ -58,6 +95,18 @@ inheritance:
   paternal: { label: paternal, color: "#2563eb" }
   biparental: { label: biparental, color: "#7c3aed" }
   none: { label: none, color: "#6b7280" }
+karyotype_inheritance: { label: "karyotype {K}", color: "#0f766e" }
+
+# Codes of the `flags` column of <FID>.vedette.qc.tsv. Unknown codes are shown
+# raw.
+qc_flags:
+  carrier_load: "carries ≥ 5× the cohort median of PASS sites"
+  denovo_outlier: "de novo candidates above the cohort cut-off"
+  karyotype: "atypical karyotype"
+  wavy: "wavy coverage"
+  big_cnv: "≥ 3 PASS events of 1 Mb or more"
+  mosaic: "mosaic segments"
+  subthreshold_masked: "too many sub-threshold calls: masked"
 
 # Genotype badges of the Family column.
 genotype_colors:
@@ -67,25 +116,28 @@ genotype_colors:
   missing: "#f3f4f6"
 
 # Filter presets. Each sets every filter; a field left out takes its default
-# below. The first is the tab's opening view.
+# below. The first is the tab's opening view. A missing value (no GQ on a
+# mosaic row, no frequency on a sub-threshold one) never filters a row out.
 defaults:
   types: [DEL, DUP]
+  kinds: [site, subthreshold, mosaic, chromosomal]
+  own_calls: []     # empty = any
   min_size: null
   max_size: null
-  max_af: null
+  max_freq: null    # cohort carrier fraction
   min_gq: null
-  impact_levels: [high, moderate, low, none]
+  impact_levels: [high, moderate, low, none, benign]
   inheritance: []   # empty = any
 presets:
   rare:
     label: Rare
-    tooltip: Cohort AF ≤ 1 %, carrier GQ ≥ 20
-    max_af: 0.01
+    tooltip: Cohort carrier fraction ≤ 1 %, carrier GQ ≥ 20
+    max_freq: 0.01
     min_gq: 20
   denovo:
     label: De novo candidates
-    tooltip: de novo (any confidence), cohort AF ≤ 1 %, carrier GQ ≥ 20
-    max_af: 0.01
+    tooltip: de novo (any confidence), cohort carrier fraction ≤ 1 %, carrier GQ ≥ 20
+    max_freq: 0.01
     min_gq: 20
     inheritance: [denovo, denovo_lowconf]
   impact:

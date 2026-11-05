@@ -139,8 +139,11 @@ _COVERAGE_WORDS = {
 }
 
 
-def _describe(call: Optional[SideSuggestion]) -> str:
-    """One side in words: exact position, or the approximate one, and why."""
+def _describe(call: Optional[SideSuggestion], offset: int = 0) -> str:
+    """One side in words: exact position, or the approximate one, and why.
+
+    ``offset`` is added to the positions shown (see ``ReadEvidencePanel``).
+    """
     if call is None:
         return "none"
     if call.pos is not None:
@@ -151,7 +154,7 @@ def _describe(call: Optional[SideSuggestion]) -> str:
             parts.append(f"{call.splits} split")
         if call.mismatched:
             parts.append(f"{call.mismatched} mis-oriented")
-        text = f"{call.pos:,} {call.confidence} ({', '.join(parts)})"
+        text = f"{call.pos + offset:,} {call.confidence} ({', '.join(parts)})"
         notes = []
         if call.coverage in _COVERAGE_WORDS:
             delta = (
@@ -165,7 +168,7 @@ def _describe(call: Optional[SideSuggestion]) -> str:
         return text + (f", {', '.join(notes)}" if notes else "")
     if call.step is not None:
         text = (
-            f"≈ {call.step.pos:,} (coverage step {call.step.delta:+.1f},"
+            f"≈ {call.step.pos + offset:,} (coverage step {call.step.delta:+.1f},"
             f" ±{call.step.resolution} bp)"
         )
     else:
@@ -176,14 +179,17 @@ def _describe(call: Optional[SideSuggestion]) -> str:
     return text
 
 
-def _plot_marks(view: ReadView) -> tuple[list[Suggested], list[tuple[int, int]]]:
+def _plot_marks(
+    view: ReadView, start_offset: int = 0
+) -> tuple[list[Suggested], list[tuple[int, int]]]:
     marks: list[Suggested] = []
     intervals: list[tuple[int, int]] = []
-    for call in (view.start_call, view.end_call):
+    for call, offset in ((view.start_call, start_offset), (view.end_call, 0)):
         if call is None:
             continue
         pos, approximate = call.position()
         if pos is not None:
+            pos += offset
             label = f"≈{pos:,}" if approximate else f"{pos:,} {call.confidence}"
             marks.append(Suggested(pos, approximate, label))
         if call.interval is not None:
@@ -201,8 +207,16 @@ class ReadEvidencePanel:
         params: Dict[str, Any],
         label_for: Callable[[str], str],
         on_use_breakpoints: Callable[[Optional[int], Optional[int], bool], None],
+        start_offset: int = 0,
     ) -> None:
+        """``start_offset`` is added to the suggested start, shown and used.
+
+        The reads give 0-based positions: the start is the last base kept
+        before a deletion, the end the last base of the event. A caller whose
+        start is the first affected base, 1-based (Vedette), passes 1.
+        """
         self.data_dir = data_dir
+        self.start_offset = start_offset
         self.cohort_dir = cohort_dir
         self.cohort_name = cohort_name
         self.params = params
@@ -257,16 +271,21 @@ class ReadEvidencePanel:
                 "drawn. Switch to Split to see the reads at each breakpoint."
             ).classes("text-sm text-amber-700 px-2")
 
-        marks, intervals = _plot_marks(view)
+        marks, intervals = _plot_marks(view, self.start_offset)
         start_call, end_call = view.start_call, view.end_call
         if start_call is not None and end_call is not None:
             (start_pos, start_approx) = start_call.position()
             (end_pos, end_approx) = end_call.position()
+            if start_pos is not None:
+                start_pos += self.start_offset
             with ui.column().classes("gap-0 px-2").mark("read-breakpoints"):
-                for side, call in (("Start", start_call), ("End", end_call)):
+                for side, call, offset in (
+                    ("Start", start_call, self.start_offset),
+                    ("End", end_call, 0),
+                ):
                     with ui.row().classes("items-center gap-2"):
                         ui.icon("my_location", color="green").classes("text-base")
-                        ui.label(f"{side}: {_describe(call)}").classes(
+                        ui.label(f"{side}: {_describe(call, offset)}").classes(
                             "text-sm text-green-800"
                             if call.pos is not None
                             else "text-sm text-gray-600"
