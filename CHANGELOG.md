@@ -5,6 +5,16 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **"Show non-PASS sites" switch in the Vedette tab.** Since Vedette v1.7.0 the family exports also hold the rare cohort sites Vedette filtered (mostly `CohortArtifact`), and v0.29.0 showed them as ordinary rows: 691 of the 6,899 rows of family C0733-011-301, 5 of them under High impact. They are now hidden unless the switch is on, which also shows the Filter column; it is kept in the page link.
+- The Vedette tab reads what Vedette v1.9.0 adds, as soon as the families are re-exported with it:
+  - **each carrier's own call** (PASS, filtered, or re-genotyped only), its SQ and evidence source: the Own call column and filter are the carrier's, no longer the event's, and breakpoint precision comes from Vedette instead of a guess from the size;
+  - **the Parquet file**, read instead of the TSV when present: the SV dialog shows the own call in full (id, FILTER, bounds, pairs, split reads, CIGAR reads, copy ratio, model) without opening the sample's VCF;
+  - **site keys**: validations and diagnostics of Vedette calls are keyed by the cohort site's `site_key`, which stays the same across Vedette releases while the row's refined bounds may not;
+  - the cohort site's AF, samples merged, precise fraction, mean SQ, HWE p, CN discordance and reference AF (Columns menu and SV dialog), and the panel of normals.
+
 ## [0.29.0] - 2026-11-05
 
 ### Changed

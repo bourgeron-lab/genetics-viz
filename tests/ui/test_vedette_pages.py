@@ -70,6 +70,21 @@ async def test_vedette_tab_opens_on_rare_calls_and_presets_switch(user, monkeypa
     assert len((await _table(tables, n))["rows"]) == 10
 
 
+async def test_non_pass_sites_are_shown_on_request(user, monkeypatch):
+    tables = await _open_vedette(user, monkeypatch, role="reader")
+    n = len(tables)
+    user.find(marker="vedette-preset-all").click()
+    rows = (await _table(tables, n))["rows"]
+    assert len(rows) == 10 and all(r["filter"] != "CohortArtifact" for r in rows)
+    n = len(tables)
+    switch = next(iter(user.find(marker="vedette-nonpass").elements))
+    with user.client:
+        switch.set_value(True)
+    table = await _table(tables, n)
+    assert len(table["rows"]) == 12 and "filter" in table["columns"]
+    assert {r["site_id"] for r in table["rows"]} >= {datagen.VEDETTE_NONPASS}
+
+
 async def test_a_link_opens_the_sub_tab_with_its_preset(user, monkeypatch):
     tables = await _open_vedette(
         user, monkeypatch, role="reader", query="?tab=svs&svtab=vedette&vpre=impact"
@@ -92,6 +107,8 @@ async def test_dialog_shows_the_own_call_and_saves_to_vedette_tsv(
     await user.should_see("Vedette SV", retries=30)
     await user.should_see("vedette_DEL_7", retries=10)
     await user.should_see("precise", retries=10)
+    # Read from the Parquet export (v1.9.0), not matched in the sample's VCF.
+    await user.should_see("from Vedette's export", retries=10)
 
     # Read Evidence: the deletion inside the reads, and its breakpoints.
     for _ in range(200):
@@ -120,9 +137,8 @@ async def test_dialog_shows_the_own_call_and_saves_to_vedette_tsv(
         await asyncio.sleep(0.05)
     header, *rows = [line.split("\t") for line in saved.read_text().splitlines()]
     record = dict(zip(header, rows[0]))
-    assert record["Variant"] == (
-        f"chr2:{datagen.VEDETTE_START}-{datagen.VEDETTE_DEL[1]}:del"
-    )
+    # Keyed by the cohort site's site_key, stable across Vedette releases.
+    assert record["Variant"] == datagen.VEDETTE_SITE_KEY
     assert (record["Sample"], record["Validation"], record["User"]) == (
         "S3",
         "present",

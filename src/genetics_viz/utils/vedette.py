@@ -41,7 +41,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import polars as pl
 import yaml
@@ -61,17 +61,26 @@ def _load_config() -> Dict[str, Any]:
 
 VEDETTE_CONFIG: Dict[str, Any] = _load_config()
 
-#: Row columns the table knows (v1.4 and earlier); any other non-member
+#: Row columns the table knows (v1.9 and earlier); any other non-member
 #: column is kept raw.
 ROW_COLUMNS = (
-    "row_id", "kind", "site_ids", "site_id", "contig", "start", "end", "vcf_pos",
-    "svtype", "size", "filter", "rescue", "n_sites", "sqmax", "cohort_af",
-    "cohort_carrier_frac", "cohort_ncarrier", "ref_carrier_frac", "lcr_ovl",
-    "segdup_ovl", "support", "own_call", "mosaic_cn", "impact_score",
+    "row_id", "kind", "site_ids", "site_id", "site_key", "contig", "start", "end",
+    "vcf_pos", "svtype", "size", "filter", "rescue", "n_sites", "sqmax",
+    "cohort_af", "cohort_carrier_frac", "cohort_ncarrier", "ref_carrier_frac",
+    "af", "nsamples", "precise_frac", "sqmean", "hwe_p", "cn_disc", "ref_af",
+    "lcr_ovl", "segdup_ovl", "support", "own_call", "mosaic_cn", "impact_score",
     "impact_level", "impact_reason", "impact", "exonic_genes", "exonic_gene_ids",
     "genic_genes", "genic_gene_ids", "carriers", "qc_alerts", "genes", "inheritance",
 )  # fmt: skip
-_MEMBER_RE = re.compile(r"^(GT|CN|GQ|INH|DNQ)_(.+)$")
+#: Site-level fields of the row's cohort site (from v1.9.0): floats.
+SITE_INFO_FIELDS = ("af", "precise_frac", "sqmean", "hwe_p", "cn_disc", "ref_af")
+#: Per-member columns, ``<PREFIX>_<id>``: genotype (v1.4), own call (v1.9).
+_MEMBER_RE = re.compile(r"^(GT|CN|GQ|INH|DNQ|OWN|SQ|SRC|PRECISE)_(.+)$")
+#: The own call's fields only the Parquet file holds (v1.9.0).
+OWN_DETAIL_FIELDS = (
+    "own_call_id", "own_filter", "own_start", "own_end", "cipos", "ciend",
+    "own_gq", "pe", "sr", "cg", "rd", "cnq", "own_model_version",
+)  # fmt: skip
 _IMPACT_RE = re.compile(
     r"^\s*([+-]?\d+(?:\.\d+)?)\s*(?:[—–-]\s*)?([^·]*)(?:·\s*(.*))?$"
 )
@@ -142,6 +151,12 @@ class ExportInfo:
     #: Member order of the ``GT_/CN_/GQ_/INH_/DNQ_<id>`` columns.
     members: List[str] = field(default_factory=list)
     generated: str = ""
+    #: The panel of normals the calls were made against (from v1.9.0).
+    pon: str = ""
+    #: The Parquet file's name, ``None`` when it was not written (v1.9.0).
+    parquet: Optional[str] = None
+    #: Non-PASS sites carried by at most this cohort fraction are exported.
+    nonpass_max_carrier_frac: Optional[float] = None
     #: ``##source=`` of the family VCF, for exports without a JSON (< v1.4.0).
     legacy_source: str = ""
 
@@ -174,9 +189,24 @@ def read_export_info(data_dir: Path, family_id: str) -> ExportInfo:
             cohort=str(raw.get("cohort") or ""),
             members=[str(m) for m in raw.get("members") or []],
             generated=str(raw.get("generated") or ""),
+            pon=_describe_pon(raw.get("pon")),
+            parquet=str(raw["parquet"]) if raw.get("parquet") else None,
+            nonpass_max_carrier_frac=_float(raw.get("export_nonpass_max_carrier_frac")),
         )
     vcf = _family_file(data_dir, family_id, "family_vcf_suffix", ".vedette.vcf.gz")
     return ExportInfo(legacy_source=_vcf_source(vcf) if vcf.exists() else "")
+
+
+def _describe_pon(value: Any) -> str:
+    """The panel of normals in a few words: a name, a path's last part, or JSON."""
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        for key in ("name", "id", "version", "path"):
+            if value.get(key):
+                return Path(str(value[key])).name if key == "path" else str(value[key])
+        return json.dumps(value, ensure_ascii=False)
+    return Path(str(value)).name
 
 
 def caller_version(data_dir: Path, family_id: str) -> str:
@@ -260,6 +290,101 @@ def read_vedette_table(path: Path) -> pl.DataFrame:
     _TABLE_CACHE.clear()  # one family at a time is enough
     _TABLE_CACHE[key] = df
     return df
+
+
+#: ``{(row_id, member): own call fields}`` read from the Parquet file.
+OwnDetails = Dict[Tuple[str, str], Dict[str, Any]]
+
+#: Parquet member column -> TSV ``<PREFIX>_<id>`` prefix.
+_PARQUET_MEMBER = {
+    "gt": "GT", "gq": "GQ", "cn": "CN", "inheritance": "INH", "dnq": "DNQ",
+    "member_own_call": "OWN", "sq": "SQ", "source": "SRC", "precise": "PRECISE",
+}  # fmt: skip
+#: Parquet columns that describe one member, not the row.
+_PARQUET_MEMBER_ONLY = {"sample", "carrier", *_PARQUET_MEMBER, *OWN_DETAIL_FIELDS}
+
+
+def family_parquet_file(
+    data_dir: Path, family_id: str, info: Optional["ExportInfo"] = None
+) -> Path:
+    """``<FID>.vedette.parquet`` (the JSON's ``parquet`` name when it gives one)."""
+    name = (
+        info.parquet if info is not None else None
+    ) or f"{family_id}.vedette.parquet"
+    return family_vedette_dir(data_dir, family_id) / name
+
+
+def _cell(value: Any) -> Any:
+    """A Parquet value as the TSV holds it: lists ``;``-joined, booleans 1/0."""
+    if isinstance(value, (list, tuple)):
+        return ";".join(str(v) for v in value if v is not None)
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return value
+
+
+def rows_from_parquet(path: Path) -> Tuple[List[Dict[str, Any]], List[str], OwnDetails]:
+    """The long Parquet file folded back to one dict per row, as the TSV's.
+
+    Member values become ``GT_<id>``-style keys; the own-call fields only the
+    Parquet holds come back in ``OwnDetails``. Members are in file order.
+    """
+    stat = path.stat()
+    key = (str(path), stat.st_mtime, stat.st_size)
+    df = _TABLE_CACHE.get(key)
+    if df is None:
+        df = pl.read_parquet(path)
+        _TABLE_CACHE.clear()
+        _TABLE_CACHE[key] = df
+    rows: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    members: List[str] = []
+    details: OwnDetails = {}
+    for line in df.iter_rows(named=True):
+        member = str(line.get("sample") or "")
+        row_key = (
+            line.get("row_id"),
+            line.get("contig"),
+            line.get("start"),
+            line.get("end"),
+        )
+        row = rows.get(row_key)
+        if row is None:
+            row = {
+                k: _cell(v) for k, v in line.items() if k not in _PARQUET_MEMBER_ONLY
+            }
+            rows[row_key] = row
+        if not member:
+            continue
+        if member not in members:
+            members.append(member)
+        for col, prefix in _PARQUET_MEMBER.items():
+            if col in line:
+                row[f"{prefix}_{member}"] = _cell(line[col])
+        own = {k: line[k] for k in OWN_DETAIL_FIELDS if line.get(k) is not None}
+        if own:
+            details[(str(row.get("row_id") or ""), member)] = own
+    return list(rows.values()), members, details
+
+
+def read_family_rows(
+    data_dir: Path, family_id: str, info: "ExportInfo"
+) -> Tuple[Any, List[str], OwnDetails]:
+    """The family's rows (a DataFrame from the TSV, or dicts from the Parquet),
+    the member order, and the Parquet's own-call details (blocking).
+
+    The Parquet file is preferred when it is there (from Vedette v1.9.0): it
+    carries each member's own call in full, so the dialog need not open the
+    sample's VCF.
+    """
+    parquet = family_parquet_file(data_dir, family_id, info)
+    if parquet.exists():
+        try:
+            rows, members, details = rows_from_parquet(parquet)
+            return rows, info.members or members, details
+        except (OSError, pl.exceptions.PolarsError):
+            logger.warning("Cannot read %s, reading the TSV", parquet, exc_info=True)
+    df = read_vedette_table(family_vedette_file(data_dir, family_id))
+    return df, info.members, {}
 
 
 def table_members(columns: Iterable[str], order: Sequence[str] = ()) -> List[str]:
@@ -446,26 +571,52 @@ def _carriers(row: Dict[str, Any], members: Sequence[str]) -> List[str]:
     return [m for m in members if is_carrier(row.get(f"GT_{m}"))]
 
 
+def _shown(value: Any) -> str:
+    """A cell for display: ``-`` when missing, never for a 0."""
+    return "-" if value is None or value == "" else str(value)
+
+
+def _precise(value: Any) -> Optional[bool]:
+    """``PRECISE_<id>``: ``1``/``0`` (TSV) or a boolean (Parquet); ``None`` if absent."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip() in ("1", "true", "True")
+
+
 def carrier_rows(
-    df: pl.DataFrame,
+    table: Union[pl.DataFrame, Sequence[Dict[str, Any]]],
     *,
     labels: Optional[Dict[str, str]] = None,
     members: Sequence[str] = (),
+    own_details: Optional[OwnDetails] = None,
 ) -> List[Dict[str, Any]]:
     """One row per family row and carrier.
 
-    ``labels`` names members in the Family badges' tooltips (``father``…);
-    ``members`` is the JSON's member order. Badge and validation fields are
-    added later, by the tab.
+    ``table`` is the TSV (a DataFrame) or the Parquet folded back to row dicts
+    (:func:`read_family_rows`). ``labels`` names members in the Family badges'
+    tooltips (``father``…); ``members`` is the JSON's member order;
+    ``own_details`` the Parquet's own-call fields. Badge and validation fields
+    are added later, by the tab.
     """
-    if df.is_empty():
-        return []
-    members = table_members(df.columns, members)
-    extra = [c for c in df.columns if c not in ROW_COLUMNS and not _MEMBER_RE.match(c)]
+    if isinstance(table, pl.DataFrame):
+        if table.is_empty():
+            return []
+        columns: List[str] = list(table.columns)
+        sites: Iterable[Dict[str, Any]] = table.iter_rows(named=True)
+    else:
+        if not table:
+            return []
+        columns = list(dict.fromkeys(k for row in table for k in row))
+        sites = table
+    own_details = own_details or {}
+    members = table_members(columns, members)
+    extra = [c for c in columns if c not in ROW_COLUMNS and not _MEMBER_RE.match(c)]
     gt_colors = VEDETTE_CONFIG.get("genotype_colors", {})
     labels = labels or {}
     rows: List[Dict[str, Any]] = []
-    for site in df.iter_rows(named=True):
+    for site in sites:
         contig = site.get("contig") or ""
         start, end = _int(site.get("start")), _int(site.get("end"))
         svtype = (site.get("svtype") or "").upper()
@@ -481,16 +632,17 @@ def carrier_rows(
         family = []
         for m in members:
             gt = site.get(f"GT_{m}") or ""
-            cn, gq = site.get(f"CN_{m}"), site.get(f"GQ_{m}")
+            # A copy number of 0 is a value (an integer in the Parquet).
+            cn, gq = _shown(site.get(f"CN_{m}")), _shown(site.get(f"GQ_{m}"))
             who = f"{m} ({labels[m]})" if labels.get(m) else m
-            tip = f"{who}: GT {gt or '-'}, CN {cn or '-'}, GQ {gq or '-'}"
+            tip = f"{who}: GT {gt or '-'}, CN {cn}, GQ {gq}"
             if inheritance.get(m):
                 tip += f", {inheritance_info(inheritance[m])['label']}"
                 if site.get(f"DNQ_{m}"):
                     tip += f" (DNQ {site[f'DNQ_{m}']})"
             family.append(
                 {
-                    "label": f"{gt or '-'}·{cn or '-'}",
+                    "label": f"{gt or '-'}·{cn}",
                     "color": gt_colors.get(gt, gt_colors.get("missing", "#f3f4f6")),
                     "textColor": "white" if is_carrier(gt) else "black",
                     "tooltip": tip,
@@ -511,6 +663,9 @@ def carrier_rows(
             "_type_color": type_color(svtype),
             "size": size if size is not None else end - start + 1,
             "filter": site.get("filter") or "",
+            "_filter_color": "#16a34a"
+            if (site.get("filter") or "PASS") == "PASS"
+            else "#9ca3af",
             "rescue": site.get("rescue") or "",
             "n_sites": _int(site.get("n_sites")),
             "sqmax": _float(site.get("sqmax")),
@@ -526,6 +681,7 @@ def carrier_rows(
             "own_call": own_call_info(own)["label"] if own else "",
             "_own_call": own,
             "_own_call_color": own_call_info(own)["color"],
+            "_event_own_call": own,
             "mosaic_cn": _float(site.get("mosaic_cn")),
             "qc_alerts": site.get("qc_alerts") or "",
             "genes": genes_display,
@@ -538,12 +694,22 @@ def carrier_rows(
             "impact_reason": reason,
             "family": " ".join(b["label"] for b in family),
             "family_badges": family,
-            "_variant_key": variant_key(contig, start, end, svtype),
+            "site_key": site.get("site_key") or "",
+            "_locus_key": variant_key(contig, start, end, svtype),
+            # Validations and diagnostics follow the cohort site (v1.9.0's
+            # site_key) when there is one, else the row's own bounds.
+            "_variant_key": site.get("site_key")
+            or variant_key(contig, start, end, svtype),
+            "nsamples": _int(site.get("nsamples")),
+            **{f: _float(site.get(f)) for f in SITE_INFO_FIELDS},
             **{c: site.get(c) for c in extra},
         }
         for m in _carriers(site, members):
             code = inheritance.get(m, "")
             gt = site.get(f"GT_{m}") or ""
+            # The carrier's own call (v1.9.0), else the event's (any member's).
+            member_own = site.get(f"OWN_{m}") or ""
+            row_own = member_own or own
             rows.append(
                 {
                     **base,
@@ -556,6 +722,14 @@ def carrier_rows(
                     "inheritance": inheritance_info(code)["label"] if code else "",
                     "_inheritance": code,
                     "_inheritance_color": inheritance_info(code)["color"],
+                    "own_call": own_call_info(row_own)["label"] if row_own else "",
+                    "_own_call": row_own,
+                    "_own_call_color": own_call_info(row_own)["color"],
+                    "_own_call_is_member": bool(member_own),
+                    "SQ": _float(site.get(f"SQ_{m}")),
+                    "source": site.get(f"SRC_{m}") or "",
+                    "_precise": _precise(site.get(f"PRECISE_{m}")),
+                    "_own_detail": own_details.get((row_id, m)),
                 }
             )
     return rows
@@ -603,6 +777,9 @@ class VedetteFilters:
     inheritance: List[str] = field(default_factory=list)
     genesets: List[str] = field(default_factory=list)
     validations: List[str] = field(default_factory=list)
+    #: Cohort sites whose FILTER is not PASS (exported from Vedette v1.7.0,
+    #: rare ones only): hidden unless asked for. No preset sets it.
+    show_nonpass: bool = False
 
     _PRESET_FIELDS = (
         "types", "kinds", "own_calls", "min_size", "max_size", "max_freq",
@@ -649,6 +826,13 @@ def default_preset() -> str:
     return names[0] if names else ""
 
 
+def is_nonpass(row: Dict[str, Any]) -> bool:
+    """A cohort site row whose FILTER is not PASS (a sub-threshold row's
+    ``LowSQ`` is its kind, not this)."""
+    flt = row.get("filter") or ""
+    return row.get("_kind", "site") == "site" and bool(flt) and flt != "PASS"
+
+
 def apply_filters(
     rows: Sequence[Dict[str, Any]],
     f: VedetteFilters,
@@ -670,6 +854,8 @@ def apply_filters(
     out = []
     for r in rows:
         if wanted_members is not None and r["sample"] not in wanted_members:
+            continue
+        if not f.show_nonpass and is_nonpass(r):
             continue
         if types and r["svtype"] not in types:
             continue
@@ -703,7 +889,7 @@ def apply_filters(
 #: Link keys of the tab, prefixed ``v``.
 LINK_KEYS = (
     "vpre", "vtype", "vkind", "vown", "vsize", "vfreq", "vgq", "vimp", "vinh",
-    "vgs", "vval",
+    "vgs", "vval", "vnp",
 )  # fmt: skip
 
 
@@ -734,6 +920,7 @@ def filters_to_params(f: VedetteFilters) -> Dict[str, Any]:
         out["vinh"] = [c or "-none" for c in f.inheritance]
     out["vgs"] = f.genesets
     out["vval"] = f.validations
+    out["vnp"] = "1" if f.show_nonpass else None
     return out
 
 
@@ -763,6 +950,7 @@ def filters_from_params(get: Any, get_list: Any) -> VedetteFilters:
             f.inheritance = ["" if c == "-none" else c for c in inh]
     f.genesets = get_list("vgs") or []
     f.validations = get_list("vval") or []
+    f.show_nonpass = get("vnp") in ("1", "true")
     return f
 
 
@@ -780,16 +968,19 @@ class OwnCall:
     """
 
     call_id: str
-    start: int
-    end: int
+    start: Optional[int]
+    end: Optional[int]
     filters: List[str]
     source: str
     precise: bool
     cipos: Optional[Tuple[int, int]]
     ciend: Optional[Tuple[int, int]]
     model: str
-    overlap: float
+    #: Reciprocal overlap with the row; ``None`` when Vedette matched it.
+    overlap: Optional[float]
     fields: Dict[str, Any]
+    #: Where it was read: ``parquet``, ``tsv`` (code, SQ, source only) or ``vcf``.
+    origin: str = "vcf"
 
     @property
     def passed(self) -> bool:
@@ -878,6 +1069,85 @@ def find_own_call(
         logger.warning("Cannot read %s", vcf, exc_info=True)
         return None
     return best
+
+
+def _own_call_from_export(row: Dict[str, Any]) -> Optional[OwnCall]:
+    """The carrier's own call as the export gives it (Vedette v1.9.0).
+
+    The Parquet holds it whole (``_own_detail``); the TSV only its code, SQ,
+    source and precision.
+    """
+    detail = row.get("_own_detail")
+    code = row.get("_own_call") if row.get("_own_call_is_member") else ""
+    if not detail and code not in ("pass", "filtered"):
+        return None
+    detail = detail or {}
+    filters = _split_list(detail.get("own_filter")) or (
+        ["PASS"] if code == "pass" else ["filtered"]
+    )
+    fields = {
+        key: detail[src]
+        for key, src in (
+            ("GQ", "own_gq"), ("PE", "pe"), ("SR", "sr"), ("CG", "cg"),
+            ("RD", "rd"), ("CNQ", "cnq"),
+        )
+        if detail.get(src) is not None
+    }  # fmt: skip
+    if row.get("SQ") is not None:
+        fields["SQ"] = row["SQ"]
+
+    def pair(value: Any) -> Optional[Tuple[int, int]]:
+        values = list(value) if isinstance(value, (list, tuple)) else []
+        return (int(values[0]), int(values[1])) if len(values) == 2 else None
+
+    precise = row.get("_precise")
+    return OwnCall(
+        call_id=str(detail.get("own_call_id") or ""),
+        start=_int(detail.get("own_start")),
+        end=_int(detail.get("own_end")),
+        filters=filters,
+        source=row.get("source") or "",
+        precise=bool(precise) if precise is not None else True,
+        cipos=pair(detail.get("cipos")),
+        ciend=pair(detail.get("ciend")),
+        model=str(detail.get("own_model_version") or ""),
+        overlap=None,
+        fields=fields,
+        origin="parquet" if row.get("_own_detail") else "tsv",
+    )
+
+
+def resolve_own_call(data_dir: Path, row: Dict[str, Any]) -> Optional[OwnCall]:
+    """A carrier row's own call (blocking: may read the sample's VCF).
+
+    From the export when it says (Vedette v1.9.0: ``none`` means re-genotyped
+    only, nothing to look up); otherwise, for older exports, matched in the
+    sample's ``filtered.vcf.gz``.
+    """
+    if row.get("_own_call_is_member"):
+        if row.get("_own_call") == "none":
+            return None
+        if row.get("_own_detail"):
+            return _own_call_from_export(row)
+        found = find_own_call(
+            sample_vedette_vcf(data_dir, row["sample"]),
+            row["contig"], int(row["start"]), int(row["end"]), row["svtype"],
+        )  # fmt: skip
+        return found or _own_call_from_export(row)
+    return find_own_call(
+        sample_vedette_vcf(data_dir, row["sample"]),
+        row["contig"], int(row["start"]), int(row["end"]), row["svtype"],
+    )  # fmt: skip
+
+
+def row_is_precise(row: Dict[str, Any], own: Optional[OwnCall]) -> bool:
+    """Base-pair breakpoints: the export's ``PRECISE_<id>``, else the own
+    call's, else a guess from the size."""
+    if row.get("_precise") is not None:
+        return bool(row["_precise"])
+    if own is not None:
+        return own.precise
+    return assume_precise(row.get("size"))
 
 
 def assume_precise(size: Optional[int]) -> bool:

@@ -74,6 +74,9 @@ class SVSource:
     #: Added to the start the reads suggest (0-based: the last base kept).
     #: 1 for a caller whose start is the first affected base, 1-based.
     start_offset: int = 0
+    #: The validation key, when the caller has a stabler one than the shown
+    #: bounds (Vedette's site_key); else ``chr:start-end:type``.
+    variant_key: Optional[str] = None
 
 
 def _expanded_locus(chrom: str, start: int, end: int) -> str:
@@ -150,7 +153,7 @@ def show_sv_dialog(
 
     # Determine SV type for variant key (dup for gain, del for loss)
     sv_type = infer_sv_type(sv_data)
-    variant_key = f"{chrom}:{start}-{end}:{sv_type}"
+    variant_key = source.variant_key or f"{chrom}:{start}-{end}:{sv_type}"
 
     curated_start, curated_end = _curated_position(
         validation_map.get((variant_key, sample), [])
