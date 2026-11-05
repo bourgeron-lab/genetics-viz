@@ -2,4 +2,4 @@
 Genetics-Viz: A web-based visualization tool for genetics cohort data.
 """
 
-__version__ = "0.29.0"
+__version__ = "0.30.0"

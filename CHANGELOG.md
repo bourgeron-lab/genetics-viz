@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.30.0] - 2026-11-05
 
 ### Added
 - **"Show non-PASS sites" switch in the Vedette tab.** Since Vedette v1.7.0 the family exports also hold the rare cohort sites Vedette filtered (mostly `CohortArtifact`), and v0.29.0 showed them as ordinary rows: 691 of the 6,899 rows of family C0733-011-301, 5 of them under High impact. They are now hidden unless the switch is on, which also shows the Filter column; it is kept in the page link.
