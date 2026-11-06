@@ -24,13 +24,33 @@ class DataDirectoryConfig:
     default: bool = False
 
 
+#: Roles, least rights first, with what each adds. ``student`` is a reader who
+#: cannot download: no TSV exports, and only the files the pages themselves load.
+ROLES: dict[str, str] = {
+    "student": "Browse only: no downloads, reader wording",
+    "reader": "Browse and download the tables, reader wording",
+    "curator": "Validate, record diagnostics, write reports; raw data files",
+    "administrator": "Curator, plus users and data directories",
+}
+
+#: Badge colour of each role (admin and profile pages).
+ROLE_COLORS: dict[str, str] = {
+    "student": "teal",
+    "reader": "grey",
+    "curator": "blue",
+    "administrator": "red",
+}
+
+
 @dataclass
 class UserConfig:
     """A single user entry from the YAML config."""
 
     username: str
     password: str  # scrypt hash (legacy: unsalted sha512 hex digest)
-    role: str  # "reader" | "curator" | "administrator"
+    role: str  # one of ROLES
+    #: Paths of the data directories this user may open; empty means all.
+    data_directories: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -66,6 +86,11 @@ def get_config() -> AppConfig:
     if _app_config is None:
         raise RuntimeError("AppConfig not loaded — call load_config() first")
     return _app_config
+
+
+def is_config_loaded() -> bool:
+    """Whether ``load_config`` has run (it has, in the app; not in unit tests)."""
+    return _app_config is not None
 
 
 def get_config_path() -> Path:
@@ -171,6 +196,9 @@ def load_config(config_path: Path) -> AppConfig:
                 username=str(entry.get("username") or ""),
                 password=str(entry.get("password") or ""),
                 role=str(entry.get("role") or "reader"),
+                data_directories=[
+                    str(d) for d in (entry.get("data_directories") or []) if d
+                ],
             )
         )
 
@@ -228,6 +256,12 @@ def save_config(config: AppConfig) -> None:
                 "username": u.username,
                 "password": u.password,
                 "role": u.role,
+                # Only when restricted: an empty list means every directory.
+                **(
+                    {"data_directories": u.data_directories}
+                    if u.data_directories
+                    else {}
+                ),
             }
             for u in config.user_list
         ],
@@ -256,6 +290,13 @@ def save_config(config: AppConfig) -> None:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def find_user(username: str) -> Optional[UserConfig]:
+    """The config's entry for ``username``, or ``None`` (no config, or no such user)."""
+    if _app_config is None:
+        return None
+    return next((u for u in _app_config.user_list if u.username == username), None)
 
 
 def get_default_data_dir(config: AppConfig) -> str:

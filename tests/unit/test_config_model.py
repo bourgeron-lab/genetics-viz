@@ -49,11 +49,7 @@ def test_load_sets_the_singleton(app_config, reference_root):
     assert config_model.get_config() is app_config
     assert get_ancestry_reference_dir() == reference_root
     assert app_config.poll_interval == 3600
-    assert {u.role for u in app_config.user_list} == {
-        "administrator",
-        "curator",
-        "reader",
-    }
+    assert {u.role for u in app_config.user_list} == set(config_model.ROLES)
 
 
 def test_missing_storage_secret_is_generated_once(tmp_path):
@@ -101,3 +97,16 @@ def test_genetrek_keys_survive_an_admin_save(tmp_path):
     reloaded = config_model.load_config(path)
     assert reloaded.genetrek_url == "https://gt.example/"
     assert reloaded.genetrek_cache_dir == "/tmp/gt"
+
+
+def test_directory_grants_round_trip(app_config):
+    """An empty grant list (every directory) is not written."""
+    student = config_model.UserConfig("s", "x", "student", ["/data/a"])
+    app_config.user_list.append(student)
+    save_config(app_config)
+    raw = yaml.safe_load(app_config.config_path.read_text())["user_list"]
+    assert raw[-1]["data_directories"] == ["/data/a"]
+    assert all("data_directories" not in u for u in raw[:-1])
+    loaded = load_config(app_config.config_path)
+    assert loaded.user_list[-1] == student
+    assert config_model.find_user("s") == student and not config_model.find_user("?")

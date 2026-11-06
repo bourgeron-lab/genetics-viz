@@ -18,7 +18,7 @@ from genetics_viz.components.search_stats import show_stats_dialog
 from genetics_viz.components.sv_dialog import show_sv_dialog
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.variant_dialog import show_variant_dialog
-from genetics_viz.utils.auth import can_write
+from genetics_viz.utils.auth import can_download, can_write
 from genetics_viz.utils.column_names import (
     apply_width_constraints,
     get_column_group,
@@ -242,6 +242,9 @@ def _toolbar(res: SearchResults, rows: List[Dict[str, Any]], apply_visibility) -
 
 def _save_menu(res: SearchResults, rows: List[Dict[str, Any]]) -> None:
     """Save as a validation file (curators) or download the shown columns."""
+    # Nothing to save or download for a student: no button
+    if not (can_write() or can_download()):
+        return
 
     def _save_validation_file(filename: str):
         """Write TSV to to_validate directory."""
@@ -264,6 +267,9 @@ def _save_menu(res: SearchResults, rows: List[Dict[str, Any]]) -> None:
 
     def _download_tsv(filename: str):
         """Trigger browser download of TSV with displayed columns."""
+        if not can_download():
+            ui.notify("Downloads are not open to your account", type="negative")
+            return
         download_cols = [
             col for col in res.selected_cols["value"] if is_export_column(col)
         ]
@@ -281,17 +287,22 @@ def _save_menu(res: SearchResults, rows: List[Dict[str, Any]]) -> None:
         "Download TSV", "Download", "download", _download_tsv
     )
 
-    with ui.button("Save", icon="save").props("outline color=blue size=sm"):
+    with (
+        ui.button("Save", icon="save")
+        .props("outline color=blue size=sm")
+        .mark("search-save")
+    ):
         with ui.menu().classes("min-w-[250px]"):
             if can_write():
                 ui.menu_item(
                     "Save as validation file",
                     on_click=lambda: _open_dialog(save_dlg, save_input),
                 )
-            ui.menu_item(
-                "Download TSV",
-                on_click=lambda: _open_dialog(dl_dlg, dl_input),
-            )
+            if can_download():
+                ui.menu_item(
+                    "Download TSV",
+                    on_click=lambda: _open_dialog(dl_dlg, dl_input),
+                ).mark("search-download")
 
 
 def _build_save_dialog(title, confirm_label, confirm_icon, on_confirm):

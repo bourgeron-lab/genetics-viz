@@ -853,10 +853,22 @@ def _empty(kind: str) -> pl.DataFrame:
     return pl.DataFrame(schema={**SCHEMAS[kind], "data_dir": pl.Utf8})
 
 
-def _scan(kind: str, predicate: pl.Expr) -> pl.DataFrame:
-    """Rows of every data directory's ``kind`` files matching ``predicate``."""
+def _scan(
+    kind: str,
+    predicate: pl.Expr,
+    data_dirs: Optional[Iterable[str]] = None,
+    columns: Optional[List[str]] = None,
+) -> pl.DataFrame:
+    """Rows of the ``kind`` files matching ``predicate``.
+
+    ``data_dirs`` limits the scan to those directories (the user's own);
+    ``None`` reads every one. ``columns`` keeps only those (and ``data_dir``).
+    """
     frames: List[pl.DataFrame] = []
+    wanted = None if data_dirs is None else set(data_dirs)
     for path_str in get_all_data_stores():
+        if wanted is not None and path_str not in wanted:
+            continue
         root = _store_root(path_str)
         entries = _manifests.get(path_str) or {}
         if root is None:
@@ -870,23 +882,27 @@ def _scan(kind: str, predicate: pl.Expr) -> pl.DataFrame:
         if not files:
             continue
         try:
-            found = pl.scan_parquet(files).filter(predicate).collect()
+            lf = pl.scan_parquet(files).filter(predicate)
+            found = (lf.select(columns) if columns else lf).collect()
         except (OSError, pl.exceptions.PolarsError) as e:
             # A file replaced by a refresh between the listing and the scan
             logger.warning("Gene index lookup in %s failed: %s", root, e)
             continue
         frames.append(found.with_columns(pl.lit(path_str).alias("data_dir")))
     if not frames:
-        return _empty(kind)
+        empty = _empty(kind)
+        return empty.select([*columns, "data_dir"]) if columns else empty
     return pl.concat(frames, how="vertical_relaxed")
 
 
-def lookup_gene(kind: str, gene_keys: Iterable[str]) -> pl.DataFrame:
+def lookup_gene(
+    kind: str, gene_keys: Iterable[str], data_dirs: Optional[Iterable[str]] = None
+) -> pl.DataFrame:
     """Every indexed row of ``kind`` on one of ``gene_keys`` (upper-cased symbols)."""
     keys = sorted({k.upper() for k in gene_keys if k})
     if not keys:
         return _empty(kind)
-    return _scan(kind, pl.col("gene_key").is_in(keys))
+    return _scan(kind, pl.col("gene_key").is_in(keys), data_dirs)
 
 
 @dataclass(frozen=True)
@@ -915,7 +931,9 @@ def parse_variant(text: Optional[str]) -> Optional[VariantQuery]:
     )
 
 
-def lookup_variant(query: VariantQuery) -> pl.DataFrame:
+def lookup_variant(
+    query: VariantQuery, data_dirs: Optional[Iterable[str]] = None
+) -> pl.DataFrame:
     """Every indexed SNV row of the variant: one per carrier, table and gene."""
     return _scan(
         "snv",
@@ -923,4 +941,5 @@ def lookup_variant(query: VariantQuery) -> pl.DataFrame:
         & (pl.col("pos") == query.pos)
         & (pl.col("ref") == query.ref)
         & (pl.col("alt") == query.alt),
+        data_dirs,
     )

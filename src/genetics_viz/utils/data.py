@@ -1,7 +1,8 @@
 """Data store utilities — multi-directory registry with per-user selection."""
 
+import os
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from genetics_viz.config_model import DataDirectoryConfig
 from genetics_viz.models import DataStore
@@ -57,26 +58,70 @@ def init_all_data_stores(configs: list[DataDirectoryConfig]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def get_data_store() -> DataStore:
-    """Return the DataStore for the current user's selected data directory.
+#: What ``app.storage.user`` raises outside a request (the poller, a thread
+#: started without the context, the unit tests).
+_NO_CONTEXT = (RuntimeError, AssertionError, KeyError)
 
-    Falls back to the default directory if no user context or if the stored
-    path is no longer valid.
+
+def _norm(path: str) -> str:
+    return os.path.normpath(path)
+
+
+def dirs_for(granted: Optional[Iterable[str]]) -> list[str]:
+    """The registered directories among ``granted`` (``None``: all), in order."""
+    if granted is None:
+        return list(_data_stores)
+    wanted = {_norm(g) for g in granted}
+    return [p for p in _data_stores if _norm(p) in wanted]
+
+
+def user_data_dirs() -> list[str]:
+    """The registered data directories the current user may open, in order.
+
+    Every directory without a user context (the poller, the gene index), or
+    for a user granted none in particular.
     """
+    from genetics_viz.utils.auth import granted_data_dirs
+
+    try:
+        granted = granted_data_dirs()
+    except _NO_CONTEXT:
+        granted = None
+    return dirs_for(granted)
+
+
+def current_data_dir() -> Optional[str]:
+    """The user's selected directory if they may open it, else their first one.
+
+    The default directory comes first when the user may open it. ``None`` when
+    the user may open none.
+    """
+    allowed = user_data_dirs()
     try:
         from nicegui import app
 
-        data_dir = app.storage.user.get("data_dir")
-        if data_dir and data_dir in _data_stores:
-            return _data_stores[data_dir]
-    except Exception:
-        pass
-    # Fallback to default
-    if _default_data_dir and _default_data_dir in _data_stores:
-        return _data_stores[_default_data_dir]
-    if _data_stores:
-        return next(iter(_data_stores.values()))
-    raise RuntimeError("No data stores initialised")
+        chosen = app.storage.user.get("data_dir")
+    except _NO_CONTEXT:
+        chosen = None
+    if chosen in allowed:
+        return chosen
+    if _default_data_dir in allowed:
+        return _default_data_dir
+    return allowed[0] if allowed else None
+
+
+def get_data_store() -> DataStore:
+    """Return the DataStore for the current user's selected data directory.
+
+    Falls back to the user's first directory (the default one when allowed)
+    if the stored path is no longer valid or no longer theirs.
+    """
+    current = current_data_dir()
+    if current is not None:
+        return _data_stores[current]
+    if not _data_stores:
+        raise RuntimeError("No data stores initialised")
+    raise RuntimeError("No data directory is open to this account")
 
 
 def get_data_store_or_none() -> Optional[DataStore]:
@@ -89,33 +134,30 @@ def get_data_store_or_none() -> Optional[DataStore]:
 
 def get_static_prefix() -> str:
     """Return the static-file URL prefix for the current user's data directory."""
-    try:
-        from nicegui import app
-
-        data_dir = app.storage.user.get("data_dir")
-        if data_dir and data_dir in _static_prefix_map:
-            return _static_prefix_map[data_dir]
-    except Exception:
-        pass
-    if _default_data_dir and _default_data_dir in _static_prefix_map:
-        return _static_prefix_map[_default_data_dir]
-    if _static_prefix_map:
-        return next(iter(_static_prefix_map.values()))
+    current = current_data_dir()
+    if current is not None:
+        return _static_prefix_map[current]
     return "/data"
 
 
+def dir_label(path_str: str) -> str:
+    """A directory's name, with its description: ``wgs — Whole genomes``."""
+    name = Path(path_str).name
+    desc = _dir_descriptions.get(path_str, "")
+    return f"{name} — {desc}" if desc else name
+
+
 def get_data_dir_options() -> list[dict]:
-    """Return option dicts for the data-directory dropdown.
+    """Return option dicts for the data-directory dropdown: the user's own.
 
     Each dict has ``value`` (path string) and ``label`` (directory basename).
     """
-    options = []
-    for path_str in _data_stores:
-        name = Path(path_str).name
-        desc = _dir_descriptions.get(path_str, "")
-        label = f"{name} — {desc}" if desc else name
-        options.append({"value": path_str, "label": label})
-    return options
+    return [{"value": p, "label": dir_label(p)} for p in user_data_dirs()]
+
+
+def all_data_dir_options() -> list[dict]:
+    """Every registered directory as an option (the admin pages)."""
+    return [{"value": p, "label": dir_label(p)} for p in _data_stores]
 
 
 def get_default_data_dir_path() -> str:
@@ -129,20 +171,23 @@ def get_static_prefix_map() -> dict[str, str]:
 
 
 def mount_data_files(prefix: str, path_str: str) -> None:
-    """Serve a data directory's files under ``prefix``, to logged-in users only.
+    """Serve a data directory's files under ``prefix``, to its users only.
 
     Not ``app.add_static_files``: its route checks nothing, and the directory
     holds patient genomes. Starlette's ``StaticFiles`` still does the serving,
     so Range requests (igv.js reading CRAMs and tabix files) work as before.
     Anonymous requests get 401, not a redirect to the login page, since they
-    come from igv.js, ``<img>`` tags and links rather than page navigation.
+    come from igv.js, ``<img>`` tags and links rather than page navigation. A
+    user not granted the directory, or a reader or student asking for anything
+    but a file the pages load themselves, gets 403.
     """
     from fastapi import HTTPException, Request
     from fastapi.responses import Response
     from nicegui import app as nicegui_app
     from starlette.staticfiles import StaticFiles
 
-    from genetics_viz.utils.auth import is_authenticated
+    from genetics_viz.utils.access import is_traversal, may_fetch
+    from genetics_viz.utils.auth import get_current_role, is_authenticated
 
     # check_dir=False: a missing directory is a degraded state, as in the registry.
     files = StaticFiles(directory=path_str, check_dir=False)
@@ -151,8 +196,12 @@ def mount_data_files(prefix: str, path_str: str) -> None:
     async def data_file(request: Request, path: str = "") -> Response:
         if not is_authenticated():
             raise HTTPException(status_code=401)
-        if _static_prefix_map.get(path_str) != prefix:
+        if _static_prefix_map.get(path_str) != prefix or is_traversal(path):
             raise HTTPException(status_code=404)
+        # Only the directories granted to the user, and by role only the
+        # files a page of theirs loads (utils/access.py).
+        if path_str not in user_data_dirs() or not may_fetch(get_current_role(), path):
+            raise HTTPException(status_code=403)
         response = await files.get_response(path, request.scope)
         # private: the F5 and any other shared cache must not keep patient data.
         response.headers["Cache-Control"] = "private, max-age=3600"

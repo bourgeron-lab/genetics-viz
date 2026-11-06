@@ -579,7 +579,13 @@ def render_cohort_sample_qc_tab(
                 "Count the flags a curator reviewed and acknowledged"
             ).mark("cohort-qc-include-acked")
             _download_menu(store, cohort, state, filtered_state, show_detail)
-            report = cohort_report_url(cohort, labels[0], get_static_prefix())
+            # somalier's own report: every pair, observed relationships. The
+            # data route serves it to curators only (utils/access.py).
+            report = (
+                cohort_report_url(cohort, labels[0], get_static_prefix())
+                if show_detail
+                else None
+            )
             if report:
                 ui.link("somalier report ↗", report, new_tab=True).classes(
                     "text-xs"

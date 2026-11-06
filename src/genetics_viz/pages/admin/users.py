@@ -8,6 +8,8 @@ from nicegui import ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.config_model import (
+    ROLE_COLORS,
+    ROLES,
     UserConfig,
     generate_random_password,
     get_config,
@@ -15,7 +17,39 @@ from genetics_viz.config_model import (
     save_config,
 )
 from genetics_viz.utils.auth import check_auth, get_current_user, is_admin
+from genetics_viz.utils.data import all_data_dir_options
 from genetics_viz.utils.user_preferences import remove_user_preferences
+
+
+def _dir_options() -> dict:
+    return {o["value"]: o["label"] for o in all_data_dir_options()}
+
+
+def _directory_select(username: str, granted: list) -> None:
+    """The directories a user may open; none selected means every one.
+
+    A granted path no longer registered is kept in the config, unshown: the
+    directory may come back.
+    """
+    options = _dir_options()
+
+    def on_change(e) -> None:
+        cfg = get_config()
+        target = next((u for u in cfg.user_list if u.username == username), None)
+        if target is None:
+            return
+        hidden = [d for d in target.data_directories if d not in options]
+        target.data_directories = list(e.value or []) + hidden
+        save_config(cfg)
+        ui.notify(f"Data directories updated for {username}", type="positive")
+
+    ui.select(
+        options,
+        value=[d for d in granted if d in options],
+        multiple=True,
+        label="Data directories (empty: all)",
+        on_change=on_change,
+    ).props("outlined dense use-chips").classes("w-72").mark(f"dirs-{username}")
 
 
 @ui.page("/admin/users")
@@ -78,11 +112,6 @@ def admin_users_page() -> None:
                     return
 
                 for user in config.user_list:
-                    role_colors = {
-                        "administrator": "red",
-                        "curator": "blue",
-                        "reader": "grey",
-                    }
                     with ui.card().classes("w-full p-4 mb-2"):
                         with ui.row().classes("items-center justify-between w-full"):
                             with ui.row().classes("items-center gap-3"):
@@ -90,8 +119,8 @@ def admin_users_page() -> None:
                                 ui.label(user.username).classes("font-bold")
                                 ui.badge(
                                     user.role,
-                                    color=role_colors.get(user.role, "grey"),
-                                ).classes("text-xs")
+                                    color=ROLE_COLORS.get(user.role, "grey"),
+                                ).classes("text-xs").tooltip(ROLES.get(user.role, ""))
                                 if user.username == current_username:
                                     ui.badge("you", color="orange").classes("text-xs")
 
@@ -139,10 +168,14 @@ def admin_users_page() -> None:
                                     return handler
 
                                 ui.select(
-                                    ["reader", "curator", "administrator"],
+                                    list(ROLES),
                                     value=user.role,
                                     on_change=make_role_change(user.username),
-                                ).props("outlined dense").classes("w-36")
+                                ).props("outlined dense").classes("w-36").mark(
+                                    f"role-{user.username}"
+                                )
+
+                                _directory_select(user.username, user.data_directories)
 
                                 # Reset password button
                                 def make_reset(uname):
@@ -227,13 +260,19 @@ def admin_users_page() -> None:
                     ui.input("Username").props("outlined dense").classes("w-48")
                 )
                 role_select = (
-                    ui.select(
-                        ["reader", "curator", "administrator"],
-                        value="reader",
-                        label="Role",
-                    )
+                    ui.select(list(ROLES), value="reader", label="Role")
                     .props("outlined dense")
                     .classes("w-40")
+                )
+                dirs_select = (
+                    ui.select(
+                        _dir_options(),
+                        value=[],
+                        multiple=True,
+                        label="Data directories (empty: all)",
+                    )
+                    .props("outlined dense use-chips")
+                    .classes("w-72")
                 )
 
                 def add_user() -> None:
@@ -256,9 +295,11 @@ def admin_users_page() -> None:
                             username=uname,
                             password=hash_password(raw_pw),
                             role=role,
+                            data_directories=list(dirs_select.value or []),
                         )
                     )
                     username_input.value = ""
+                    dirs_select.value = []
                     _show_password_dialog(
                         f"Password for {uname}",
                         raw_pw,

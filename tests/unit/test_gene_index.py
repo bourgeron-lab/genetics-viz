@@ -191,7 +191,7 @@ def test_gene_keys_follow_previous_symbols(snapshot):
 
 
 def test_snv_rows_join_configs_and_curation(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     curation = gene_rows.load_curation(dirs)
     carriers = gene_rows.snv_carrier_rows(
         gene_index.lookup_gene("snv", ["SHANK3"]), curation, dirs, _scorer()
@@ -220,7 +220,7 @@ def test_snv_rows_join_configs_and_curation(indexed: Path):
 
 
 def test_str_rows_keep_genotypes_past_normal(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     frame = gene_index.lookup_gene("str", ["HTT"])
     rows = gene_rows.str_rows(frame, gene_rows.load_curation(dirs), dirs, _scorer())
     assert [(r["Sample"], r["Alleles"]) for r in rows] == [("S3", "18/40")]
@@ -228,7 +228,7 @@ def test_str_rows_keep_genotypes_past_normal(indexed: Path):
 
 
 def test_diagnostics_found_by_gene_including_an_sv_overlap(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     rows = gene_rows.diagnostic_rows(dirs, dirs, _scorer(), gene_keys={"SCN2A"})
     assert [(r["Type"], r["Diagnostic"], r["Cohort"]) for r in rows] == [
         ("SV", "uncertain", "DEMO")
@@ -237,7 +237,7 @@ def test_diagnostics_found_by_gene_including_an_sv_overlap(indexed: Path):
 
 
 def test_variant_validation_history_keeps_ignored_records(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     rows = gene_rows.validation_history(dirs, dirs, "SNV", SHANK3_DE_NOVO)
     assert [(r["Sample"], r["Validation"], r["Ignored"]) for r in rows] == [
         ("S9", "absent", ""),
@@ -252,7 +252,7 @@ def test_rows_of_another_data_directory_link_through_it(app_config, data_dir, tm
         [DataDirectoryConfig(path=str(data_dir)), DataDirectoryConfig(path=str(second))]
     )
     gene_index.refresh_all(wait=True)
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     carriers = gene_rows.snv_carrier_rows(
         gene_index.lookup_gene("snv", ["SHANK3"]),
         gene_rows.load_curation(dirs),

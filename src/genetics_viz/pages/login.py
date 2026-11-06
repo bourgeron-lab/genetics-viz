@@ -17,6 +17,11 @@ from genetics_viz.config_model import (
 )
 from genetics_viz.components.page_link import safe_next
 from genetics_viz.utils import login_throttle
+from genetics_viz.utils.auth import is_authenticated
+from genetics_viz.utils.data import dirs_for, get_all_data_stores
+
+
+_NO_DIRECTORY = "No data directory is open to this account. Ask an administrator."
 
 
 @functools.cache
@@ -31,8 +36,8 @@ def login_page(request: Request) -> None:
     # Back where a shared link pointed, else home
     destination = safe_next(request.query_params.get("next")) or "/"
 
-    # If already authenticated, go straight there
-    if app.storage.user.get("authenticated"):
+    # If already authenticated, go straight there (not a user since removed)
+    if is_authenticated():
         ui.navigate.to(destination)
         return
 
@@ -52,6 +57,10 @@ def login_page(request: Request) -> None:
                 .classes("w-full")
             )
             error_label = ui.label("").classes("text-red-500 text-sm hidden")
+            if request.query_params.get("error") == "no-directory":
+                # check_auth logged out a user left with no directory
+                error_label.text = _NO_DIRECTORY
+                error_label.classes(remove="hidden")
 
             def try_login() -> None:
                 username = username_input.value.strip()
@@ -81,6 +90,12 @@ def login_page(request: Request) -> None:
                 stored = user.password if user is not None else _dummy_hash()
                 if verify_password(password, stored) and user is not None:
                     login_throttle.record_success(username)
+                    directories = dirs_for(user.data_directories or None)
+                    if get_all_data_stores() and not directories:
+                        error_label.text = _NO_DIRECTORY
+                        error_label.classes(remove="hidden")
+                        password_input.value = ""
+                        return
                     if needs_rehash(user.password):
                         # Legacy SHA-512 (or older scrypt parameters): upgrade
                         # now that the plaintext is known to be right.
@@ -91,7 +106,15 @@ def login_page(request: Request) -> None:
                             "authenticated": True,
                             "username": user.username,
                             "role": user.role,
-                            "data_dir": get_default_data_dir(config),
+                            # The default directory when the user may open it
+                            "data_dir": next(
+                                (
+                                    d
+                                    for d in directories
+                                    if d == get_default_data_dir(config)
+                                ),
+                                directories[0] if directories else "",
+                            ),
                         }
                     )
                     ui.navigate.to(destination)
