@@ -35,6 +35,7 @@ from genetics_viz.pages.cohort.components.wombat_filters import (
 )
 from genetics_viz.pages.cohort.components.wombat_rows import (
     add_curation_status,
+    add_variant_counts,
     build_rows,
     count_rows,
     find_wombat_files,
@@ -46,7 +47,9 @@ from genetics_viz.pages.cohort.components.wombat_rows import (
     wombat_file_pattern,
 )
 from genetics_viz.pages.cohort.components.wombat_stats import show_wombat_stats_dialog
+from genetics_viz.utils import gene_index
 from genetics_viz.utils.auth import can_write
+from genetics_viz.utils.data import user_data_dirs
 from genetics_viz.utils.export import export_filename, is_export_column, rows_to_tsv
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.genesets import geneset_sources
@@ -183,17 +186,54 @@ class _Prepared:
     unknown_clinvar: Any
 
 
+@dataclass(frozen=True)
+class _CountScope:
+    """Where the variant counts look: taken on the event loop (the user's dirs)."""
+
+    data_dirs: List[str]
+    cohort: str
+    cohort_size: int
+
+
+def _count_scope(store: Any, cohort_name: str) -> _CountScope:
+    cohort = store.cohorts.get(cohort_name)
+    size = (
+        len({s.sample_id for f in cohort.families.values() for s in f.samples})
+        if cohort is not None
+        else 0
+    )
+    return _CountScope(user_data_dirs(), cohort_name, size)
+
+
 def _prepare(
     df: pl.DataFrame,
     data_dir: Path,
     family_id: str,
     family: Optional[Family],
+    scope: _CountScope,
     gene_scorer: Any = None,
+    load_counts: bool = False,
 ) -> _Prepared:
-    """One row per variant and sample (other columns joined), badged."""
+    """One row per variant and sample (other columns joined), badged.
+
+    The cohort and all-cohort counts come from the gene index in memory;
+    ``load_counts`` (off the event loop only) reads it from disk if need be.
+    """
     df = aggregate_by_variant(df)
     rows, unknown_consequences, unknown_clinvar = build_rows(
         df, data_dir, family_id, family, gene_scorer
+    )
+    here = str(data_dir)
+    counts = gene_index.variant_counts(
+        (r.get("Variant") for r in rows), scope.data_dirs, load=load_counts
+    )
+    add_variant_counts(
+        rows,
+        counts if gene_index.counts_loaded(here) else None,
+        here,
+        scope.cohort,
+        scope.cohort_size,
+        scope.cohort in gene_index.indexed_cohorts(here),
     )
     return _Prepared(
         list(df.columns),
@@ -475,7 +515,13 @@ def _render_config_panel(tab: _Tab, wf: Dict[str, Any], df: pl.DataFrame) -> Non
         _render_denovo_qc_warning(tab.denovo_qc, tab.on_open_qc)
     _config_card(wf)
     try:
-        prepared = _prepare(df, tab.store.data_dir, tab.family_id, tab.family)
+        prepared = _prepare(
+            df,
+            tab.store.data_dir,
+            tab.family_id,
+            tab.family,
+            _count_scope(tab.store, tab.cohort_name),
+        )
     except pl.exceptions.NoDataError:
         ui.label("No data available").classes("text-gray-500 italic mt-4")
         return
@@ -519,6 +565,7 @@ def _render_held_panel(tab: _Tab, wf: Dict[str, Any], n_rows: int) -> None:
     async def load_anyway() -> None:
         button.disable()
         scorer = get_gene_scorer()
+        scope = _count_scope(tab.store, tab.cohort_name)
         slot.clear()
         with slot:
             with ui.column().classes("w-full items-center py-16"):
@@ -533,7 +580,9 @@ def _render_held_panel(tab: _Tab, wf: Dict[str, Any], n_rows: int) -> None:
                     tab.store.data_dir,
                     tab.family_id,
                     tab.family,
+                    scope,
                     scorer,
+                    True,
                 )
                 if df is not None
                 else None

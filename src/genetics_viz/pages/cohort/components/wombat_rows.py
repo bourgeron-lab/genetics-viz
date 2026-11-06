@@ -166,11 +166,61 @@ def build_rows(
     return rows, unknown_consequences, unknown_clinvar
 
 
+#: The cohort and all-cohort columns, from the gene index's variant counts.
+COUNT_COLUMNS = ["cohort_carriers", "cohort_freq", "seen_families", "seen_cohorts"]
+
+
+def add_variant_counts(
+    rows: List[Dict[str, Any]],
+    counts: Optional[pl.DataFrame],
+    data_dir: str,
+    cohort: str,
+    cohort_size: int,
+    cohort_indexed: bool,
+) -> None:
+    """Set each row's :data:`COUNT_COLUMNS` from ``gene_index.variant_counts``.
+
+    ``counts`` holds the rows' variants in every directory the user may open;
+    ``None`` when the index is not loaded yet, which leaves the cells empty.
+    Carriers are individuals of the family's own cohort, the frequency over
+    ``cohort_size`` (its pedigree); both stay empty when the cohort has no
+    indexed table. Families count every cohort, this family included: it
+    carries the variant, its row says so, even when its cohort is not indexed.
+    """
+    if counts is None:
+        return
+    found: Dict[str, List[Dict[str, Any]]] = {}
+    for c in counts.iter_rows(named=True):
+        found.setdefault(c["variant"], []).append(c)
+    for row in rows:
+        here = found.get(row.get("Variant") or "", [])
+        own = [c for c in here if c["data_dir"] == data_dir and c["cohort"] == cohort]
+        others = [c for c in here if c not in own]
+        if cohort_indexed:
+            carriers = sum(c["carriers"] for c in own)
+            row["cohort_carriers"] = carriers
+            row["cohort_freq"] = (
+                round(carriers / cohort_size, 4) if cohort_size else None
+            )
+            own_families = max(sum(c["families"] for c in own), 1)
+        else:
+            row["cohort_carriers"] = row["cohort_freq"] = None
+            own_families = 1
+        by_cohort = {cohort: own_families}
+        for c in others:
+            by_cohort[c["cohort"]] = by_cohort.get(c["cohort"], 0) + c["families"]
+        row["seen_families"] = sum(by_cohort.values())
+        row["seen_cohorts"] = ", ".join(
+            f"{name} ({n})" for name, n in sorted(by_cohort.items())
+        )
+
+
 def wombat_columns(df_columns: List[str]) -> List[str]:
     """Every column the table can show: Variant and MOI first, the curation last.
 
-    ``df_columns`` are the aggregated table's. The coordinates are folded into Variant; ``n_grouped`` and the ``_`` columns
-    (the picked HGVS, for diagnostics) are not shown.
+    ``df_columns`` are the aggregated table's. The coordinates are folded into
+    Variant; ``n_grouped`` and the ``_`` columns (the picked HGVS, for
+    diagnostics) are not shown. The variant counts come before the curation.
     """
     return reorder_columns_by_group(
         ["Variant", "MOI"]
@@ -179,7 +229,9 @@ def wombat_columns(df_columns: List[str]) -> List[str]:
             for col in df_columns
             if col not in ["#CHROM", "POS", "REF", "ALT", "n_grouped"]
             and not col.startswith("_")
+            and col not in COUNT_COLUMNS
         ]
+        + COUNT_COLUMNS
         + ["Validation", "Diagnostic"]
     )
 
@@ -218,6 +270,9 @@ def table_columns(all_columns: List[str]) -> List[Dict[str, Any]]:
         }
         if col == "Validation":
             col_def["cellType"] = "validation"
+        elif col == "seen_families":
+            # The count links to the variant page: every carrier, every cohort
+            col_def.update(cellType="link", href="/variant/{Variant}")
         elif col == "Diagnostic":
             col_def["cellType"] = "diagnostic"
         elif col in _BADGE_COLUMNS:

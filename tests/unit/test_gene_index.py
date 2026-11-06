@@ -367,3 +367,77 @@ def test_tables_are_built_in_a_process_of_their_own(
         index.clear_gene_index()
         registry.init_all_data_stores([])
         config._app_config = None
+
+
+# ---------------------------------------------------------------------------
+# Variant counts (the family Wombat tables' cohort and family columns)
+# ---------------------------------------------------------------------------
+
+
+def test_variant_counts_by_cohort(indexed: Path):
+    here = str(indexed)
+    assert gene_index.counts_loaded(here)
+    counts = gene_index.variant_counts([SHANK3_DE_NOVO, "chr9:1:A:T"], [here])
+    got = sorted(
+        (r["cohort"], r["carriers"], r["families"])
+        for r in counts.iter_rows(named=True)
+    )
+    assert got == [("DEMO", 1, 1), ("OTHER", 1, 1)]
+    # Another directory's counts are not looked at unless asked for
+    assert gene_index.variant_counts([SHANK3_DE_NOVO], []).is_empty()
+    assert gene_index.indexed_cohorts(here) == {"DEMO", "OTHER"}
+
+
+def test_variant_counts_survive_a_restart(indexed: Path):
+    here = str(indexed)
+    gene_index.clear_gene_index()
+    assert gene_index.variant_counts([SHANK3_DE_NOVO], [here]).is_empty()
+    loaded = gene_index.variant_counts([SHANK3_DE_NOVO], [here], load=True)
+    assert len(loaded) == 2 and gene_index.counts_loaded(here)
+
+
+def test_add_variant_counts():
+    from genetics_viz.pages.cohort.components.wombat_rows import add_variant_counts
+
+    counts = pl.DataFrame(
+        {
+            "variant": ["v1", "v1", "v1"],
+            "cohort": ["A", "B", "B"],
+            "carriers": [3, 2, 1],
+            "families": [2, 2, 1],
+            "data_dir": ["/d1", "/d1", "/d2"],
+        }
+    )
+    rows = [{"Variant": "v1"}, {"Variant": "v2"}]
+    add_variant_counts(rows, counts, "/d1", "A", 30, True)
+    assert rows[0] == {
+        "Variant": "v1",
+        "cohort_carriers": 3,
+        "cohort_freq": 0.1,
+        "seen_families": 5,
+        "seen_cohorts": "A (2), B (3)",
+    }
+    # Not in the index: this family alone, no carrier counted in its cohort
+    assert (rows[1]["cohort_carriers"], rows[1]["seen_families"]) == (0, 1)
+    # A cohort without an indexed table: no cohort figures, this family counted
+    rows = [{"Variant": "v1"}]
+    add_variant_counts(rows, counts, "/d1", "C", 30, False)
+    assert rows[0]["cohort_carriers"] is None and rows[0]["seen_families"] == 6
+    rows = [{"Variant": "v1"}]
+    add_variant_counts(rows, None, "/d1", "A", 30, True)
+    assert rows == [{"Variant": "v1"}]
+
+
+def test_families_column_links_to_the_variant_page():
+    from genetics_viz.pages.cohort.components.wombat_rows import (
+        COUNT_COLUMNS,
+        table_columns,
+        wombat_columns,
+    )
+
+    assert wombat_columns(["#CHROM", "sample"])[-6:-2] == COUNT_COLUMNS
+    families = next(
+        c for c in table_columns(COUNT_COLUMNS) if c["id"] == "seen_families"
+    )
+    assert (families["cellType"], families["href"]) == ("link", "/variant/{Variant}")
+    assert families["sorting"] == "numerical"
