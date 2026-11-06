@@ -10,6 +10,7 @@ from genetics_viz.config_model import (
     save_config,
     verify_password,
 )
+from genetics_viz.config_model import ROLE_COLORS, ROLES
 from genetics_viz.utils.auth import check_auth, get_current_role, get_current_user
 
 
@@ -33,12 +34,8 @@ def profile_page() -> None:
                 ui.label(username).classes("text-2xl font-bold")
             with ui.row().classes("items-center gap-2"):
                 ui.label("Role:").classes("font-semibold")
-                role_colors = {
-                    "administrator": "red",
-                    "curator": "blue",
-                    "reader": "grey",
-                }
-                ui.badge(role, color=role_colors.get(role, "grey")).classes("text-sm")
+                ui.badge(role, color=ROLE_COLORS.get(role, "grey")).classes("text-sm")
+                ui.label(ROLES.get(role, "")).classes("text-sm text-gray-600")
 
         # Change password card
         with ui.card().classes("w-full p-6"):

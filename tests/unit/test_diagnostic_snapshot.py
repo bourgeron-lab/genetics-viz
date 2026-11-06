@@ -195,3 +195,47 @@ def test_saving_upgrades_an_older_file(tmp_path):
     [entry] = dl.load_family_diagnostics(tmp_path, "1001", ["S3"])
     assert entry["Diagnostic"] == "conflicting"
     assert [has_snapshot(r) for r in entry["_entries"]] == [True, False]
+
+
+def test_mane_is_not_given_to_another_transcripts_hgvs():
+    """#37: the MANE transcript has no c.; the one c. left is another's."""
+    row = {
+        "VEP_Feature": "ENST1.1,ENST2.1",
+        "VEP_HGVSc": "ENST2.1:c.-5A>G",
+        "VEP_MANE_SELECT": "NM_1.1",
+    }
+    snap = snv_snapshot(row, source="w")
+    assert (snap["Transcript"], snap["HGVSc"], snap["MANE"]) == (
+        "ENST2.1",
+        "c.-5A>G",
+        "",
+    )
+    one = snv_snapshot({**row, "VEP_Feature": "ENST2.1"}, source="w")
+    assert one["MANE"] == "NM_1.1"
+
+
+def test_vedette_snapshot_words_codes_and_tags_exonic_genes():
+    row = {
+        "sample": "S3", "GT": "0/1", "CN": 1, "site_id": "7",
+        "inheritance": "de novo (low conf.)", "_inheritance": "denovo_lowconf",
+        "genes": "RERE, ENO1", "_genes": ["RERE", "ENO1"], "_exonic": ["RERE"],
+    }  # fmt: skip
+    snap = vedette_snapshot(row, source="v")
+    assert snap["Segregation"] == "de novo (low confidence)"
+    assert snap["GeneOverlap"] == "RERE:exonic, ENO1:genic"
+    # A founder's "none" is no segregation, not a word in the report
+    founder = vedette_snapshot({**row, "_inheritance": "none"}, source="v")
+    assert founder["Segregation"] == ""
+    assert (
+        vedette_snapshot({**row, "_inheritance": "biparental"}, source="v")[
+            "Segregation"
+        ]
+        == "both"
+    )
+
+
+def test_wisecondorx_gene_overlap_is_stable():
+    from genetics_viz.utils.wisecondorx import gene_overlap
+
+    assert gene_overlap("B,A,C", "C,A") == "A:exonic,C:exonic,B:genic"
+    assert gene_overlap(None, "") == ""

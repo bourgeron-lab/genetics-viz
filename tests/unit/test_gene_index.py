@@ -191,7 +191,7 @@ def test_gene_keys_follow_previous_symbols(snapshot):
 
 
 def test_snv_rows_join_configs_and_curation(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     curation = gene_rows.load_curation(dirs)
     carriers = gene_rows.snv_carrier_rows(
         gene_index.lookup_gene("snv", ["SHANK3"]), curation, dirs, _scorer()
@@ -220,7 +220,7 @@ def test_snv_rows_join_configs_and_curation(indexed: Path):
 
 
 def test_str_rows_keep_genotypes_past_normal(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     frame = gene_index.lookup_gene("str", ["HTT"])
     rows = gene_rows.str_rows(frame, gene_rows.load_curation(dirs), dirs, _scorer())
     assert [(r["Sample"], r["Alleles"]) for r in rows] == [("S3", "18/40")]
@@ -228,7 +228,7 @@ def test_str_rows_keep_genotypes_past_normal(indexed: Path):
 
 
 def test_diagnostics_found_by_gene_including_an_sv_overlap(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     rows = gene_rows.diagnostic_rows(dirs, dirs, _scorer(), gene_keys={"SCN2A"})
     assert [(r["Type"], r["Diagnostic"], r["Cohort"]) for r in rows] == [
         ("SV", "uncertain", "DEMO")
@@ -237,7 +237,7 @@ def test_diagnostics_found_by_gene_including_an_sv_overlap(indexed: Path):
 
 
 def test_variant_validation_history_keeps_ignored_records(indexed: Path):
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     rows = gene_rows.validation_history(dirs, dirs, "SNV", SHANK3_DE_NOVO)
     assert [(r["Sample"], r["Validation"], r["Ignored"]) for r in rows] == [
         ("S9", "absent", ""),
@@ -252,7 +252,7 @@ def test_rows_of_another_data_directory_link_through_it(app_config, data_dir, tm
         [DataDirectoryConfig(path=str(data_dir)), DataDirectoryConfig(path=str(second))]
     )
     gene_index.refresh_all(wait=True)
-    dirs = gene_rows.data_dir_infos()
+    dirs = gene_rows.data_dir_infos(data.get_all_data_stores())
     carriers = gene_rows.snv_carrier_rows(
         gene_index.lookup_gene("snv", ["SHANK3"]),
         gene_rows.load_curation(dirs),
@@ -367,3 +367,77 @@ def test_tables_are_built_in_a_process_of_their_own(
         index.clear_gene_index()
         registry.init_all_data_stores([])
         config._app_config = None
+
+
+# ---------------------------------------------------------------------------
+# Variant counts (the family Wombat tables' cohort and family columns)
+# ---------------------------------------------------------------------------
+
+
+def test_variant_counts_by_cohort(indexed: Path):
+    here = str(indexed)
+    assert gene_index.counts_loaded(here)
+    counts = gene_index.variant_counts([SHANK3_DE_NOVO, "chr9:1:A:T"], [here])
+    got = sorted(
+        (r["cohort"], r["carriers"], r["families"])
+        for r in counts.iter_rows(named=True)
+    )
+    assert got == [("DEMO", 1, 1), ("OTHER", 1, 1)]
+    # Another directory's counts are not looked at unless asked for
+    assert gene_index.variant_counts([SHANK3_DE_NOVO], []).is_empty()
+    assert gene_index.indexed_cohorts(here) == {"DEMO", "OTHER"}
+
+
+def test_variant_counts_survive_a_restart(indexed: Path):
+    here = str(indexed)
+    gene_index.clear_gene_index()
+    assert gene_index.variant_counts([SHANK3_DE_NOVO], [here]).is_empty()
+    loaded = gene_index.variant_counts([SHANK3_DE_NOVO], [here], load=True)
+    assert len(loaded) == 2 and gene_index.counts_loaded(here)
+
+
+def test_add_variant_counts():
+    from genetics_viz.pages.cohort.components.wombat_rows import add_variant_counts
+
+    counts = pl.DataFrame(
+        {
+            "variant": ["v1", "v1", "v1"],
+            "cohort": ["A", "B", "B"],
+            "carriers": [3, 2, 1],
+            "families": [2, 2, 1],
+            "data_dir": ["/d1", "/d1", "/d2"],
+        }
+    )
+    rows = [{"Variant": "v1"}, {"Variant": "v2"}]
+    add_variant_counts(rows, counts, "/d1", "A", 30, True)
+    assert rows[0] == {
+        "Variant": "v1",
+        "cohort_carriers": 3,
+        "cohort_freq": 0.1,
+        "seen_families": 5,
+        "seen_cohorts": "A (2), B (3)",
+    }
+    # Not in the index: this family alone, no carrier counted in its cohort
+    assert (rows[1]["cohort_carriers"], rows[1]["seen_families"]) == (0, 1)
+    # A cohort without an indexed table: no cohort figures, this family counted
+    rows = [{"Variant": "v1"}]
+    add_variant_counts(rows, counts, "/d1", "C", 30, False)
+    assert rows[0]["cohort_carriers"] is None and rows[0]["seen_families"] == 6
+    rows = [{"Variant": "v1"}]
+    add_variant_counts(rows, None, "/d1", "A", 30, True)
+    assert rows == [{"Variant": "v1"}]
+
+
+def test_families_column_links_to_the_variant_page():
+    from genetics_viz.pages.cohort.components.wombat_rows import (
+        COUNT_COLUMNS,
+        table_columns,
+        wombat_columns,
+    )
+
+    assert wombat_columns(["#CHROM", "sample"])[-6:-2] == COUNT_COLUMNS
+    families = next(
+        c for c in table_columns(COUNT_COLUMNS) if c["id"] == "seen_families"
+    )
+    assert (families["cellType"], families["href"]) == ("link", "/variant/{Variant}")
+    assert families["sorting"] == "numerical"

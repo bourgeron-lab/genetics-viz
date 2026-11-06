@@ -4,6 +4,8 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from genetics_viz.utils.auth import can_write
+from genetics_viz.utils.tsv import set_ignore
 from genetics_viz.utils.validation_badges import build_validation_badge
 from genetics_viz.utils.validation_status import consensus
 
@@ -25,6 +27,27 @@ SV_VALIDATION_HEADER = [
 VEDETTE_VALIDATION_HEADER = SV_VALIDATION_HEADER + [
     "SiteId", "CallerVersion", "ModelVersion",
 ]  # fmt: skip
+
+
+def update_validation_ignore_status(
+    validation_file: Path,
+    family_id: str,
+    variant_key: str,
+    sample: str,
+    timestamp: str,
+    ignore_value: str,
+) -> bool:
+    """Ignore or restore one validation record, in place.
+
+    Raises ``PermissionError`` for a reader: an ignored validation leaves the
+    consensus, the badges, the filters and the statistics, so only curators
+    and administrators may set it, as for diagnostics.
+    """
+    if not can_write():
+        raise PermissionError("Only curators and administrators edit validations.")
+    return set_ignore(
+        validation_file, family_id, variant_key, sample, timestamp, ignore_value
+    )
 
 
 def validated_samples(

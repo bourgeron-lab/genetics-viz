@@ -51,7 +51,7 @@ from genetics_viz.utils.variant_rows import (
 )
 from genetics_viz.utils.vep import VEP_CONSEQUENCES
 from genetics_viz.utils.view_presets import select_preset_for_config
-from genetics_viz.utils.wisecondorx import infer_sv_type
+from genetics_viz.utils.wisecondorx import gene_overlap, infer_sv_type
 from genetics_viz.utils.wombat import aggregate_by_variant
 
 # Values that represent "unknown/missing" in pedigree files
@@ -639,6 +639,8 @@ def build_wcx_rows(
             row["GeneBadges"] = []
         # Synthetic "gene" column for unified display
         row["gene"] = ",".join(badge_labels(row["GeneBadges"]))
+        # Every gene with its overlap, for a diagnostic: the badges stop at six
+        row["_gene_overlap"] = gene_overlap(genic_str, row.get("exonic_symbol"))
 
         row["VEP_Gene_badges"] = []
 

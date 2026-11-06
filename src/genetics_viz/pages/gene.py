@@ -22,7 +22,7 @@ from genetics_viz.components.page_link import PageLink, safe_next
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils import gene_index
 from genetics_viz.utils.auth import check_auth
-from genetics_viz.utils.data import get_static_prefix_map
+from genetics_viz.utils.data import get_static_prefix_map, user_data_dirs
 from genetics_viz.utils.gene_rows import (
     data_dir_infos,
     diagnostic_rows,
@@ -64,8 +64,9 @@ def goto_page(dir_index: str, next: str = "/") -> Optional[RedirectResponse]:
     if redirect := check_auth():
         return redirect
     prefix = f"/data-{dir_index}"
+    allowed = user_data_dirs()
     for path_str, p in get_static_prefix_map().items():
-        if p == prefix:
+        if p == prefix and path_str in allowed:
             app.storage.user["data_dir"] = path_str
             break
     return RedirectResponse(safe_next(next) or "/")
@@ -153,11 +154,17 @@ def _index_line(on_finished: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _load_gene(keys: Set[str], scorer: Any) -> Dict[str, Any]:
-    """Every table's rows for the gene (blocking: Parquet scans, curation files)."""
-    dirs = data_dir_infos()
+def _load_gene(keys: Set[str], scorer: Any, allowed: List[str]) -> Dict[str, Any]:
+    """Every table's rows for the gene (blocking: Parquet scans, curation files).
+
+    ``allowed``: the data directories the user may open.
+    """
+    dirs = data_dir_infos(allowed)
     curation = load_curation(dirs)
-    frames = {kind: gene_index.lookup_gene(kind, keys) for kind in gene_index.KINDS}
+    frames = {
+        kind: gene_index.lookup_gene(kind, keys, data_dirs=dirs)
+        for kind in gene_index.KINDS
+    }
     carriers = snv_carrier_rows(frames["snv"], curation, dirs, scorer)
     return {
         "multi_dir": len(dirs) > 1,
@@ -199,7 +206,7 @@ def gene_page(symbol: str, request: Request) -> Optional[RedirectResponse]:
             content.clear()
             with content:
                 ui.spinner(size="lg")
-            data = await asyncio.to_thread(_load_gene, keys, scorer)
+            data = await asyncio.to_thread(_load_gene, keys, scorer, user_data_dirs())
             content.clear()
             with content:
                 _render_gene(data, link)
@@ -433,11 +440,13 @@ def _diagnostic_table(rows: List[Dict[str, Any]], multi: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _load_variant(query: gene_index.VariantQuery, scorer: Any) -> Dict[str, Any]:
-    dirs = data_dir_infos()
+def _load_variant(
+    query: gene_index.VariantQuery, scorer: Any, allowed: List[str]
+) -> Dict[str, Any]:
+    dirs = data_dir_infos(allowed)
     curation = load_curation(dirs)
     carriers = snv_carrier_rows(
-        gene_index.lookup_variant(query), curation, dirs, scorer
+        gene_index.lookup_variant(query, data_dirs=dirs), curation, dirs, scorer
     )
     # Validations and diagnostics are keyed by the table's own spelling of the
     # chromosome: try the typed one too, for data written without "chr".
@@ -480,7 +489,9 @@ def variant_page(query: str) -> Optional[RedirectResponse]:
             content.clear()
             with content:
                 ui.spinner(size="lg")
-            data = await asyncio.to_thread(_load_variant, parsed, scorer)
+            data = await asyncio.to_thread(
+                _load_variant, parsed, scorer, user_data_dirs()
+            )
             content.clear()
             with content:
                 _render_variant(data)

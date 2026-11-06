@@ -166,3 +166,18 @@ async def test_goto_switches_the_data_directory(user):
 async def test_pages_need_a_login(user):
     await user.open("/gene/SHANK3")
     await user.should_see("Sign in", kind=ui.button, retries=30)
+
+
+async def test_wombat_rows_count_carriers_and_families(user, monkeypatch):
+    """The family table's cohort and all-cohort columns, from the index."""
+    await login(user, "reader")
+    await _indexed()
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Wombat Configuration: default", retries=30)
+    shank3 = next(r for r in tables[0]["rows"] if r["Variant"] == SHANK3_DE_NOVO)
+    # S3 of DEMO's 6 individuals; families in DEMO, OTHER and data2's EXTRA
+    assert (shank3["cohort_carriers"], shank3["cohort_freq"]) == (1, 0.1667)
+    assert shank3["seen_families"] == 3
+    assert shank3["seen_cohorts"] == "DEMO (1), EXTRA (1), OTHER (1)"
+    assert "seen_families" in tables[0]["columns"]

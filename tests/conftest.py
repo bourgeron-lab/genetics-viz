@@ -42,6 +42,7 @@ USERS = {
     "admin": ("admin-pw", "administrator"),
     "curator": ("curator-pw", "curator"),
     "reader": ("reader-pw", "reader"),
+    "student": ("student-pw", "student"),
 }
 
 

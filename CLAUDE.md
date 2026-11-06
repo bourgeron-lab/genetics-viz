@@ -33,7 +33,7 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
 - **CI:**
   - `ci.yml` runs on PRs and on main: ruff, pytest on 3.12/3.13 with the lock, and a `package` job that tests the built wheel installed without the lock.
   - `upstream.yml` runs that unlocked install weekly and opens an issue when it fails. Production (`uvx`) ignores `uv.lock`, so an upstream release can break it with no commit here.
-  - `publish.yml` runs `ci.yml` first and checks the tag against the version.
+  - `publish.yml` runs `ci.yml` first, checks the tag against the version and the CHANGELOG, publishes to PyPI, then creates the GitHub release from the CHANGELOG section (`.github/scripts/release_notes.py`; title = the annotated tag's message). The release steps are in `DEPLOY.md`.
 - **Known issues are `xfail(strict=True)`:** once one is fixed, its test starts passing and fails the run until the marker is removed.
 
 ## Project Structure
@@ -50,7 +50,7 @@ src/genetics_viz/
     filters.py                    # Reusable filter menus (validation statuses, consequences, genesets), unknown-term warning
     sample_counts.py              # Stats dialogs: variants per member + cohort comparison
     gene_prefs_editor.py          # Profile card: GeneTrek tiers per geneset, live preview
-    header.py                     # Shared page header with data dir dropdown + user menu
+    header.py                     # Page header: menus, data dir dropdown, gene lookup, Help, user menu
     validation_loader.py          # Validation TSV loading and badge logic
     variant_dialog.py             # IGV variant inspection dialog
     sv_dialog.py                  # SV inspection dialog: orchestrates the panels below (SVViewState)
@@ -161,7 +161,8 @@ src/genetics_viz/
     sv_reads.py                   # pysam: read pairs/split reads classed by orientation
     sv_breakpoints.py             # Suggested breakpoints: clips/splits, pair interval, CN check
     sv_read_plots.py              # ECharts builder for the read-evidence panel
-    auth.py                       # Auth helpers: check_auth, is_authenticated, can_write, get_current_user
+    auth.py                       # Auth helpers: check_auth, is_authenticated, can_write, can_download; role and grants read live
+    access.py                     # What each role may fetch from /data-N (viewer files for readers and students)
     login_throttle.py             # Login backoff per client address and per username (in memory)
     clinvar.py                    # ClinVar color/display utilities (from YAML)
     cohort_state.py               # .ghfc-ngs.state.json parsing, drift, step rows
@@ -188,6 +189,8 @@ src/genetics_viz/
     column_names.py               # Column name/group/sorting/schema utilities
   templates/
     family_report.html            # The family report document (inline CSS, A4 print rules)
+  documentation/
+    snvs_validation_guide.md      # The variant dialog's ⓘ guide (inside the package, so the wheel ships it)
   static/
     css/data_table.css            # TanStack table styles
     js/data_table.js              # TanStack table JS bridge
@@ -222,18 +225,20 @@ Config files (YAML) are loaded once at module level.
 
 ### Authentication & Authorization
 - `check_auth()` returns `RedirectResponse("/login")` if not authenticated, `None` otherwise. Use at top of every page handler: `if redirect := check_auth(): return redirect`.
-- `get_current_user()` / `get_current_role()` read from `app.storage.user`.
-- `can_write()` returns `True` if role is `"curator"` or `"administrator"`.
-- `is_admin()` returns `True` if role is `"administrator"`.
+- **Roles** (`config_model.ROLES`, least rights first): `student` (a reader without downloads), `reader`, `curator`, `administrator`.
+- `get_current_user()` reads the session. `get_current_role()` and `granted_data_dirs()` read the **config's** entry for that user (`current_account()`), so an admin's change applies at the next request; `is_authenticated()` is false once the user is removed. Without a loaded config (unit tests), the session alone decides.
+- `can_write()` returns `True` if role is `"curator"` or `"administrator"`; `can_download()` for every role but `student` (and an unknown one); `is_admin()` for `"administrator"`.
+- **Students get no Download button**: `download_button` returns `None` and draws nothing for them, its senders check again, and Search's Save menu leaves out Download TSV.
 - **Passwords are salted scrypt** (`scrypt$N$r$p$salt$hash`, `config_model.hash_password`). Legacy unsalted SHA-512 hex digests still verify; the login rehashes them (`needs_rehash`) and saves the config, so no reset is needed. The test config writes SHA-512 on purpose, so every UI login exercises the migration.
 - **The login backs off** (`utils/login_throttle.py`): 5 free failures per username, 20 per client address, then a doubling wait capped at 15 min. Unknown usernames are counted and hashed like real ones. The address is what uvicorn sees: behind a proxy it is the proxy's unless uvicorn trusts its forwarded headers (`FORWARDED_ALLOW_IPS`). The check, the hash and the recorded failure run on the event loop without an await, so parallel attempts cannot all pass the check.
 - **Saves record `get_current_user()`**, never the readonly User box: the browser can still send any value for it.
-- Write operations (save validation/diagnostic) are gated with `can_write()` both at UI level (hide save button) and backend level (guard in save function).
+- Write operations are gated with `can_write()` both at UI level (hide or disable the control) and in the writer itself, which raises `PermissionError` for the caller to notify: validations and their Ignore switch (`update_validation_ignore_status`), diagnostics, notes, wave scores, STR/UPD validations, acknowledgements, report summaries, and the trash of a file to validate.
 
 ### Multi-Data-Directory
-- `get_data_store()` reads `app.storage.user['data_dir']` for per-user data directory selection. Same signature as before — all calling files work unchanged.
-- `get_static_prefix()` returns the per-user URL prefix (e.g., `/data-0`) for IGV static file URLs.
-- Data directories are served centrally through `data.mount_data_files()` (from `app.py` and `add_data_store`) — NOT in individual pages, and never with `nicegui_app.add_static_files()`, whose route checks nothing. The route answers 401 without a logged-in session, 404 once the directory is removed, supports Range requests (igv.js) and sends `Cache-Control: private`.
+- **A user may be granted some directories only** (`UserConfig.data_directories`, set on Admin → Users; empty means all). `user_data_dirs()` lists the user's registered ones; outside a request (poller, index) it lists them all. Use it, not `get_all_data_stores()`, for anything shown to a user; a thread gets the list taken on the event loop (the gene pages pass it to `data_dir_infos(paths)` and the index lookups' `data_dirs`).
+- `get_data_store()` and `get_static_prefix()` follow `current_data_dir()`: the session's `data_dir` if still granted, else the default directory if granted, else the user's first. `check_auth()` logs out a user left with none, and the login refuses them.
+- Data directories are served centrally through `data.mount_data_files()` (from `app.py` and `add_data_store`) — NOT in individual pages, and never with `nicegui_app.add_static_files()`, whose route checks nothing. The route answers 401 without a logged-in session, 404 once the directory is removed (or for a `..` path), 403 for a directory not granted, supports Range requests (igv.js) and sends `Cache-Control: private`.
+- **By role, the route serves readers and students only the files the pages load** (`utils/access.py`: CRAM/CRAI, bedgraphs and their `.tbi`, coverage bigWigs, REViewer images under `samples/`); curators and administrators get every file. A new browser-loaded file type must be added to `_VIEWER_FILES`, or readers get 403. Links to raw files (the somalier report) are shown to curators only.
 
 ### Sharded Directories
 - `samples/` and `families/` directories may use two-level sharding: `samples/<shard1>/<shard2>/<id>/`.
@@ -258,7 +263,7 @@ Config files (YAML) are loaded once at module level.
 - **Read through `read_roh_table`.** It forces the ID columns to strings. Left to inference, `family_id` comes out as an integer from numeric first rows and the read then fails on `AU-ANG-FER-MPX3`. It also strips the `chr` prefix, because the reference hotspots and the cytobands carry none.
 - **Reference first, fixed thresholds second.** Each person is compared with unrelated reference genomes of their `ref_group` (a region, or `ALL` = pooled), read from `v<bundle>/bundle/roh/reference_froh.tsv.gz` under `ancestry_reference_dir`, next to `hotspots.tsv.gz`. The fixed 0.03 line is crossed by 150 of 682 unrelated CSA reference genomes, so a threshold-only display would mislabel whole populations. A missing tier is a degraded state, as for the PCA panel.
 - **Thresholds and wording live only in `config/roh.yaml`.** They mirror ancestry-pgs constants (`roh.py`), which assign `froh_category` and `homozygosity_pattern` themselves; the app only words and draws them.
-- **Wording is role-dependent (`can_write()`).** Viewers get neutral grades and only pedigree-declared kinship pairs. Curators also get the relationship reading, the parents' kinship / expected F, and every pair. This is presentation only: any logged-in user, reader included, can fetch the raw files under the data prefix.
+- **Wording is role-dependent (`can_write()`).** Viewers get neutral grades and only pedigree-declared kinship pairs. Curators also get the relationship reading, the parents' kinship / expected F, and every pair. The raw files are not served to readers either (`utils/access.py`).
 - The cohort tab reads only `froh` (and `roh_windows` on demand, off-thread). The cohort `roh` and `roh_genes` tables are 31 and 93 MB.
 - Some pedigrees repeat a row, and a sample can sit in two families: key cohort rows by `(family_id, IID)`.
 - `DataTable` does not reorder its initial rows to match `initial_sorting` — sort the rows in Python as well.
@@ -298,6 +303,7 @@ Config files (YAML) are loaded once at module level.
 - **Wording is role-dependent, as for ROH**: viewers get `reader_label`, no evidence, an "Atypical" karyotype, and only pedigree-declared pairs (no parents' pair, no cross-family pairs in the tables). Presentation only.
 - **Hubs**: a sample with `HUB_MINIMUM` (5) or more cross-family relatives is outlined in the network. Third-degree pairs across families are mostly shared ancestry or admixture (KING reaches 0.08 for admixed unrelated pairs). The pipeline already leaves out the cross-family pairs of a sample with CHARR ≥ 0.05 and flags it `RELATEDNESS_UNRELIABLE` instead.
 - Elsewhere: the family header badge and member icons (family files only, read at page build), the cohort table's `Sample QC` column and filter, the home card's QC figure (off-thread, individuals by worst severity), and a warning above Wombat configs matching `de_?novo` when `denovo_risk` flags hit the family.
+- **A wrong relationship holds the de novo table back** (`denovo_gate`, a subset of `denovo_risk`: `NOT_PARENT`, `SAMPLE_UNRELATED_TO_FAMILY`, `SAMPLE_SWAP_CANDIDATE`, `MENDELIAN_INCONSISTENT`). Inherited variants then read as de novo by the ten thousand. The sub-tab is only counted (`count_rows`, no parse), shows the warning and **Load anyway** (`denovo-load-anyway`), which reads and builds the rows in `asyncio.to_thread` (`_prepare` with the scorer taken on the loop). An explained flag does not count; a confirmed one does.
 - **Curators acknowledge recurring flags** (MZ twins, declared consanguinity, adoption, tolerated contamination) in `validations/sampleqc.tsv`, through `utils/sample_qc_acks.py`:
   - Keyed by `FlagRow.ack_key`: code, the `family_id` cell (`"FA,FB"` for a cross-family pair), `sample_a`, `sample_b` (empty for one sample). No sites label, so a rerun keeps it. The family and cohort files write a family flag alike, so one key covers both pages. A UPD validation also acknowledges a `UPD_CANDIDATE` flag (see Uniparental Disomy); `load_acks` returns an `Acks` object, looked up by flag.
   - Append-only (`tsv.append_tsv_row`, under `flock`): status `explained` or `confirmed`, a note, user, timestamp. `withdrawn` takes it back; the last row of a key wins. Not a variant validation, so not in `VALIDATION_KINDS`. `save_flag_ack` / `withdraw_flag_ack` check `can_write()` themselves.
@@ -330,6 +336,7 @@ Curators send it to the referring clinician of each centre, who decides whether 
 ### Gene Index (gene and variant pages)
 `/gene/<symbol>` and `/variant/<chr:pos:ref:alt>` (header box `gene-lookup`) gather a gene or variant from every cohort of **every data directory**, through `utils/gene_index.py`.
 - **Only cohort-level tables are indexed**: Wombat results (`cohort_wombat_sources`), WisecondorX calls (not `Below threshold`, 87% of a table), the newest STR catalog's genotypes, the `roh_genes` table. A family without a cohort table is missing; that is said in the CHANGELOG, not worked around.
+- **Variant counts** (`variant_counts.parquet` per directory): the snv files summed up by variant and cohort (carriers with an alternate allele, families), rebuilt in the build process when an snv source changed, and held in memory (~30 MB for 900k variant × cohort pairs). The family Wombat tables read them on the event loop from memory only (`load=False`; the refresh loads them, the held de novo path loads off-thread): `cohort_carriers`, `cohort_freq` (over the cohort's pedigree), `seen_families` (every cohort the user may open, this family counted even when its cohort has no table; a link to `/variant/`) and `seen_cohorts` (`add_variant_counts`). A lookup by scanning the snv files took 4-6 s over SMB.
 - **One Parquet file per source, sorted by `gene_key`** (upper-cased symbol), under `gene_index_dir` (default `<config dir>/.gene_index/<sha1(data dir)>/`), with a `manifest.json` of each source's `(mtime, size)`, saved after every table. A refresh re-reads only changed sources, drops vanished ones, and runs off-thread at startup and every `refresh_minutes`. The manifest on disk is published before the check, so a restart serves lookups at once. The default sits next to the config file, which on the VM is on the share.
 - **Each table is built in a process of its own** (`_build`: spawn, `nice 10`, `oom_score_adj 1000`, half the cores through `POLARS_MAX_THREADS`). v0.26.0 built in the app: CANDY_mpx's WisecondorX table took 13.4 GB, the VM's OOM killer restarted the app every ~45 s, and each restart began the index again. Now a killed build is that table's error (`KILLED`), kept until its `(mtime, size)` changes; the app is untouched. Tests build in-process (`GENETICS_VIZ_GENE_INDEX_IN_PROCESS`, set by `conftest`); one slow test covers the child.
 - **Memory**: Wombat tables are scanned lazily (`scan_cohort_wombat`) and grouped per variant, sample and gene in the streaming engine (SPARK iWES-v3's 2 GB table: 14.7 GB eager, 4.6 GB now); a gene column is exploded apart from the other columns (`_row` join). Measure a new source's peak memory on the real tables before releasing: the share is mounted on the Mac.
@@ -396,7 +403,7 @@ Vedette is Alex's SV caller (github.com/darkxander/vedette), under active develo
 - `create_header(cohort_name)` must never be handed a name outside `store.cohorts` as the select's value — Quasar raises on it, which used to turn every unknown cohort in the URL into a 500 and left the pages' own "not found" branches unreachable.
 
 ### Cohort Run State
-Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: `<NAME>.params.yml` (parameters, including the `steps:` array) and `.ghfc-ngs.state.json` (the run record — schema documented in `COHORT_STATE.md` of bourgeron-lab/ghfc-ngs). The Parameters and Status tabs on the cohort page exist only when the params file does.
+Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: `<NAME>.params.yml` (parameters, including the `steps:` array) and `.ghfc-ngs.state.json` (the run record — schema documented in `COHORT_STATE.md` of bourgeron-lab/ghfc-ngs). The cohort page's Workflow tab (run status, parameters, params reference) exists only when the params file does.
 
 - **genetics-viz never measures completion.** The record already carries per-step `{done, total, pct}` with denominators from the pedigree. Re-deriving it would duplicate the pipeline's planning logic and drift from it, and it is unaffordable anyway: a cold existence check costs ~5.6 ms over the CIFS mount, so a 2700-sample cohort is about a minute of stat calls.
 - **A null step is unmeasured, not 0%.** `ancestry` is null unless requested, `extractor` always is. Render "not measured", never an empty bar.

@@ -125,14 +125,27 @@ async def test_standalone_family_qc_has_no_cohort_context(user):
     await user.should_see("open the family from its cohort", retries=10)
 
 
-async def test_denovo_config_carries_the_qc_warning(user):
+async def test_denovo_config_carries_the_qc_warning(user, monkeypatch):
+    """A wrong relationship holds the de novo table back until Load anyway."""
     await login(user, "curator")
+    tables = capture_tables(monkeypatch)
     await user.open("/cohort/DEMO/family/1001")
     await user.should_see("Wombat Configuration: default", retries=30)
     await user.should_not_see("de novo calls of this family may be unreliable")
+    built = len(tables)
     open_tab(user, "wombat-subtabs", "rare_denovo")
     await user.should_see("de novo calls of this family may be unreliable", retries=30)
     await user.should_see("Not the declared parent", retries=10)
+    await user.should_see(marker="denovo-held")
+    await user.should_see("Not loaded: 1 row.", retries=10)
+    assert len(tables) == built, "the held table is not built"
+    user.find(marker="denovo-load-anyway").click()
+    for _ in range(50):
+        if len(tables) > built:
+            break
+        await asyncio.sleep(0.1)
+    assert [r["sample"] for r in tables[-1]["rows"]] == ["S3"]
+    await user.should_not_see(marker="denovo-held")
 
 
 async def test_cohort_qc_panel_follows_the_filters(user, monkeypatch):
@@ -325,6 +338,8 @@ async def test_denovo_warning_drops_explained_flags_only(user, data_dir):
     open_tab(user, "wombat-subtabs", "rare_denovo")
     await user.should_see("de novo calls of this family may be unreliable", retries=30)
     await user.should_see("Confirmed issue by curator", retries=10)
+    # Contamination warns but does not hold the table back
+    await user.should_not_see(marker="denovo-held")
     warning = user.find(marker="denovo-qc-warning").elements.pop()
     lines = [e.text for e in warning.descendants() if isinstance(e, ui.label)]
     assert not any(line.startswith("Not the declared parent") for line in lines)

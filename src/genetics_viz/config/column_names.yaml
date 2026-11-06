@@ -365,3 +365,20 @@ svlen:
   name: "svlen"
   group: ""
   type: int
+# Family Wombat tables: from the gene index's variant counts (cohort tables)
+cohort_carriers:
+  name: "carriers"
+  type: int
+  group: "This cohort"
+cohort_freq:
+  name: "carrier freq."
+  type: float
+  group: "This cohort"
+seen_families:
+  name: "families"
+  type: int
+  group: "All cohorts"
+seen_cohorts:
+  name: "cohorts"
+  type: string
+  group: "All cohorts"

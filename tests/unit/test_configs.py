@@ -94,6 +94,8 @@ def test_sample_qc_vocabulary_covers_the_pipeline():
     assert {f["category"] for f in cfg["flags"].values()} <= categories
     assert cfg["karyotype_flag"]["category"] in categories
     assert set(cfg["denovo_risk"]) <= set(cfg["flags"])
+    # The gate holds back a table the warning already speaks for
+    assert set(cfg["denovo_gate"]) <= set(cfg["denovo_risk"])
     ranks = [s["rank"] for s in cfg["severities"].values()]
     assert set(cfg["severities"]) == {"high", "medium", "info"}
     assert ranks == sorted(ranks, reverse=True)

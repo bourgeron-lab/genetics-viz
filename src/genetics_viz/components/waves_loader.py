@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 from typing import Dict, List
 
+from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.tsv import append_tsv_row
 
 WAVES_HEADER = ["sample", "user", "timestamp", "wave"]
@@ -99,7 +100,12 @@ def save_wave_validation(
         user: User name
         wave: Wave score (0, 1, 2, or 3)
         timestamp: ISO timestamp string
+
+    Raises ``PermissionError`` for a reader: the wave form is shown to curators
+    and administrators only, and the writer checks again.
     """
+    if not can_write():
+        raise PermissionError("Only curators and administrators score waves.")
     append_tsv_row(
         validation_file_path, WAVES_HEADER, [sample_id, user, timestamp, wave]
     )

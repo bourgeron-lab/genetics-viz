@@ -11,6 +11,8 @@ presets:
       - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
+      - cohort_freq
+      - seen_families
       - sample
       - FID
       - sample_gt
@@ -28,6 +30,8 @@ presets:
       - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
+      - cohort_freq
+      - seen_families
       - nhomalt_genomes
       - sample
       - FID
@@ -46,6 +50,8 @@ presets:
       - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
+      - cohort_freq
+      - seen_families
       - MPC
       - REVEL
       - popEVE
@@ -67,6 +73,8 @@ presets:
       - MOI
       - VEP_CLIN_SIG
       - fafmax_faf95_max_genomes
+      - cohort_freq
+      - seen_families
       - SpliceAI_maxDS
       - SpliceAI_symbol
       - sample

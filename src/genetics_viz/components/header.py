@@ -10,7 +10,11 @@ from genetics_viz import __version__
 from genetics_viz.models import ChangeReport
 from genetics_viz.utils.auth import get_current_user, is_admin
 from genetics_viz.utils.change_monitor import check_now, subscribe
-from genetics_viz.utils.data import get_data_dir_options, get_data_store
+from genetics_viz.utils.data import (
+    current_data_dir,
+    get_data_dir_options,
+    get_data_store,
+)
 from genetics_viz.utils.gene_index import parse_variant
 
 
@@ -153,7 +157,8 @@ def create_header(cohort_name: str | None = None) -> None:
         with ui.row().classes("items-center gap-2"):
             # Data directory dropdown
             dir_options = get_data_dir_options()
-            current_dir = app.storage.user.get("data_dir", "")
+            # The directory pages use: the user's choice when still theirs
+            current_dir = current_data_dir()
 
             def on_data_dir_change(e) -> None:
                 app.storage.user["data_dir"] = e.value
@@ -172,7 +177,9 @@ def create_header(cohort_name: str | None = None) -> None:
 
             # Refresh button
             async def _manual_refresh() -> None:
-                reports = await check_now()
+                # Every directory is checked; only the user's own are named
+                mine = {o["value"] for o in dir_options}
+                reports = [r for r in await check_now() if r.data_dir in mine]
                 if any(r.has_changes for r in reports):
                     for r in reports:
                         for line in r.summary_lines():

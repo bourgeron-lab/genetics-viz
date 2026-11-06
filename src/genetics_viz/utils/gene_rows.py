@@ -30,7 +30,7 @@ from genetics_viz.components.validation_loader import (
 )
 from genetics_viz.utils.data import (
     get_all_data_stores,
-    get_data_dir_options,
+    dir_label,
     get_static_prefix_map,
 )
 from genetics_viz.utils.diagnostic_files import diagnostic_path, diagnostic_paths
@@ -62,14 +62,17 @@ class DirInfo:
     label: str
 
 
-def data_dir_infos() -> Dict[str, DirInfo]:
-    """Every registered data directory, by path."""
-    labels = {o["value"]: o["label"] for o in get_data_dir_options()}
+def data_dir_infos(paths: Iterable[str]) -> Dict[str, DirInfo]:
+    """The registered data directories among ``paths``, by path.
+
+    ``paths`` are the user's (``data.user_data_dirs``, taken on the event
+    loop): rows of another directory are neither read nor linked.
+    """
+    prefixes = get_static_prefix_map()
     return {
-        path: DirInfo(
-            path, prefix.rsplit("-", 1)[-1], labels.get(path, Path(path).name)
-        )
-        for path, prefix in get_static_prefix_map().items()
+        path: DirInfo(path, prefixes[path].rsplit("-", 1)[-1], dir_label(path))
+        for path in paths
+        if path in prefixes
     }
 
 

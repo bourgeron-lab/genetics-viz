@@ -7,8 +7,9 @@
 # Wording is role-dependent, as for ROH (config/roh.yaml): a NOT_PARENT or an
 # unexpected relatedness between the parents is a non-paternity or
 # consanguinity reading. Viewers get `reader_label` and the severity only;
-# curators get `label`, `explain` and the evidence string. The data directory
-# is served statically without an auth check, so this is presentation only.
+# curators get `label`, `explain` and the evidence string. Readers cannot fetch
+# the raw QC files either: the data route gives them only the files the pages
+# load (utils/access.py). The Download buttons follow the same wording.
 
 categories:
   # Display order, most actionable first. `reader_note: true` lets viewers read
@@ -240,6 +241,16 @@ denovo_risk:
   - SAMPLE_SWAP_CANDIDATE
   - DUPLICATE_OR_MZ
   - POSSIBLE_CONTAMINATION
+  - MENDELIAN_INCONSISTENT
+
+# Of those, the flags of a wrong relationship: every variant inherited from the
+# true parent then reads as de novo, and the table runs to tens of thousands of
+# rows. A de novo config of a family with one of them is not loaded until the
+# user asks ("Load anyway"). A flag acknowledged as explained does not count.
+denovo_gate:
+  - NOT_PARENT
+  - SAMPLE_UNRELATED_TO_FAMILY
+  - SAMPLE_SWAP_CANDIDATE
   - MENDELIAN_INCONSISTENT
 
 # Curator acknowledgements (validations/sampleqc.tsv): a flag reviewed once

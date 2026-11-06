@@ -7,6 +7,8 @@ must not touch ``app.storage`` (resolve the user's role before, at render).
 
 The content always reaches ``ui.download`` as bytes. NiceGUI's test client
 takes a ``str`` for a URL and fetches it.
+
+A student gets no button at all, and the senders check again.
 """
 
 import asyncio
@@ -16,6 +18,7 @@ from typing import Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.utils.auth import can_download
 from genetics_viz.utils.export import zip_texts
 
 logger = logging.getLogger(__name__)
@@ -49,7 +52,16 @@ async def _build(download: Download) -> Optional[str]:
         return None
 
 
+def _refused() -> bool:
+    if can_download():
+        return False
+    ui.notify("Downloads are not open to your account", type="negative")
+    return True
+
+
 async def _send(download: Download) -> None:
+    if _refused():
+        return
     text = await _build(download)
     if not _has_rows(text):
         ui.notify("Nothing to download", type="info")
@@ -58,6 +70,8 @@ async def _send(download: Download) -> None:
 
 
 async def _send_zip(downloads: List[Download], filename: Callable[[], str]) -> None:
+    if _refused():
+        return
     files: Dict[str, str] = {}
     for download in downloads:
         text = await _build(download)
@@ -73,12 +87,14 @@ def download_button(
     downloads: List[Download],
     mark: str,
     zip_filename: Optional[Callable[[], str]] = None,
-) -> ui.button:
+) -> Optional[ui.button]:
     """``Download``, a button for one export or a menu for several.
 
     ``mark`` tags the button; menu entries are tagged ``<mark>-<key>`` and the
-    zip entry ``<mark>-zip``.
+    zip entry ``<mark>-zip``. ``None``, and nothing drawn, for a student.
     """
+    if not can_download():
+        return None
     props = "outline color=blue size=sm"
     if len(downloads) == 1:
         only = downloads[0]

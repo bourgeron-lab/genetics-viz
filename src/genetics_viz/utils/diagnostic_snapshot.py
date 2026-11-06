@@ -128,7 +128,10 @@ def snv_snapshot(
         hgvsp = _single(row.get("VEP_HGVSp")) if hgvsc else ""
         if hgvsc:
             snap["Transcript"] = hgvsc.split(":", 1)[0] if ":" in hgvsc else ""
-            snap["MANE"] = _single(row.get("VEP_MANE_SELECT"))
+            # The MANE ID names this c. only when the row has one transcript:
+            # otherwise it may be the MANE's while the c. is another's (#37).
+            if "VEP_Feature" not in row or _single(row.get("VEP_Feature")):
+                snap["MANE"] = _single(row.get("VEP_MANE_SELECT"))
     snap["HGVSc"] = _strip_id(hgvsc) if hgvsc else ""
     snap["HGVSp"] = _strip_id(hgvsp) if hgvsp else ""
 
@@ -250,15 +253,42 @@ def vedette_snapshot(
         snap["Zygosity"] = "hom"
     elif any(a not in "0." for a in alleles):
         snap["Zygosity"] = "het"
-    snap["Segregation"] = _text(row.get("inheritance"))
+    snap["Segregation"] = _vedette_segregation(row)
     snap["Carriers"] = _carriers(
         str(row.get("site_id") or ""), str(row.get("sample") or ""), rows,
         lambda r: str(r.get("site_id") or ""), phenotypes, lambda r: r.get("GT"),
     )  # fmt: skip
-    snap["GeneOverlap"] = _text(row.get("genes"))
+    genes = row.get("_genes")
+    if genes:  # every gene, exonic ones tagged, as WisecondorX's are
+        exonic = set(row.get("_exonic") or [])
+        snap["GeneOverlap"] = ", ".join(
+            f"{g}:{'exonic' if g in exonic else 'genic'}" for g in genes
+        )
+    else:
+        snap["GeneOverlap"] = _text(row.get("genes"))
     cn = row.get("CN")
     snap["CopyNumber"] = "" if cn is None else str(cn)
     return snap
+
+
+#: Vedette's inheritance codes, in the words the report's segregation uses.
+_VEDETTE_SEGREGATION = {
+    "denovo": "de novo",
+    "denovo_lowconf": "de novo (low confidence)",
+    "maternal": "maternal",
+    "paternal": "paternal",
+    "biparental": "both",
+    "none": "",
+}
+
+
+def _vedette_segregation(row: Mapping[str, Any]) -> str:
+    """The carrier's inheritance code worded for the report; none for a founder."""
+    code = _text(row.get("_inheritance"))
+    if code:
+        return _VEDETTE_SEGREGATION.get(code, _text(row.get("inheritance")) or code)
+    label = _text(row.get("inheritance"))
+    return "" if label == "none" else label
 
 
 def snapshot_values(snapshot: Optional[Mapping[str, Any]]) -> List[str]:

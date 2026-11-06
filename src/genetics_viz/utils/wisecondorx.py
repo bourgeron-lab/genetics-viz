@@ -295,29 +295,10 @@ def parse_wisecondorx_bed_for_display(file_path: Path) -> Optional[pl.DataFrame]
 
     # Create gene column combining genic_symbol and exonic_symbol
     if "genic_symbol" in df.columns and "exonic_symbol" in df.columns:
-
-        def create_gene_list(genic: Any, exonic: Any) -> str:
-            genic_genes = (
-                set(str(genic).split(",")) if genic and str(genic) != "" else set()
-            )
-            exonic_genes = (
-                set(str(exonic).split(",")) if exonic and str(exonic) != "" else set()
-            )
-            genic_genes.discard("")
-            exonic_genes.discard("")
-
-            result = []
-            for gene in exonic_genes:
-                result.append(f"{gene.strip()}:exonic")
-            for gene in genic_genes:
-                if gene.strip() not in exonic_genes:
-                    result.append(f"{gene.strip()}:genic")
-            return ",".join(result) if result else ""
-
         df = df.with_columns(
             pl.struct(["genic_symbol", "exonic_symbol"])
             .map_elements(
-                lambda row: create_gene_list(row["genic_symbol"], row["exonic_symbol"]),
+                lambda row: gene_overlap(row["genic_symbol"], row["exonic_symbol"]),
                 return_dtype=pl.Utf8,
             )
             .alias("gene")
@@ -354,3 +335,22 @@ def parse_wisecondorx_bed_for_display(file_path: Path) -> Optional[pl.DataFrame]
             df = df.select(priority_cols + other_cols)
 
     return df
+
+
+def gene_overlap(genic: Any, exonic: Any) -> str:
+    """``A:exonic,B:genic``: exonic genes first, each group in name order.
+
+    Sorted, so a call's gene list (and the diagnostic saved from it) reads the
+    same at every load; built from sets, it changed between runs.
+    """
+
+    def names(cell: Any) -> List[str]:
+        if cell is None:
+            return []
+        return [g.strip() for g in str(cell).split(",") if g.strip()]
+
+    exonic_genes = sorted(set(names(exonic)))
+    genic_genes = sorted(set(names(genic)) - set(exonic_genes))
+    return ",".join(
+        [f"{g}:exonic" for g in exonic_genes] + [f"{g}:genic" for g in genic_genes]
+    )

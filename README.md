@@ -15,7 +15,7 @@ A web-based visualization tool for genetics cohort data, providing interactive a
 - ✅ **Variant Validation** - Track and validate genetic variants with inheritance patterns
 - 🔬 **IGV Integration** - Built-in IGV.js browser for sequence visualization (CRAM files)
 - 🌊 **WAVES Validation** - Specialized validation workflow for bedGraph/coverage analysis
-- 🔐 **Authentication & Authorization** - YAML-configured user accounts with role-based access (reader, curator, administrator)
+- 🔐 **Authentication & Authorization** - YAML-configured user accounts with role-based access (student, reader, curator, administrator) and data directories granted per user
 - 📂 **Multi-Data-Directory** - Switch between multiple data directories per user session via YAML config
 - 🛠️ **Admin Pages** - Manage users and data directories from the web interface
 - 🎨 **Modern UI** - Clean, responsive interface built with NiceGUI
@@ -94,14 +94,27 @@ data_directories:
 
 user_list:
   - username: admin
-    password: "<sha512-hex-digest>"
+    password: "<scrypt hash>"
     role: administrator
   - username: curator1
-    password: "<sha512-hex-digest>"
+    password: "<scrypt hash>"
     role: curator
   - username: viewer
-    password: "<sha512-hex-digest>"
+    password: "<scrypt hash>"
     role: reader
+  - username: student1
+    password: "<scrypt hash>"
+    role: student
+    # Optional: the data directories this user may open (default: all)
+    data_directories:
+      - /path/to/data/directory2
+
+# Optional. Seconds between checks of the data directories for changes.
+# poll_interval: 30
+
+# Optional. The FASTA the CRAMs were aligned to (GRCh38_GIABv3), for the SV
+# dialog's read evidence. Without it the CRAMs are not decoded in Python.
+# reference_fasta: /path/to/GRCh38_GIABv3.fa
 
 # Optional. Root of the ancestry/PGS references tree, holding one
 # v<bundle_version>/ subdirectory per reference bundle. The version to use is
@@ -135,17 +148,28 @@ for everyone.
 
 ### Generating Password Hashes
 
+Passwords are stored as salted scrypt. Add users from **Admin → Users**, which
+generates a password; for the first administrator, hash one with:
+
 ```bash
-echo -n "your_password" | sha512sum | cut -d' ' -f1
+uv run python -c "from genetics_viz.config_model import hash_password; print(hash_password('your_password'))"
 ```
+
+A legacy unsalted SHA-512 hex digest (`sha512sum`) still works, and is rehashed
+to scrypt at that user's first login.
 
 ### User Roles
 
 | Role | Permissions |
 |------|-------------|
-| **reader** | View all data, cannot save validations or diagnostics |
-| **curator** | View all data + save validations and diagnostics |
+| **student** | Browse, reader wording, no downloads (no Download buttons, no TSV from Search) |
+| **reader** | Browse and download the tables, cannot save validations or diagnostics |
+| **curator** | Reader + save validations and diagnostics, family reports, every raw data file |
 | **administrator** | All curator permissions + manage users and data directories |
+
+Readers and students fetch from a data directory only the files the pages load
+themselves (IGV tracks, REViewer images); curators and administrators may
+fetch any file. A user with `data_directories` sees only those directories.
 
 ### Initial Setup
 

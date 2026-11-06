@@ -20,16 +20,16 @@ from genetics_viz.utils.gene_scoring import (
 from genetics_viz.components.validation_loader import (
     SNV_VALIDATION_HEADER,
     parents_to_validate,
+    update_validation_ignore_status,
     validated_samples,
 )
-from genetics_viz.utils.tsv import append_tsv_rows, clean_tsv_field, set_ignore
+from genetics_viz.utils.tsv import append_tsv_rows, clean_tsv_field
 from genetics_viz.utils.sharding import get_sample_path, get_sample_url
 
-# Path to the validation guide markdown file
+#: The ⓘ button's guide. Inside the package, so the wheel ships it: the
+#: repository's ``documentation/`` is not installed by ``uvx``.
 VALIDATION_GUIDE_PATH = (
-    Path(__file__).parent.parent.parent.parent
-    / "documentation"
-    / "snvs_validation_guide.md"
+    Path(__file__).parent.parent / "documentation" / "snvs_validation_guide.md"
 )
 
 
@@ -754,14 +754,20 @@ def show_variant_dialog(
                                         ):
                                             def handler(e):
                                                 new_value = "1" if e.value else "0"
-                                                success = set_ignore(
-                                                    validation_file,
-                                                    family_id,
-                                                    variant_key,
-                                                    sample,
-                                                    ts,
-                                                    new_value,
-                                                )
+                                                try:
+                                                    success = (
+                                                        update_validation_ignore_status(
+                                                            validation_file,
+                                                            family_id,
+                                                            variant_key,
+                                                            sample,
+                                                            ts,
+                                                            new_value,
+                                                        )
+                                                    )
+                                                except PermissionError as ex:
+                                                    ui.notify(str(ex), type="negative")
+                                                    return
                                                 if success:
                                                     action = (
                                                         "ignored"
@@ -788,15 +794,22 @@ def show_variant_dialog(
 
                                             return handler
 
-                                        ignore_switch = ui.switch(
-                                            "Ignore",
-                                            value=is_ignored,
-                                            on_change=make_ignore_handler(
-                                                timestamp, is_ignored
-                                            ),
-                                        ).classes("text-xs")
+                                        ignore_switch = (
+                                            ui.switch(
+                                                "Ignore",
+                                                value=is_ignored,
+                                                on_change=make_ignore_handler(
+                                                    timestamp, is_ignored
+                                                ),
+                                            )
+                                            .classes("text-xs")
+                                            .mark("validation-ignore")
+                                        )
                                         if is_ignored:
                                             ignore_switch.props("color=grey")
+                                        # Readers see the state, not a control
+                                        if not can_write():
+                                            ignore_switch.props("disable")
 
             # Display validation history below the form
             load_validation_history()

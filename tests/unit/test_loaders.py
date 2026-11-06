@@ -8,10 +8,20 @@ from genetics_viz.components import validation_loader as vl
 from genetics_viz.components import waves_loader as wl
 
 
+#: Every curation writer here checks the role itself.
+_WRITERS = (dl, nl, vl, wl)
+
+
 @pytest.fixture(autouse=True)
 def curator(monkeypatch):
-    """Diagnostic writes check the role; these tests write as a curator."""
-    monkeypatch.setattr(dl, "can_write", lambda: True)
+    """Curation writes check the role; these tests write as a curator."""
+    for module in _WRITERS:
+        monkeypatch.setattr(module, "can_write", lambda: True)
+
+
+def as_reader(monkeypatch):
+    for module in _WRITERS:
+        monkeypatch.setattr(module, "can_write", lambda: False)
 
 
 def save_diag(
@@ -228,3 +238,41 @@ def test_waves(tmp_path):
     assert sorted(wl.load_waves_validations(path)["S1"]) == [1, 3]
     assert wl.get_wave_category([1, 3]) == "high wave"
     assert wl.get_wave_category(None) == "TODO" and wl.get_wave_category([7]) == "TODO"
+
+
+def test_readers_cannot_write_notes_or_waves(tmp_path, monkeypatch):
+    """#57: the writers refuse a reader, not only the hidden controls."""
+    notes = tmp_path / "notes.tsv"
+    waves = tmp_path / "waves.tsv"
+    nl.save_note(notes, "F1", "S1", "kept", "u", "t1")
+    as_reader(monkeypatch)
+    with pytest.raises(PermissionError):
+        nl.save_note(notes, "F1", "S1", "refused", "u", "t2")
+    with pytest.raises(PermissionError):
+        nl.delete_note(notes, "F1", "t1", "u")
+    with pytest.raises(PermissionError):
+        wl.save_wave_validation(waves, "S1", "u", 2, "t1")
+    assert [n["Message"] for n in nl.load_family_notes(notes, "F1")] == ["kept"]
+    assert not waves.exists()
+
+
+def test_validation_ignore_is_curator_only(tmp_path, monkeypatch):
+    """#54: ignoring or restoring an SNV validation checks the role."""
+    path = tmp_path / "snvs.tsv"
+    vl_row = ["F1", "chr1:1:A:T", "S1", "u", "", "present", "", "0", "t1"]
+    from genetics_viz.utils.tsv import append_tsv_row
+
+    append_tsv_row(path, vl.SNV_VALIDATION_HEADER, vl_row)
+    assert vl.update_validation_ignore_status(path, "F1", "chr1:1:A:T", "S1", "t1", "1")
+    as_reader(monkeypatch)
+    with pytest.raises(PermissionError):
+        vl.update_validation_ignore_status(path, "F1", "chr1:1:A:T", "S1", "t1", "0")
+    assert path.read_text().splitlines()[1].split("\t")[7] == "1"
+
+
+def test_validation_guide_ships_with_the_package():
+    """#56: the guide is read from the package, so an installed copy has it."""
+    from genetics_viz.components import variant_dialog
+
+    assert "genetics_viz" in variant_dialog.VALIDATION_GUIDE_PATH.parts
+    assert variant_dialog._load_validation_guide() != "Validation guide not found."

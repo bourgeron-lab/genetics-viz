@@ -17,6 +17,11 @@ Sources, all cohort-level (a cohort table is the union of its families'):
 
 A family with results but no cohort table is not indexed.
 
+Per data directory, ``variant_counts.parquet`` sums the ``snv`` files up by
+variant and cohort (carriers, families), rebuilt when one of them changes. It
+is held in memory (tens of MB) for the family Wombat tables' cohort frequency
+and "seen in N families" columns, which look up thousands of variants at once.
+
 Validations and diagnostics are not indexed: they are small, already one file
 per data directory, and change whenever a curator saves, so the pages read
 them live.
@@ -44,7 +49,7 @@ from dataclasses import dataclass, field, replace
 from multiprocessing import get_context
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import polars as pl
 import yaml
@@ -656,13 +661,17 @@ def refresh_store(store: DataStore) -> None:
         if changed:
             _ensure_dir(root)
             _save_manifest(root, data_dir, entries)
+        # A restart serves the counts left on disk while the sources are read
+        _load_counts(data_dir)
         for source in sources:
             # Saved after every table, so a restart keeps what was read.
             if _refresh_source(store, root, source, entries, status):
                 _save_manifest(root, data_dir, entries)
                 _manifests[data_dir] = dict(entries)
+                changed |= source.kind == "snv"
             status.done += 1
         _manifests[data_dir] = dict(entries)
+        _refresh_counts(root, data_dir, entries, rebuild=changed)
     finally:
         status.building = False
         status.checked_at = datetime.now()
@@ -745,9 +754,14 @@ def _build(source: Source, data_dir: Path, cohort: Cohort, path: Path) -> int:
     v0.26.0 it restarted the app every 45 s, each restart beginning the index
     again. The process gets half the cores, so the pages stay responsive.
     """
-    if os.environ.get(IN_PROCESS_ENV):
-        return _build_to_file(source, data_dir, cohort, path)
     light = replace(cohort, _dataframe=None)  # the pedigree frame is not needed
+    return _in_child(_build_to_file, source, data_dir, light, path)
+
+
+def _in_child(fn: Any, *args: Any) -> Any:
+    """``fn(*args)`` in a low-priority process (in this one in the tests)."""
+    if os.environ.get(IN_PROCESS_ENV):
+        return fn(*args)
     threads = str(max(1, (os.cpu_count() or 2) // 2))
     previous = os.environ.get("POLARS_MAX_THREADS")
     os.environ["POLARS_MAX_THREADS"] = threads  # read by the child's polars only
@@ -755,7 +769,7 @@ def _build(source: Source, data_dir: Path, cohort: Cohort, path: Path) -> int:
         with ProcessPoolExecutor(
             max_workers=1, mp_context=get_context("spawn"), initializer=_child_init
         ) as pool:
-            return pool.submit(_build_to_file, source, data_dir, light, path).result()
+            return pool.submit(fn, *args).result()
     except BrokenProcessPool as e:
         raise ChildKilled(KILLED) from e
     finally:
@@ -767,6 +781,141 @@ def _build(source: Source, data_dir: Path, cohort: Cohort, path: Path) -> int:
 
 class ChildKilled(RuntimeError):
     """The build process of a table died without an exception."""
+
+
+# ---------------------------------------------------------------------------
+# Variant counts (the family Wombat tables' cohort and family columns)
+# ---------------------------------------------------------------------------
+
+_COUNTS = "variant_counts.parquet"
+_COUNTS_SCHEMA = {
+    "variant": pl.Utf8,
+    "cohort": pl.Utf8,
+    "carriers": pl.UInt32,
+    "families": pl.UInt32,
+}
+#: Data directory path -> ((mtime, size), counts frame). Replaced whole.
+_counts: Dict[str, Tuple[Tuple[float, int], pl.DataFrame]] = {}
+
+
+def _counts_to_file(files: List[Path], path: Path) -> int:
+    """Carriers and families of every variant, by cohort, from the snv files.
+
+    A carrier is a sample whose genotype holds an alternate allele (or that
+    has none written: the row then is the carrier's). Streamed, sorted by
+    variant.
+    """
+    gt = pl.col("sample_gt")
+    if files:
+        frame = _collect(
+            pl.scan_parquet(files)
+            .select("variant", "cohort", "family_id", "sample", "sample_gt")
+            .filter(gt.is_null() | gt.str.contains("[1-9]"))
+            .unique(["variant", "cohort", "sample"])
+            .group_by("variant", "cohort")
+            .agg(
+                pl.len().cast(pl.UInt32).alias("carriers"),
+                pl.col("family_id").drop_nulls().n_unique().cast(pl.UInt32)
+                .alias("families"),
+            )
+        ).sort("variant", "cohort")  # fmt: skip
+    else:
+        frame = pl.DataFrame(schema=_COUNTS_SCHEMA)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    os.close(fd)
+    try:
+        frame.write_parquet(tmp, statistics=True)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return len(frame)
+
+
+def _refresh_counts(
+    root: Path, data_dir: str, entries: Dict[str, Dict[str, Any]], rebuild: bool
+) -> None:
+    """Rebuild a directory's counts when an snv file changed (or there are none)."""
+    path = root / _COUNTS
+    if rebuild or not path.exists():
+        files = [
+            root / e["file"]
+            for e in entries.values()
+            if e.get("kind") == "snv" and e.get("file")
+        ]
+        files = [f for f in files if f.exists()]
+        try:
+            _ensure_dir(root)
+            _in_child(_counts_to_file, files, path)
+        except Exception as e:  # noqa: BLE001 - the columns stay empty
+            logger.warning("Gene index: cannot count variants in %s: %s", root, e)
+            return
+    _load_counts(data_dir)
+
+
+def _load_counts(data_dir: str) -> Optional[pl.DataFrame]:
+    """A directory's counts, read into memory when the file changed (blocking)."""
+    root = _store_root(data_dir)
+    if root is None:
+        return None
+    path = root / _COUNTS
+    stat = _stat_key(path)
+    cached = _counts.get(data_dir)
+    if stat is None:
+        _counts.pop(data_dir, None)
+        return None
+    if cached is not None and cached[0] == stat:
+        return cached[1]
+    try:
+        frame = pl.read_parquet(path)
+    except (OSError, pl.exceptions.PolarsError) as e:
+        logger.warning("Gene index: cannot read %s: %s", path, e)
+        return cached[1] if cached else None
+    _counts[data_dir] = (stat, frame)
+    return frame
+
+
+def variant_counts(
+    variants: Iterable[str], data_dirs: Iterable[str], *, load: bool = False
+) -> pl.DataFrame:
+    """Carriers and families of each variant, by data directory and cohort.
+
+    Only what is in memory unless ``load`` (blocking: it may read the files):
+    the refresh loads every directory's counts, so the event loop never waits.
+    Columns: ``variant``, ``data_dir``, ``cohort``, ``carriers``, ``families``.
+    """
+    keys = sorted({v for v in variants if v})
+    frames: List[pl.DataFrame] = []
+    for data_dir in data_dirs:
+        if load:
+            counts = _load_counts(data_dir)
+        else:
+            cached = _counts.get(data_dir)
+            counts = cached[1] if cached else None
+        if counts is None or not keys:
+            continue
+        frames.append(
+            counts.filter(pl.col("variant").is_in(keys)).with_columns(
+                pl.lit(data_dir).alias("data_dir")
+            )
+        )
+    if not frames:
+        return pl.DataFrame(schema={**_COUNTS_SCHEMA, "data_dir": pl.Utf8})
+    return pl.concat(frames, how="vertical_relaxed")
+
+
+def counts_loaded(data_dir: str) -> bool:
+    """Whether a directory's variant counts are in memory."""
+    return data_dir in _counts
+
+
+def indexed_cohorts(data_dir: str, kind: str = "snv") -> Set[str]:
+    """The cohorts of a directory with at least one ``kind`` table indexed."""
+    return {
+        e.get("cohort") or ""
+        for e in (_manifests.get(data_dir) or {}).values()
+        if e.get("kind") == kind and e.get("file")
+    }
 
 
 def refresh_all(*, wait: bool = False) -> None:
@@ -809,9 +958,10 @@ def stop_gene_index() -> None:
 
 
 def clear_gene_index() -> None:
-    """Forget the in-memory manifests and status (tests). The files stay."""
+    """Forget the in-memory manifests, status and counts (tests). The files stay."""
     _manifests.clear()
     _status.clear()
+    _counts.clear()
 
 
 def index_status() -> IndexStatus:
@@ -853,10 +1003,22 @@ def _empty(kind: str) -> pl.DataFrame:
     return pl.DataFrame(schema={**SCHEMAS[kind], "data_dir": pl.Utf8})
 
 
-def _scan(kind: str, predicate: pl.Expr) -> pl.DataFrame:
-    """Rows of every data directory's ``kind`` files matching ``predicate``."""
+def _scan(
+    kind: str,
+    predicate: pl.Expr,
+    data_dirs: Optional[Iterable[str]] = None,
+    columns: Optional[List[str]] = None,
+) -> pl.DataFrame:
+    """Rows of the ``kind`` files matching ``predicate``.
+
+    ``data_dirs`` limits the scan to those directories (the user's own);
+    ``None`` reads every one. ``columns`` keeps only those (and ``data_dir``).
+    """
     frames: List[pl.DataFrame] = []
+    wanted = None if data_dirs is None else set(data_dirs)
     for path_str in get_all_data_stores():
+        if wanted is not None and path_str not in wanted:
+            continue
         root = _store_root(path_str)
         entries = _manifests.get(path_str) or {}
         if root is None:
@@ -870,23 +1032,27 @@ def _scan(kind: str, predicate: pl.Expr) -> pl.DataFrame:
         if not files:
             continue
         try:
-            found = pl.scan_parquet(files).filter(predicate).collect()
+            lf = pl.scan_parquet(files).filter(predicate)
+            found = (lf.select(columns) if columns else lf).collect()
         except (OSError, pl.exceptions.PolarsError) as e:
             # A file replaced by a refresh between the listing and the scan
             logger.warning("Gene index lookup in %s failed: %s", root, e)
             continue
         frames.append(found.with_columns(pl.lit(path_str).alias("data_dir")))
     if not frames:
-        return _empty(kind)
+        empty = _empty(kind)
+        return empty.select([*columns, "data_dir"]) if columns else empty
     return pl.concat(frames, how="vertical_relaxed")
 
 
-def lookup_gene(kind: str, gene_keys: Iterable[str]) -> pl.DataFrame:
+def lookup_gene(
+    kind: str, gene_keys: Iterable[str], data_dirs: Optional[Iterable[str]] = None
+) -> pl.DataFrame:
     """Every indexed row of ``kind`` on one of ``gene_keys`` (upper-cased symbols)."""
     keys = sorted({k.upper() for k in gene_keys if k})
     if not keys:
         return _empty(kind)
-    return _scan(kind, pl.col("gene_key").is_in(keys))
+    return _scan(kind, pl.col("gene_key").is_in(keys), data_dirs)
 
 
 @dataclass(frozen=True)
@@ -915,7 +1081,9 @@ def parse_variant(text: Optional[str]) -> Optional[VariantQuery]:
     )
 
 
-def lookup_variant(query: VariantQuery) -> pl.DataFrame:
+def lookup_variant(
+    query: VariantQuery, data_dirs: Optional[Iterable[str]] = None
+) -> pl.DataFrame:
     """Every indexed SNV row of the variant: one per carrier, table and gene."""
     return _scan(
         "snv",
@@ -923,4 +1091,5 @@ def lookup_variant(query: VariantQuery) -> pl.DataFrame:
         & (pl.col("pos") == query.pos)
         & (pl.col("ref") == query.ref)
         & (pl.col("alt") == query.alt),
+        data_dirs,
     )

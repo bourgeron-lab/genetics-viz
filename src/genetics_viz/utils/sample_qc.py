@@ -98,7 +98,7 @@ _CONFIG: Dict[str, Any] = _load_config()
 
 def _apply_config(config: Dict[str, Any]) -> None:
     global CATEGORIES, SEVERITIES, FLAGS, KARYOTYPE_FLAG, UNKNOWN_FLAG
-    global DENOVO_RISK, RELATIONSHIPS, PAIR_STATUS, KARYOTYPE_COLORS
+    global DENOVO_RISK, DENOVO_GATE, RELATIONSHIPS, PAIR_STATUS, KARYOTYPE_COLORS
     global THRESHOLDS, KARYOTYPE_POINTS, ACKNOWLEDGEMENT
     CATEGORIES = config.get("categories", {})
     SEVERITIES = config.get("severities", {})
@@ -106,6 +106,7 @@ def _apply_config(config: Dict[str, Any]) -> None:
     KARYOTYPE_FLAG = config.get("karyotype_flag", {})
     UNKNOWN_FLAG = config.get("unknown_flag", {})
     DENOVO_RISK = frozenset(config.get("denovo_risk", []))
+    DENOVO_GATE = frozenset(config.get("denovo_gate", []))
     RELATIONSHIPS = config.get("relationships", {})
     PAIR_STATUS = config.get("pair_status", {})
     KARYOTYPE_COLORS = config.get("karyotypes", {})
@@ -123,6 +124,7 @@ FLAGS: Dict[str, Dict[str, Any]] = {}
 KARYOTYPE_FLAG: Dict[str, Any] = {}
 UNKNOWN_FLAG: Dict[str, Any] = {}
 DENOVO_RISK: frozenset = frozenset()
+DENOVO_GATE: frozenset = frozenset()
 RELATIONSHIPS: Dict[str, Dict[str, str]] = {}
 PAIR_STATUS: Dict[str, Dict[str, str]] = {}
 KARYOTYPE_COLORS: Dict[str, str] = {}
@@ -616,6 +618,11 @@ def denovo_risk(flags: Iterable[FlagRow], samples: Iterable[str]) -> List[FlagRo
         for f in flags
         if f.code in DENOVO_RISK and any(s in wanted for s in f.samples)
     ]
+
+
+def gates_denovo(flags: Iterable[FlagRow]) -> List[FlagRow]:
+    """The flags of a wrong relationship, which hold a de novo table back."""
+    return [f for f in flags if f.code in DENOVO_GATE]
 
 
 def is_founder(row: Dict[str, Any]) -> bool:
