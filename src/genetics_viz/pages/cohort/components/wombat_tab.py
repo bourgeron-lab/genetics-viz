@@ -7,6 +7,7 @@ the rows and columns come from ``wombat_rows``, the filters from
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from genetics_viz.pages.cohort.components.wombat_filters import (
 from genetics_viz.pages.cohort.components.wombat_rows import (
     add_curation_status,
     build_rows,
+    count_rows,
     find_wombat_files,
     load_config_frame,
     presort_rows,
@@ -49,7 +51,13 @@ from genetics_viz.utils.export import export_filename, is_export_column, rows_to
 from genetics_viz.utils.gene_scoring import get_gene_scorer
 from genetics_viz.utils.genesets import geneset_sources
 from genetics_viz.utils.sample_counts import cohort_wombat_file
-from genetics_viz.utils.sample_qc import denovo_risk, flag_title, load_family_qc
+from genetics_viz.utils.sample_qc import (
+    FlagRow,
+    denovo_risk,
+    flag_title,
+    gates_denovo,
+    load_family_qc,
+)
 from genetics_viz.utils.sample_qc_acks import ack_summary, load_acks
 from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.utils.view_presets import VIEW_PRESETS, select_preset_for_config
@@ -72,10 +80,21 @@ def probe_wombat_data(data_dir: Path, family_id: str) -> bool:
 _DENOVO_CONFIG = re.compile(r"de_?novo", re.IGNORECASE)
 
 
-def _render_denovo_qc_warning(
-    store: Any, family_id: str, on_open_qc: Optional[Callable[[], None]]
-) -> None:
-    """A warning above a de novo table when sample QC doubts the trio.
+@dataclass
+class _DenovoQC:
+    """The family's Sample QC flags that make its de novo calls unreliable."""
+
+    risky: List[FlagRow]
+    acks: Any
+
+    @property
+    def gate(self) -> List[FlagRow]:
+        """The wrong relationships among them: the de novo table is held back."""
+        return gates_denovo(self.risky)
+
+
+def _denovo_qc(store: Any, family_id: str) -> Optional[_DenovoQC]:
+    """The flags that doubt the family's de novo calls, or ``None``.
 
     A parent who is not the parent, a swapped, duplicated or contaminated
     sample: each turns inherited variants into apparent de novo calls. Only the
@@ -89,9 +108,9 @@ def _render_denovo_qc_warning(
         qc = load_family_qc(store.data_dir, family_id)
     except Exception:
         logger.warning("Failed to read sample QC of %s", family_id, exc_info=True)
-        return
+        return None
     if qc is None:
-        return
+        return None
     acks = load_acks(store.data_dir)
     risky = [
         f
@@ -100,8 +119,13 @@ def _render_denovo_qc_warning(
         )
         if f not in acks or acks[f].status != "explained"
     ]
-    if not risky:
-        return
+    return _DenovoQC(risky, acks) if risky else None
+
+
+def _render_denovo_qc_warning(
+    qc: _DenovoQC, on_open_qc: Optional[Callable[[], None]]
+) -> None:
+    """A warning above a de novo table when sample QC doubts the trio."""
     show_detail = can_write()
     with (
         ui.row()
@@ -117,8 +141,8 @@ def _render_denovo_qc_warning(
                 "Sample QC: de novo calls of this family may be unreliable."
             ).classes("font-semibold text-amber-900")
             if show_detail:
-                for f in risky:
-                    ack = acks.get(f)
+                for f in qc.risky:
+                    ack = qc.acks.get(f)
                     ui.label(
                         f"{flag_title(f, True)} — {' – '.join(f.samples)}"
                         + (f": {f.evidence}" if f.evidence else "")
@@ -133,6 +157,51 @@ def _render_denovo_qc_warning(
             ui.button("Sample QC", on_click=on_open_qc).props(
                 "flat dense no-caps color=amber-10"
             )
+
+
+def _config_card(wf: Dict[str, Any]) -> None:
+    with ui.card().classes("w-full p-4"):
+        ui.label(f"Wombat Configuration: {wf['wombat_config']}").classes(
+            "text-lg font-semibold text-blue-700 mb-2"
+        )
+        with ui.row().classes("gap-4 mb-4"):
+            ui.label("VEP Config:").classes("font-semibold")
+            ui.badge(wf["vep_config"]).props("color=indigo")
+        with ui.row().classes("gap-4"):
+            ui.label("File Path:").classes("font-semibold")
+            ui.label(str(wf["file_path"])).classes("text-sm text-gray-600 font-mono")
+
+
+@dataclass
+class _Prepared:
+    """One config's rows, built (off the event loop when held back)."""
+
+    df_columns: List[str]
+    has_sample: bool
+    rows: List[Dict[str, Any]]
+    unknown_consequences: Any
+    unknown_clinvar: Any
+
+
+def _prepare(
+    df: pl.DataFrame,
+    data_dir: Path,
+    family_id: str,
+    family: Optional[Family],
+    gene_scorer: Any = None,
+) -> _Prepared:
+    """One row per variant and sample (other columns joined), badged."""
+    df = aggregate_by_variant(df)
+    rows, unknown_consequences, unknown_clinvar = build_rows(
+        df, data_dir, family_id, family, gene_scorer
+    )
+    return _Prepared(
+        list(df.columns),
+        "sample" in df.columns,
+        rows,
+        unknown_consequences,
+        unknown_clinvar,
+    )
 
 
 @dataclass
@@ -271,12 +340,29 @@ def render_wombat_tab(
     # tiers, GeneTrek's lists and the data directory's params/genesets/*.tsv
     available_genesets = geneset_sources(store.data_dir, get_gene_scorer())
 
+    # De novo configs of a family whose Sample QC finds a wrong relationship
+    # are held back: their table is mostly inherited variants read as de
+    # novo, tens of thousands of rows. Only counted, loaded on request.
+    denovo_qc = (
+        _denovo_qc(store, family_id)
+        if any(_DENOVO_CONFIG.search(wf["wombat_config"]) for wf in wombat_files)
+        else None
+    )
+    held_back = denovo_qc is not None and bool(denovo_qc.gate)
+
     # Pre-load DataFrames to determine which configs have data
     config_dfs: Dict[str, pl.DataFrame] = {}
+    held: Dict[str, int] = {}
     for wf in wombat_files:
+        cname = wf["wombat_config"]
+        if held_back and _DENOVO_CONFIG.search(cname):
+            n = count_rows(wf["file_path"])
+            if n:
+                held[cname] = n
+            continue
         df = load_config_frame(wf["file_path"])
         if df is not None:
-            config_dfs[wf["wombat_config"]] = df
+            config_dfs[cname] = df
 
     # Create subtabs — disable empty ones, add variant count badges
     with ui.tabs().classes("w-full").mark("wombat-subtabs") as wombat_subtabs:
@@ -284,30 +370,41 @@ def render_wombat_tab(
         for wf in wombat_files:
             cname = wf["wombat_config"]
             if cname in config_dfs:
-                label = f"{cname} ({len(config_dfs[cname])})"
+                tab = ui.tab(cname, label=f"{cname} ({len(config_dfs[cname])})")
+            elif cname in held:
+                tab = ui.tab(cname, label=f"{cname} ({held[cname]})", icon="warning")
+                tab.tooltip("Not loaded: Sample QC finds a wrong relationship")
             else:
-                label = cname
-            tab = ui.tab(cname, label=label)
-            if cname not in config_dfs:
-                tab.props("disable")
+                tab = ui.tab(cname, label=cname).props("disable")
             subtab_refs[cname] = tab
 
-    # Pick first enabled sub-tab as default
+    # Pick first enabled sub-tab as default, a loaded one before a held one
     first_active_name = next(
         (
             wf["wombat_config"]
             for wf in wombat_files
             if wf["wombat_config"] in config_dfs
         ),
-        wombat_files[0]["wombat_config"],
+        next(iter(held), wombat_files[0]["wombat_config"]),
     )
     # A shared link names the config to show, when it has variants
     default_cfg = first_active_name
     linked_cfg = link.get("wcfg") if link is not None else None
-    if linked_cfg in config_dfs:
+    if linked_cfg in config_dfs or linked_cfg in held:
         first_active_name = linked_cfg
     first_active = subtab_refs[first_active_name]
-    wombat_link = _WombatLink(link, default_cfg, first_active_name)
+    tab = _Tab(
+        store=store,
+        family_id=family_id,
+        cohort_name=cohort_name,
+        selected_members=selected_members,
+        data_table_refreshers=data_table_refreshers,
+        available_genesets=available_genesets,
+        family=family,
+        on_open_qc=on_open_qc,
+        link=_WombatLink(link, default_cfg, first_active_name),
+        denovo_qc=denovo_qc,
+    )
 
     # Each sub-tab is built the first time it is shown, as the family page's
     # tabs are: a config nobody opens costs nothing. Keyed by config name,
@@ -322,7 +419,7 @@ def render_wombat_tab(
         for wf in wombat_files:
             config_name = wf["wombat_config"]
             with ui.tab_panel(subtab_refs[config_name]):
-                if config_name not in config_dfs:
+                if config_name not in config_dfs and config_name not in held:
                     ui.label("No variants found").classes("text-gray-500 italic mt-4")
                     continue
 
@@ -331,19 +428,10 @@ def render_wombat_tab(
                         ui.spinner(size="xl", color="blue")
 
             def build_panel(wf=wf, config_name=config_name) -> None:
-                _render_config_panel(
-                    store,
-                    family_id,
-                    cohort_name,
-                    wf,
-                    config_dfs[config_name],
-                    selected_members,
-                    data_table_refreshers,
-                    available_genesets,
-                    family,
-                    on_open_qc,
-                    wombat_link,
-                )
+                if config_name in held:
+                    _render_held_panel(tab, wf, held[config_name])
+                else:
+                    _render_config_panel(tab, wf, config_dfs[config_name])
 
             unbuilt_panels[config_name] = (panel_slot, build_panel)
 
@@ -357,7 +445,7 @@ def render_wombat_tab(
             build_panel()
 
     def on_subtab_change(e) -> None:
-        wombat_link.show(e.args)
+        tab.link.show(e.args)
         if e.args in unbuilt_panels:
             ui.timer(0.1, lambda: build_subtab(e.args), once=True)
 
@@ -365,109 +453,171 @@ def render_wombat_tab(
     build_subtab(first_active_name)
 
 
-def _render_config_panel(
-    store: Any,
-    family_id: str,
-    cohort_name: str,
-    wf: Dict[str, Any],
-    df: pl.DataFrame,
-    selected_members: Dict[str, List[str]],
-    data_table_refreshers: List[Callable[[], None]],
-    available_genesets: List[Any],
-    family: Optional[Family],
-    on_open_qc: Optional[Callable[[], None]],
-    wombat_link: _WombatLink,
-) -> None:
+@dataclass
+class _Tab:
+    """What every config's sub-tab of one family needs."""
+
+    store: Any
+    family_id: str
+    cohort_name: str
+    selected_members: Dict[str, List[str]]
+    data_table_refreshers: List[Callable[[], None]]
+    available_genesets: List[Any]
+    family: Optional[Family]
+    on_open_qc: Optional[Callable[[], None]]
+    link: _WombatLink
+    denovo_qc: Optional[_DenovoQC]
+
+
+def _render_config_panel(tab: _Tab, wf: Dict[str, Any], df: pl.DataFrame) -> None:
     """One config's sub-tab: the config card, the filters and the table."""
-    config_name = wf["wombat_config"]
-    if _DENOVO_CONFIG.search(config_name):
-        _render_denovo_qc_warning(store, family_id, on_open_qc)
-
-    with ui.card().classes("w-full p-4"):
-        ui.label(f"Wombat Configuration: {config_name}").classes(
-            "text-lg font-semibold text-blue-700 mb-2"
-        )
-        with ui.row().classes("gap-4 mb-4"):
-            ui.label("VEP Config:").classes("font-semibold")
-            ui.badge(wf["vep_config"]).props("color=indigo")
-        with ui.row().classes("gap-4"):
-            ui.label("File Path:").classes("font-semibold")
-            ui.label(str(wf["file_path"])).classes("text-sm text-gray-600 font-mono")
-
-    # Display TSV content in a table
+    if _DENOVO_CONFIG.search(wf["wombat_config"]) and tab.denovo_qc is not None:
+        _render_denovo_qc_warning(tab.denovo_qc, tab.on_open_qc)
+    _config_card(wf)
     try:
-        # One row per variant and sample, other columns joined.
-        df = aggregate_by_variant(df)
-        all_rows, unknown_consequences, unknown_clinvar = build_rows(
-            df, store.data_dir, family_id, family
-        )
-        notify_unknown_terms(unknown_consequences, unknown_clinvar)
-
-        all_columns = wombat_columns(df.columns)
-        # Auto-select preset based on keywords, its columns that the data has
-        initial_preset = select_preset_for_config(config_name, VIEW_PRESETS)
-        filters, table_state = wombat_link.initial_state(config_name)
-        view = _ConfigView(
-            has_sample="sample" in df.columns,
-            all_rows=all_rows,
-            all_columns=all_columns,
-            selected_cols={
-                "value": [
-                    c for c in initial_preset.get("columns", []) if c in all_columns
-                ]
-            },
-            selected_preset={"name": initial_preset["name"]},
-            filters=filters,
-            table_state=table_state,
-            family=family,
-        )
-        wombat_link.register(config_name, view)
-
-        # Capture the client context for use in callbacks
-        from nicegui import context
-
-        page_client = context.client
-
-        with ui.column().classes("w-full"):
-
-            def filters_changed() -> None:
-                # A filter change shows the first page again
-                view.table_state["page"] = 0
-                render_data_table.refresh()
-                wombat_link.changed(config_name)
-
-            render_filter_panel(
-                view.filters, available_genesets, on_change=filters_changed
-            )
-
-            @ui.refreshable
-            def render_data_table() -> None:
-                _render_table(
-                    view,
-                    store,
-                    family_id,
-                    cohort_name,
-                    wf,
-                    selected_members,
-                    available_genesets,
-                    on_curation_saved=refresh_curation,
-                    on_table_change=lambda: wombat_link.changed(config_name),
-                )
-
-            def refresh_curation() -> None:
-                """Reload validation + diagnostic data for all rows and refresh table."""
-                add_curation_status(view.all_rows, store.data_dir, family_id)
-                with page_client:
-                    for rfn in data_table_refreshers:
-                        rfn()
-
-            data_table_refreshers.append(render_data_table.refresh)
-            render_data_table()
-
+        prepared = _prepare(df, tab.store.data_dir, tab.family_id, tab.family)
     except pl.exceptions.NoDataError:
         ui.label("No data available").classes("text-gray-500 italic mt-4")
+        return
     except Exception as e:
         ui.label(f"Error reading file: {e}").classes("text-red-500 mt-4")
+        return
+    _render_prepared(tab, wf, prepared)
+
+
+def _rows(n: int) -> str:
+    return f"{n:,} row" + ("" if n == 1 else "s")
+
+
+def _render_held_panel(tab: _Tab, wf: Dict[str, Any], n_rows: int) -> None:
+    """A de novo config held back by Sample QC: the warning, and Load anyway."""
+    assert tab.denovo_qc is not None
+    _render_denovo_qc_warning(tab.denovo_qc, tab.on_open_qc)
+    _config_card(wf)
+    slot = ui.column().classes("w-full")
+    with slot:
+        with (
+            ui.row()
+            .classes(
+                "w-full items-center gap-3 p-3 mt-2 rounded border border-gray-300"
+                " bg-gray-50 no-wrap"
+            )
+            .mark("denovo-held")
+        ):
+            ui.icon("pause_circle", color="grey-8", size="sm")
+            ui.label(
+                f"Not loaded: {_rows(n_rows)}. Sample QC finds a wrong"
+                " relationship in this family, so most of these calls are likely"
+                " inherited variants read as de novo."
+            ).classes("text-sm text-gray-800 flex-1 min-w-0")
+            button = (
+                ui.button("Load anyway", icon="download")
+                .props("outline color=grey-9 size=sm no-caps")
+                .mark("denovo-load-anyway")
+            )
+
+    async def load_anyway() -> None:
+        button.disable()
+        scorer = get_gene_scorer()
+        slot.clear()
+        with slot:
+            with ui.column().classes("w-full items-center py-16"):
+                ui.spinner(size="xl", color="blue")
+                ui.label(f"Loading {_rows(n_rows)}…").classes("text-gray-500")
+        try:
+            df = await asyncio.to_thread(load_config_frame, wf["file_path"])
+            prepared = (
+                await asyncio.to_thread(
+                    _prepare,
+                    df,
+                    tab.store.data_dir,
+                    tab.family_id,
+                    tab.family,
+                    scorer,
+                )
+                if df is not None
+                else None
+            )
+        except Exception as e:
+            logger.warning("Failed to load %s", wf["file_path"], exc_info=True)
+            slot.clear()
+            with slot:
+                ui.label(f"Error reading file: {e}").classes("text-red-500 mt-4")
+            return
+        slot.clear()
+        with slot:
+            if prepared is None:
+                ui.label("No variants found").classes("text-gray-500 italic mt-4")
+            else:
+                _render_prepared(tab, wf, prepared)
+
+    button.on_click(load_anyway)
+
+
+def _render_prepared(tab: _Tab, wf: Dict[str, Any], prepared: _Prepared) -> None:
+    """The filters and the table of a config whose rows are built."""
+    config_name = wf["wombat_config"]
+    wombat_link = tab.link
+    notify_unknown_terms(prepared.unknown_consequences, prepared.unknown_clinvar)
+
+    all_columns = wombat_columns(prepared.df_columns)
+    # Auto-select preset based on keywords, its columns that the data has
+    initial_preset = select_preset_for_config(config_name, VIEW_PRESETS)
+    filters, table_state = wombat_link.initial_state(config_name)
+    view = _ConfigView(
+        has_sample=prepared.has_sample,
+        all_rows=prepared.rows,
+        all_columns=all_columns,
+        selected_cols={
+            "value": [c for c in initial_preset.get("columns", []) if c in all_columns]
+        },
+        selected_preset={"name": initial_preset["name"]},
+        filters=filters,
+        table_state=table_state,
+        family=tab.family,
+    )
+    wombat_link.register(config_name, view)
+
+    # Capture the client context for use in callbacks
+    from nicegui import context
+
+    page_client = context.client
+
+    with ui.column().classes("w-full"):
+
+        def filters_changed() -> None:
+            # A filter change shows the first page again
+            view.table_state["page"] = 0
+            render_data_table.refresh()
+            wombat_link.changed(config_name)
+
+        render_filter_panel(
+            view.filters, tab.available_genesets, on_change=filters_changed
+        )
+
+        @ui.refreshable
+        def render_data_table() -> None:
+            _render_table(
+                view,
+                tab.store,
+                tab.family_id,
+                tab.cohort_name,
+                wf,
+                tab.selected_members,
+                tab.available_genesets,
+                on_curation_saved=refresh_curation,
+                on_table_change=lambda: wombat_link.changed(config_name),
+            )
+
+        def refresh_curation() -> None:
+            """Reload validation + diagnostic data for all rows and refresh table."""
+            add_curation_status(view.all_rows, tab.store.data_dir, tab.family_id)
+            with page_client:
+                for rfn in tab.data_table_refreshers:
+                    rfn()
+
+        tab.data_table_refreshers.append(render_data_table.refresh)
+        render_data_table()
 
 
 def _render_table(

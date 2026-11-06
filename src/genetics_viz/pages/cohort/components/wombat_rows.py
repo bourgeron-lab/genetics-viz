@@ -118,20 +118,26 @@ def add_curation_status(
 
 
 def build_rows(
-    df: pl.DataFrame, data_dir: Path, family_id: str, family: Optional[Family]
+    df: pl.DataFrame,
+    data_dir: Path,
+    family_id: str,
+    family: Optional[Family],
+    gene_scorer: Any = None,
 ) -> Tuple[List[Dict[str, Any]], Set[str], Set[str]]:
     """The table rows of one config, with their badges, curation status and MOI.
 
     ``df`` is the config's table after ``wombat.aggregate_by_variant``.
     Returns the rows, then the VEP consequences and ClinVar terms the colour
-    maps lack (for ``filters.notify_unknown_terms``). Reads the user's gene
-    scorer, so call it on the event loop.
+    maps lack (for ``filters.notify_unknown_terms``). Without ``gene_scorer``
+    it reads the user's, so call it on the event loop; with one taken there
+    first, it can run in a thread.
     """
     rows = df.to_dicts()
     unknown_consequences: Set[str] = set()
     unknown_clinvar: Set[str] = set()
     # Gene badges, coloured by the user's GeneTrek tiers
-    gene_scorer = get_gene_scorer()
+    if gene_scorer is None:
+        gene_scorer = get_gene_scorer()
     for row in rows:
         row["Variant"] = variant_key(row)
         add_vep_badges(row, unknown_consequences, unknown_clinvar)
@@ -272,3 +278,13 @@ def presort_rows(
             key=lambda r: (r.get(sort_field) is None, r.get(sort_field, "")),
             reverse=desc,
         )
+
+
+def count_rows(path: Path) -> int:
+    """Data lines of a table, read as bytes: a count without parsing it."""
+    try:
+        with open(path, "rb") as f:
+            lines = sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+    return max(lines - 1, 0)
