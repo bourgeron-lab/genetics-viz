@@ -371,8 +371,11 @@ def _cnv_legend() -> None:
 
 
 def _sv_gene_and_impact(row_data: Dict[str, Any]) -> tuple[str, str]:
-    """An SV row's genes and GAIN/LOSS, as its diagnostic records them."""
-    gene_str = row_data.get("gene", "")
+    """An SV row's genes and GAIN/LOSS, as its diagnostic records them.
+
+    Every gene the call overlaps (``_gene_overlap``), not the six badges.
+    """
+    gene_str = row_data.get("_gene_overlap") or row_data.get("gene", "")
     gene_syms = []
     if gene_str and gene_str != "-":
         for gp in str(gene_str).split(","):
@@ -385,12 +388,10 @@ def _sv_gene_and_impact(row_data: Dict[str, Any]) -> tuple[str, str]:
     return gene, impact
 
 
-def _diagnostic_details(
-    res: SearchResults, sent: Dict[str, Any], family_id: str
-) -> Dict[str, str]:
-    """The snapshot saved with a diagnostic, from the Python row of ``sent``."""
+def _python_row(res: SearchResults, sent: Dict[str, Any]) -> Dict[str, Any]:
+    """The Python row of a row sent back by the table, else the one sent."""
     source_type = sent.get("_source_type", "wombat")
-    row = next(
+    return next(
         (
             r
             for r in res.rows
@@ -400,8 +401,19 @@ def _diagnostic_details(
         ),
         sent,
     )
+
+
+def _diagnostic_details(
+    res: SearchResults, sent: Dict[str, Any], family_id: str
+) -> Dict[str, str]:
+    """The snapshot saved with a diagnostic, from the Python row of ``sent``."""
+    source_type = sent.get("_source_type", "wombat")
+    row = _python_row(res, sent)
     if source_type == "wisecondorx":
-        return wisecondorx_snapshot(row, source=f"WisecondorX ({res.cohort_name})")
+        return wisecondorx_snapshot(
+            {**row, "gene": row.get("_gene_overlap") or row.get("gene")},
+            source=f"WisecondorX ({res.cohort_name})",
+        )
     family = {
         sid: ped for sid, ped in res.pedigree.items() if ped.get("FID") == family_id
     }
@@ -434,8 +446,8 @@ def _on_row_action(res: SearchResults, e: Dict[str, Any], refresh_all_rows) -> N
 
     if action == "open_diagnostic":
         if source_type == "wisecondorx":
-            # SV diagnostic
-            gene, impact = _sv_gene_and_impact(row_data)
+            # SV diagnostic, its genes from the Python row
+            gene, impact = _sv_gene_and_impact(_python_row(res, row_data))
             show_diagnostic_dialog(
                 details=_diagnostic_details(res, row_data, family_id),
                 family_id=family_id,

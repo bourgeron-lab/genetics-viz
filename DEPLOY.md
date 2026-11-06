@@ -1,5 +1,8 @@
 # GitHub Repository Setup and PyPI Publishing Guide
 
+For a routine release, see [Releasing](#releasing-every-version). Steps 1-6
+below are the one-time setup from January 2026.
+
 ## Step 1: Initialize Git Repository
 
 ```bash
@@ -76,22 +79,31 @@ The GitHub Action will automatically:
 2. Watch the "Publish to PyPI" workflow run
 3. Once complete, your package will be available at: https://pypi.org/project/genetics-viz/
 
-## Future Releases
+## Releasing (every version)
 
-For subsequent releases:
+A release is a tag; everything after the push is automatic up to PyPI and the
+GitHub release. Production then needs the **update** button.
 
-1. Update version in `pyproject.toml`
-2. Commit changes:
+1. On `main`, after the PRs are merged: bump `version` in `pyproject.toml`,
+   run `uv lock`, and move the CHANGELOG's notes under `## [X.Y.Z] - <date>`.
+   The workflow refuses a tag without a CHANGELOG entry.
+2. Before tagging, check that the weekly upstream issue is not open: production
+   (`uvx`) ignores `uv.lock`.
+3. Commit (`release: vX.Y.Z`), then tag with a title and push both:
    ```bash
-   git add pyproject.toml
-   git commit -m "Bump version to 0.2.0"
+   git tag -a vX.Y.Z -m "vX.Y.Z — Short title"
+   git push origin main vX.Y.Z
    ```
-3. Create and push tag:
-   ```bash
-   git tag v0.2.0
-   git push origin main
-   git push origin v0.2.0
-   ```
+4. `publish.yml` runs the whole CI, checks the tag against the version and the
+   CHANGELOG, publishes to PyPI, then creates the GitHub release: the tag's
+   message as title, the CHANGELOG section as notes
+   (`.github/scripts/release_notes.py`).
+5. Production: press **update** on the GitLab pipeline of the operations
+   repository (gitlab.pasteur.fr `ghfc/ghfc-genetics`, `/-/pipelines/latest`).
+   The VM installs from PyPI with `uvx`.
+
+Releases v0.16.0 to v0.30.0 were published without a GitHub release (the job
+did not exist); theirs were created afterwards from the CHANGELOG.
 
 ## Version Numbering
 

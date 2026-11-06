@@ -498,7 +498,9 @@ async def test_sv_diagnostic_saved_from_search_is_read_back(
     assert lines[1].split("\t")[:2] == ["1001", "chr2:165114001-165316000:del"]
     saved = dict(zip(lines[0].split("\t"), lines[1].split("\t")))
     assert saved["Source"] == "WisecondorX (DEMO)"
-    assert saved["GeneOverlap"] and saved["CopyNumber"]
+    # Every gene with its overlap (#37), not the badges' labels
+    assert (saved["Gene"], saved["GeneOverlap"]) == ("SCN2A", "SCN2A:exonic")
+    assert saved["CopyNumber"]
     for _ in range(100):
         if len(tables) > built:
             break

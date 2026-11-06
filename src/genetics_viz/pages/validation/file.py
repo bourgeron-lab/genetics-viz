@@ -544,12 +544,29 @@ async def validation_file_page(filename: str) -> None:
                                 vtype = "snv"
 
                             source = f"File to validate {filename}.tsv"
+                            members = _family_members(store, family_id)
                             show_diagnostic_dialog(
-                                # Only the columns the file happens to have.
+                                # Only the columns the file happens to have,
+                                # the family's phenotypes and the sample's sex
+                                # from the pedigree (a male's chrX is hemi).
                                 details=(
                                     wisecondorx_snapshot(row_data, source=source)
                                     if vtype == "sv"
-                                    else snv_snapshot(row_data, source=source)
+                                    else snv_snapshot(
+                                        row_data,
+                                        source=source,
+                                        phenotypes={
+                                            m.sample_id: m.phenotype for m in members
+                                        },
+                                        sex=next(
+                                            (
+                                                m.sex
+                                                for m in members
+                                                if m.sample_id == sample_id
+                                            ),
+                                            None,
+                                        ),
+                                    )
                                 ),
                                 family_id=family_id,
                                 variant_key=variant_str,
@@ -689,3 +706,12 @@ async def validation_file_page(filename: str) -> None:
             ui.label(traceback.format_exc()).classes(
                 "text-red-500 text-xs font-mono whitespace-pre"
             )
+
+
+def _family_members(store: Any, family_id: str) -> List[Any]:
+    """The pedigree members of ``family_id``, from whichever cohort has it."""
+    for cohort in store.cohorts.values():
+        family = cohort.families.get(family_id)
+        if family is not None:
+            return list(family.samples)
+    return []

@@ -5,6 +5,33 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Data files by directory and role.** `/data-<N>` only checked that a session existed, so any logged-in user could read every data directory's files, curation and cohort tables included. Now:
+  - an administrator can grant each user a list of data directories (Admin → Users, `data_directories` in the config); none means every one. The header, the default directory, links to another directory (`/goto/<N>`), the gene and variant pages and the refresh notices follow the grants, and a user left with none cannot log in;
+  - readers and students get only the files the pages load themselves (IGV alignments, coverage bedgraphs and bigWigs, REViewer images): 403 for any table, curation file or QC file. Curators and administrators keep every file. The role wording of the tabs is no longer presentation only;
+  - the role and the grants are read from the config at each request: a role change applies at once, and a removed user's session stops working.
+- **Student role**: a reader without downloads (no Download buttons, no TSV from Search), for teaching (the GEM course).
+- **Wombat de novo tables are held back when Sample QC finds a wrong relationship.** With a `NOT_PARENT`, `SAMPLE_UNRELATED_TO_FAMILY`, `SAMPLE_SWAP_CANDIDATE` or `MENDELIAN_INCONSISTENT` flag (`denovo_gate` in `sample_qc.yaml`), inherited variants read as de novo by the ten thousand. The de novo sub-tab then shows the QC warning and its row count, and loads only on **Load anyway**, off the event loop. A flag a curator explained does not hold it back; contamination still only warns.
+- **Cohort carriers, carrier frequency and families seen**, in the family Wombat tables (and their SNV presets): the individuals of the cohort carrying the variant in its Wombat tables and their fraction of the pedigree, then the families carrying it across every cohort of the user's data directories, linked to the variant page, with the cohorts. From the gene index, which now keeps per-variant counts.
+- **The publish workflow creates the GitHub release** from the CHANGELOG section once the package is on PyPI (titled by the annotated tag's message), and refuses a tag without a CHANGELOG entry. Releases had stopped at v0.15.0; v0.16.0 to v0.30.0 were created afterwards.
+
+### Changed
+- The somalier report link of the cohort Sample QC panel is shown to curators only, as the data route now serves it to them only.
+
+### Fixed
+- **Readers could ignore or restore an SNV validation**: the Ignore switch of the variant dialog is disabled for them, and the write checks the role (#54).
+- **Readers could move a file to validate to the trash**: the button is for curators, and the move checks again (#55).
+- **The SNV validation guide was missing from installed copies** ("Validation guide not found." in production): it is now inside the package, and the CI wheel check lists it (#56).
+- Notes and wave scores are refused to readers by the writers themselves, not only by the hidden controls (#57).
+- Diagnostic details (#37, rechecked):
+  - when the MANE Select transcript had no c. notation, the c. of another transcript was labelled with the MANE ID; the MANE ID is now kept only for a row with one transcript;
+  - an SV diagnostic saved from Search kept only the first six genes, without their overlap; it now records every gene, exonic or genic;
+  - a Vedette diagnostic recorded the inheritance label ("none" for a founder, printed as such in the report); it now records the segregation in the report's words, and the genes with their exonic or genic overlap;
+  - a WisecondorX call's genes came in a different order at each load; exonic genes now come first, in name order;
+  - a diagnostic saved from a file to validate now reads the sample's sex and the family's phenotypes from the pedigree, so a male's chrX call is hemizygous.
+
 ## [0.30.0] - 2026-11-05
 
 ### Added
@@ -676,6 +703,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **All page handlers** — auth guard added (`check_auth()` redirect at top of every page)
 - **Validation/diagnostic saves** — username read from session instead of OS user; `can_write()` guards added
 
+## [0.5.1] - 2026-02-26
+
+Entry written afterwards, from the release commit (9eb8651).
+
+### Added
+- **Diagnostics**, beside validations. A curator records a verdict (pathogenic, uncertain, benign) with a comment for a variant and sample, from the SNV and SV tables, Search and the validation file page. Records are appended to `diagnostics/snvs.tsv` and `diagnostics/svs.tsv`, can be ignored, and several curators' verdicts that disagree read as conflicting.
+- **Diagnostic column and badges** (P, ?, B, !) in the Wombat and SVs tabs, Search and the validation file page, colours in `config/diagnostic_badges.yaml`.
+- **Diagnostic menu** in the header: **See All** (`/diagnostic/all`), every diagnostic of the data directory, and **Statistics** (`/diagnostic/statistics`).
+- **Diagnostics panel** on the family page, listing the family's findings.
+- **Cytobands for SVs**: an SV's range is shown with its cytoband range (`get_cytoband_range`).
+
 ## [0.5.0] - 2026-02-24
 
 ### Added
@@ -714,6 +752,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Validation all/statistics pages now async with offloaded I/O
+
+## [0.4.0] - 2026-02-17
+
+Entry written afterwards, from the release commit (e3c9073).
+
+### Added
+- **SV validation in Search**: WisecondorX results carry their validation badges, and a curated position replaces the call's coordinates (green, with the original in the tooltip).
+- **SV length** (`svlen`) column for SVs in Search and the SVs tab.
+- **Refresh button** for the region of interest in the SV validation dialog.
+- **Search filters per source**: Impacts, Validation and |ratio| for WisecondorX (absolute value, comma or dot), Validation for Wombat. The SV View preset is chosen for a WisecondorX-only search, the Mix View for a mixed one.
+- **Move a file to validate to the trash**, with a confirmation, from its validation page (`to_validate/trash/`).
+
+### Fixed
+- WisecondorX validations were looked up under another key than they were saved with: the type (dup/del) is now inferred from the call classification on both sides.
 
 ## [0.3.0] - 2026-02-16
 
@@ -780,7 +832,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed context issues when toggling ignore status from within dialog
 - Fixed table refresh after validation changes
 
-## [0.1.1] - 2026-01-15
+## [0.1.1] - 2026-01-19
+
+Tagged on 2026-01-19; this entry used to be dated 2026-01-15, before the first commit.
 
 ### Added
 - Initial stable release
@@ -791,3 +845,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Family structure visualization
 - DNM and WOMBAT analysis tables
 - Variant validation tracking with inheritance patterns
+
+## [0.1.0] - 2026-01-18
+
+Entry written afterwards. The first commit and tag: the application listed under 0.1.1, which only bumped the version.
