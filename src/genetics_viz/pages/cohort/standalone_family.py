@@ -270,14 +270,18 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                                                 )
                                                 if not msg:
                                                     return
-                                                save_note(
-                                                    notes_file,
-                                                    family_id,
-                                                    sample_select.value or "",
-                                                    msg,
-                                                    get_current_user(),
-                                                    datetime.now().isoformat(),
-                                                )
+                                                try:
+                                                    save_note(
+                                                        notes_file,
+                                                        family_id,
+                                                        sample_select.value or "",
+                                                        msg,
+                                                        get_current_user(),
+                                                        datetime.now().isoformat(),
+                                                    )
+                                                except PermissionError as ex:
+                                                    ui.notify(str(ex), type="negative")
+                                                    return
                                                 render_notes_panel.refresh()
 
                                             ui.button(
@@ -316,12 +320,21 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
 
                                                     def make_del(e_ts, e_user):
                                                         def handler():
-                                                            delete_note(
-                                                                notes_file,
-                                                                family_id,
-                                                                e_ts,
-                                                                e_user,
-                                                            )
+                                                            try:
+                                                                delete_note(
+                                                                    notes_file,
+                                                                    family_id,
+                                                                    e_ts,
+                                                                    e_user,
+                                                                )
+                                                            except (
+                                                                PermissionError
+                                                            ) as ex:
+                                                                ui.notify(
+                                                                    str(ex),
+                                                                    type="negative",
+                                                                )
+                                                                return
                                                             render_notes_panel.refresh()
 
                                                         return handler

@@ -8,6 +8,7 @@ import csv
 from pathlib import Path
 from typing import Dict, List
 
+from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.tsv import append_tsv_row, append_tsv_rows, rewrite_tsv_rows
 
 NOTES_HEADER = ["FID", "Sample", "Message", "User", "Timestamp"]
@@ -46,7 +47,13 @@ def save_note(
     user: str,
     timestamp: str,
 ) -> None:
-    """Append a note entry to the TSV file with file locking."""
+    """Append a note entry to the TSV file with file locking.
+
+    Raises ``PermissionError`` for a reader: the note form is shown to curators
+    and administrators only, and the writer checks again.
+    """
+    if not can_write():
+        raise PermissionError("Only curators and administrators write notes.")
     append_tsv_row(
         notes_file, NOTES_HEADER, [family_id, sample, message, user, timestamp]
     )
@@ -62,8 +69,11 @@ def delete_note(
 
     Matches on FID + Timestamp + User as composite key.
 
-    Returns True if a note was deleted, False otherwise.
+    Returns True if a note was deleted, False otherwise. Raises
+    ``PermissionError`` for a reader, as :func:`save_note`.
     """
+    if not can_write():
+        raise PermissionError("Only curators and administrators delete notes.")
 
     def remove(rows: List[Dict[str, str]]) -> bool:
         kept = [
