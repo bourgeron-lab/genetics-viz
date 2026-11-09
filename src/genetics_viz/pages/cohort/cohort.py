@@ -11,6 +11,7 @@ from nicegui import ui
 from genetics_viz.components.header import create_header
 from genetics_viz.components.page_link import PageLink
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.models import is_sequenced_parent
 from genetics_viz.pages.cohort.components.cohort_ancestry_tab import (
     probe_cohort_ancestry_data,
     render_cohort_ancestry_tab,
@@ -43,6 +44,7 @@ from genetics_viz.utils.cohort_state import read_cohort_state
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.ghfc_ngs_docs import fetch_params_doc
+from genetics_viz.utils.pedigree_labels import dummy_badges
 from genetics_viz.utils.sample_qc import (
     CATEGORIES,
     category_badges,
@@ -288,6 +290,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         "Phenotype": sample.phenotype or "-",
                         "Father": sample.father_id or "-",
                         "Mother": sample.mother_id or "-",
+                        # A dummy parent (never sequenced) shows as a muted badge.
+                        "_father_badges": dummy_badges(sample.father_id),
+                        "_mother_badges": dummy_badges(sample.mother_id),
                         "Diagnostic": sample_diag.get(sample.sample_id, ""),
                         "_diag_color": {
                             "pathogenic": "#dc2626",
@@ -435,16 +440,19 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                         )
                                     ]
 
-                                # Has father checkbox
+                                # Has father / mother checkboxes: a sequenced
+                                # one, so not a dummy
                                 if filters.get("Father"):
                                     filtered = [
-                                        ind for ind in filtered if ind["Father"] != "-"
+                                        ind
+                                        for ind in filtered
+                                        if is_sequenced_parent(ind["Father"])
                                     ]
-
-                                # Has mother checkbox
                                 if filters.get("Mother"):
                                     filtered = [
-                                        ind for ind in filtered if ind["Mother"] != "-"
+                                        ind
+                                        for ind in filtered
+                                        if is_sequenced_parent(ind["Mother"])
                                     ]
 
                                 # Update shared filtered state
@@ -510,21 +518,25 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                     {
                                         "id": "Father",
                                         "header": "Father ID",
+                                        "cellType": "badge_list",
+                                        "badgesField": "_father_badges",
                                         "sortable": True,
                                         "minWidth": 90,
                                         "filter": {
                                             "type": "checkbox",
-                                            "label": "Has father",
+                                            "label": "Has sequenced father",
                                         },
                                     },
                                     {
                                         "id": "Mother",
                                         "header": "Mother ID",
+                                        "cellType": "badge_list",
+                                        "badgesField": "_mother_badges",
                                         "sortable": True,
                                         "minWidth": 90,
                                         "filter": {
                                             "type": "checkbox",
-                                            "label": "Has mother",
+                                            "label": "Has sequenced mother",
                                         },
                                     },
                                     {

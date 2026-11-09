@@ -58,6 +58,8 @@
   td { border-bottom: 1px solid #e5e7eb; padding: 3px 4px; vertical-align: top;
        overflow-wrap: anywhere; white-space: pre-line; }
   tr.muted td { color: #9ca3af; }
+  /* A dummy pedigree member (never sequenced): muted, italic, dashed rule. */
+  tr.dummy td { font-style: italic; border-bottom-style: dashed; }
   tr.attention td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
   .chip { display: inline-block; color: white; border-radius: 3px; padding: 0 4px;
           font-size: 8pt; }
@@ -117,7 +119,7 @@
   <thead><tr>{% for key, header in section.columns %}<th>{{ header }}</th>{% endfor %}</tr></thead>
   <tbody>
   {% for row in section.rows %}
-    <tr class="{{ 'muted' if row.get('_muted') }} {{ 'attention' if row.get('_attention') }}">
+    <tr class="{{ 'muted' if row.get('_muted') }} {{ 'dummy' if row.get('_dummy') }} {{ 'attention' if row.get('_attention') }}">
       {% for key, header in section.columns %}<td>{{ cell(row, key) }}</td>{% endfor %}
     </tr>
   {% endfor %}
@@ -129,6 +131,7 @@
 <section>
   <div class="head"><h2>1. {{ pedigree.title }}</h2></div>
   {% if pedigree.rows %}{{ table(pedigree) }}{% else %}<p class="missing">No pedigree for this family.</p>{% endif %}
+  {% for f in pedigree.footnotes %}<p class="footnote">{{ f }}</p>{% endfor %}
 </section>
 
 <h2>Curator conclusion</h2>

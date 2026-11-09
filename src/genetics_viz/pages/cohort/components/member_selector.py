@@ -4,6 +4,13 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.models import is_dummy_id
+from genetics_viz.utils.pedigree_labels import (
+    DUMMY_BACKGROUND,
+    DUMMY_COLOR,
+    DUMMY_LABEL,
+    DUMMY_TOOLTIP,
+)
 from genetics_viz.utils.sample_qc import FlagRow, flag_title, severity_info
 
 # A single CSS grid holds the header and every data cell as direct children, so
@@ -29,12 +36,28 @@ _GRID_STYLE = (
 # Second column holds the "only" buttons and needs no header.
 _HEADERS = ("Select", "", "Sample ID", "Father", "Mother", "Sex", "Phenotype")
 
-_PEDIGREE_FIELDS = ("Father", "Mother", "Sex", "Phenotype")
-
 _CELL = "px-2 py-1"
 
 # A stretched cell is taller than the control it holds, so centre it explicitly.
 _CONTROL_CELL_STYLE = "display: flex; align-items: center"
+
+# A dummy's cells: muted, italic, and a dashed rule under the row.
+_DUMMY_CELL = "italic border-dashed"
+
+
+def sequenced_ids(members_data: List[Dict[str, Any]]) -> List[str]:
+    """The IDs of the members that have data: every one but the dummies."""
+    return [m["Sample ID"] for m in members_data if not m.get("Dummy")]
+
+
+def _id_cell(member_id: str, cell: str) -> None:
+    """A father/mother ID; a dummy one muted, with the dummy tooltip."""
+    if is_dummy_id(member_id):
+        ui.label(member_id).classes(f"{cell} italic").style(
+            f"color: {DUMMY_COLOR}"
+        ).tooltip(DUMMY_TOOLTIP)
+    else:
+        ui.label(member_id).classes(f"{cell} text-gray-600")
 
 
 def render_member_selector(
@@ -51,7 +74,9 @@ def render_member_selector(
     every callback in ``data_table_refreshers``, so the dependent panels and
     variant tables re-filter.
 
-    :param members_data: member dicts as returned by ``Cohort.get_family_members``
+    :param members_data: member dicts as returned by ``Cohort.get_family_members``,
+        dummies included: a dummy is listed, muted and badged, but has no
+        checkbox and is never selected, so no tab looks anything up for it
     :param selected_members: mutable ``{"value": [sample_id, ...]}`` selection state
     :param data_table_refreshers: refresh callbacks to run on every selection change
     :param qc_flags: sample QC flags by sample ID; a flagged member gets a
@@ -77,7 +102,7 @@ def render_member_selector(
             refresher()
 
     def select_all_members() -> None:
-        selected_members["value"] = [m["Sample ID"] for m in members_data]
+        selected_members["value"] = sequenced_ids(members_data)
         for checkbox in member_checkboxes.values():
             checkbox.value = True
         refresh_all()
@@ -138,6 +163,9 @@ def render_member_selector(
                         f"{_CELL} border-b border-gray-200 "
                         f"{'bg-white' if idx % 2 == 0 else 'bg-gray-50'}"
                     )
+                    if member.get("Dummy"):
+                        _dummy_row(member, cell)
+                        continue
 
                     with ui.element("div").classes(cell).style(_CONTROL_CELL_STYLE):
                         member_checkboxes[sample_id] = ui.checkbox(
@@ -161,13 +189,39 @@ def render_member_selector(
                             )
                     else:
                         ui.label(sample_id).classes(f"{cell} font-medium")
-                    for field in _PEDIGREE_FIELDS:
+                    _id_cell(member.get("Father", "-"), cell)
+                    _id_cell(member.get("Mother", "-"), cell)
+                    for field in ("Sex", "Phenotype"):
                         ui.label(member.get(field, "-")).classes(
                             f"{cell} text-gray-600"
                         )
 
     update_qc_icons(qc_flags or {}, qc_acked or {})
     return update_qc_icons
+
+
+def _dummy_row(member: Dict[str, Any], cell: str) -> None:
+    """A dummy's seven cells: no checkbox, no "only", the ID muted and badged."""
+    cell = f"{cell} {_DUMMY_CELL}"
+    with ui.element("div").classes(cell).style(_CONTROL_CELL_STYLE):
+        ui.icon("link", size="xs").style(f"color: {DUMMY_COLOR}").tooltip(
+            "Not selectable: a dummy has no data to show"
+        )
+    ui.element("div").classes(cell)
+    with (
+        ui.element("div")
+        .classes(cell)
+        .style("display: flex; align-items: center; gap: 0.25rem")
+        .mark("dummy-member")
+    ):
+        ui.label(member["Sample ID"]).style(f"color: {DUMMY_COLOR}")
+        ui.badge(DUMMY_LABEL).props("outline").style(
+            f"color: {DUMMY_COLOR}; background: {DUMMY_BACKGROUND}"
+        ).tooltip(DUMMY_TOOLTIP)
+    _id_cell(member.get("Father", "-"), cell)
+    _id_cell(member.get("Mother", "-"), cell)
+    for field in ("Sex", "Phenotype"):
+        ui.label(member.get(field, "-")).classes(cell).style(f"color: {DUMMY_COLOR}")
 
 
 def _qc_icon(flags: List[FlagRow], acked: List[FlagRow], show_detail: bool) -> None:

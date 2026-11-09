@@ -14,9 +14,9 @@ HEADERLESS = (
 )
 
 EXPECTED = [
-    {"Sample ID": "IP00FM8", "Father": "-", "Mother": "-", "Sex": "1", "Phenotype": "1"},
-    {"Sample ID": "IP00FM9", "Father": "-", "Mother": "-", "Sex": "2.0", "Phenotype": "-9.0"},
-    {"Sample ID": "IP00FMA", "Father": "IP00FM8", "Mother": "IP00FM9", "Sex": "1", "Phenotype": "2"},
+    {"Sample ID": "IP00FM8", "Father": "-", "Mother": "-", "Sex": "1", "Phenotype": "1", "Dummy": False},
+    {"Sample ID": "IP00FM9", "Father": "-", "Mother": "-", "Sex": "2.0", "Phenotype": "-9.0", "Dummy": False},
+    {"Sample ID": "IP00FMA", "Father": "IP00FM8", "Mother": "IP00FM9", "Sex": "1", "Phenotype": "2", "Dummy": False},
 ]  # fmt: skip
 
 

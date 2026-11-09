@@ -36,6 +36,7 @@ import polars as pl
 import yaml
 
 from genetics_viz.components.diagnostic_loader import load_family_diagnostics
+from genetics_viz.models import is_dummy_id
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
@@ -83,6 +84,15 @@ def _load_config() -> Dict[str, Any]:
 CONFIG: Dict[str, Any] = _load_config()
 
 _SEX_TEXT = {"1": "Male", "2": "Female", "-9": "Unknown"}
+
+#: Under a dummy's ID; under a dummy father/mother, shorter (narrow columns).
+DUMMY_REPORT_NOTE = "dummy, not sequenced"
+DUMMY_PARENT_NOTE = "dummy"
+DUMMY_REPORT_FOOTNOTE = (
+    "Greyed rows are dummy members: individuals who were not sequenced and are"
+    " listed only to link relatives in the pedigree (for instance the shared"
+    " parents of twins). No result is reported for them."
+)
 _PHENO_TEXT = {"2": "Affected", "1": "Unaffected", "-9": "Unknown"}
 
 #: Acrocentric chromosomes: their p arm holds no assessable sequence.
@@ -240,7 +250,25 @@ class _Defaults(dict):
 # ---------------------------------------------------------------------------
 
 
-def _pedigree(members: List[_Member], qc: Optional[qc_utils.QcData]) -> Section:
+def _parent_cells(m: _Member) -> Dict[str, str]:
+    """The father/mother cells, a dummy parent noted under its ID."""
+    cells = {"father": m.father or "—", "mother": m.mother or "—"}
+    for key, parent in (("father", m.father), ("mother", m.mother)):
+        if is_dummy_id(parent):
+            cells[f"_{key}_note"] = DUMMY_PARENT_NOTE
+    return cells
+
+
+def _pedigree(
+    members: List[_Member],
+    qc: Optional[qc_utils.QcData],
+    dummies: Sequence[_Member] = (),
+) -> Section:
+    """The family table: the sequenced members, then the dummies, muted.
+
+    A dummy has no status and no data: its status and sex chromosomes are
+    blank, never "Unknown", which would read as an untested person.
+    """
     karyotype = {r.get("sample"): r for r in (qc.sample_rows() if qc else [])}
     rows = []
     for m in members:
@@ -248,12 +276,24 @@ def _pedigree(members: List[_Member], qc: Optional[qc_utils.QcData]) -> Section:
         rows.append(
             {
                 "iid": m.iid,
-                "father": m.father or "—",
-                "mother": m.mother or "—",
+                **_parent_cells(m),
                 "sex": _SEX_TEXT[m.sex],
                 "phenotype": _PHENO_TEXT[m.phenotype],
                 "_phenotype_color": m.color,
                 "karyotype": k.get("karyotype") or "—",
+            }
+        )
+    for d in dummies:
+        rows.append(
+            {
+                "iid": d.iid,
+                "_iid_note": DUMMY_REPORT_NOTE,
+                **_parent_cells(d),
+                "sex": _SEX_TEXT[d.sex],
+                "phenotype": "—",
+                "karyotype": "—",
+                "_muted": True,
+                "_dummy": True,
             }
         )
     return Section(
@@ -268,6 +308,7 @@ def _pedigree(members: List[_Member], qc: Optional[qc_utils.QcData]) -> Section:
             ("karyotype", "Sex chromosomes (observed)"),
         ],
         rows=rows,
+        footnotes=[DUMMY_REPORT_FOOTNOTE] if dummies else [],
     )
 
 
@@ -1168,16 +1209,20 @@ def build_family_report(
     in pedigree order). ``cohort`` is ``None`` on the standalone family page:
     no cross-family QC flags, no run record, no workflow parameters then.
     """
-    members = [
-        _Member(
+
+    def member(s: Any) -> _Member:
+        return _Member(
             iid=s.sample_id,
             father=s.father_id or "",
             mother=s.mother_id or "",
             sex=normalize_sex(s.sex),
             phenotype=normalize_pheno(s.phenotype),
         )
-        for s in (family.samples if family is not None else [])
-    ]
+
+    # Every section reads the sequenced members; only the family table lists
+    # the dummies too.
+    members = [member(s) for s in (family.samples if family is not None else [])]
+    dummies = [member(s) for s in (getattr(family, "dummies", None) or [])]
     member_ids = [m.iid for m in members]
     try:
         family_qc = qc_utils.load_family_qc(data_dir, family_id)
@@ -1196,7 +1241,7 @@ def build_family_report(
 
     roh_section, froh = _roh(data_dir, members, family_id)
     sections = [
-        _pedigree(members, family_qc),
+        _pedigree(members, family_qc, dummies),
         _ancestry(files, members, family_id),
         _sample_qc(data_dir, family_id, family_qc, cohort),
         roh_section,

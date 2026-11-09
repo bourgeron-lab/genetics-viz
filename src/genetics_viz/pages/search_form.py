@@ -379,7 +379,7 @@ def _individuals_panel(form: SearchForm) -> Callable[[], None]:
             )
 
         has_parents_cb = ui.checkbox(
-            "Only samples with both parents",
+            "Only samples with both parents sequenced",
             value=filters.has_parents["value"],
             on_change=lambda e: filters.has_parents.update({"value": e.value}),
         ).props("dense")

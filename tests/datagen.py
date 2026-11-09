@@ -1338,6 +1338,68 @@ def add_upd_case(data: Path, fid: str = "1001", chrom: str = "2") -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dummy pedigree members
+# ---------------------------------------------------------------------------
+
+#: Two DEMO families holding dummy members (``DUMMY_<barcode>_<path>``, never
+#: sequenced, present only to link real members):
+#:
+#: - 2001: MZ twins S7 and S8, whose parents are dummies with rows of their own;
+#: - 2002: three generations. The real cousin S9's mother is a dummy whose own
+#:   parents are dummies, shared with S9's real aunt S10. S9's father is a dummy
+#:   named only in S9's father column, with no row.
+DUMMY_PEDIGREE: List[Sequence[str]] = [
+    ("2001", "S7", "DUMMY_S7_F", "DUMMY_S7_M", "1", "2"),
+    ("2001", "S8", "DUMMY_S7_F", "DUMMY_S7_M", "1", "2"),
+    ("2001", "DUMMY_S7_F", "0", "0", "1", "0"),
+    ("2001", "DUMMY_S7_M", "0", "0", "2", "0"),
+    ("2002", "S9", "DUMMY_S9_F", "DUMMY_S9_M", "2", "2"),
+    ("2002", "DUMMY_S9_M", "DUMMY_S9_MF", "DUMMY_S9_MM", "2", "0"),
+    ("2002", "DUMMY_S9_MF", "0", "0", "1", "0"),
+    ("2002", "DUMMY_S9_MM", "0", "0", "2", "0"),
+    ("2002", "S10", "DUMMY_S9_MF", "DUMMY_S9_MM", "2", "1"),
+]
+#: Every dummy of DUMMY_PEDIGREE, including the one with no row.
+DUMMY_IDS = (
+    "DUMMY_S7_F", "DUMMY_S7_M", "DUMMY_S9_F", "DUMMY_S9_M", "DUMMY_S9_MF",
+    "DUMMY_S9_MM",
+)  # fmt: skip
+#: S7's Wombat row: the pipeline names the dummy parents but has no genotype.
+DUMMY_WOMBAT_ROW = (
+    "chr2", 3000, "C", "G", "S7", "1", "0/1", "DUMMY_S7_F", "DUMMY_S7_M", ".",
+    ".", "missense_variant", "PLAIN", "ENSG00000000004", 0.001, *_NO_TRANSCRIPT,
+)  # fmt: skip
+
+
+def add_dummy_case(data: Path) -> None:
+    """Add DUMMY_PEDIGREE to DEMO, with what the pipeline writes for it.
+
+    DEMO's pedigree gains the rows. Each family gets its own headerless
+    pedigree (dummies included) and the ancestry and ROH results of its real
+    members only; the ROH tables name the dummy parents, and 2001 gets a Wombat
+    table with one row for S7. Nothing exists under ``samples/`` for a dummy.
+    Opt-in, because it changes DEMO's counts.
+    """
+    with open(data / "cohorts" / "DEMO" / "DEMO.pedigree.tsv", "a") as f:
+        f.writelines("\t".join(r) + "\n" for r in DUMMY_PEDIGREE)
+    by_family: Dict[str, List[Sequence[str]]] = {}
+    for row in DUMMY_PEDIGREE:
+        by_family.setdefault(row[0], []).append(row)
+    for fid, rows in by_family.items():
+        build_family_results(
+            data, fid, [r for r in rows if not r[1].startswith("DUMMY_")]
+        )
+        (family_dir(data, fid) / f"{fid}.pedigree.tsv").write_text(
+            "".join("\t".join(r) + "\n" for r in rows)
+        )
+    write_tsv(
+        family_dir(data, "2001") / "wombat" / "2001.rare.vep1.annotated.default.tsv",
+        WOMBAT_COLUMNS,
+        [DUMMY_WOMBAT_ROW],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Family report
 # ---------------------------------------------------------------------------
 

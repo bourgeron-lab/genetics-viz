@@ -5,6 +5,22 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Dummy pedigree members.** A pedigree may now hold individuals who were never sequenced and exist only to link real members: the shared parents of MZ twins, or the grandparents joining an aunt to a cousin. Their ID starts with `DUMMY_` (`DUMMY_<barcode>_<path>`: the barcode of the real child they hang from, then `F`/`M` steps, as `DUMMY_B00IDL0_F` or `DUMMY_B00INOK_MF`), the same convention as ghfc-ngs. A dummy may have a row of its own (sex 1/2, phenotype `0`) or be named only in a child's father/mother column; both count. CANDY_mpx is the first cohort to carry them.
+  - **Nothing is looked up for a dummy**: no CRAM, VCF column, coverage, STR, ROH, sample QC, PGS or validation, so no missing-file warning or empty column. The variant dialog no longer looks for a dummy parent's CRAM, and validating a child's call as inherited records no carrier row for a dummy parent.
+  - **Counts are sequenced samples**: family members and founders, the cohort's samples, the home card, the cohort comparison of the Stats dialogs, the cohort carrier frequency.
+  - **Marked wherever members are listed**: the member selector of both family pages lists them muted, under a dashed rule, with a "dummy" badge, and without a checkbox (they are never selected, so no tab reads them). Dummy fathers and mothers are muted in the selector and drawn as grey badges in the cohort table. The family report lists them greyed and italic after the sequenced members, "dummy, not sequenced" under the ID, with no status, and a footnote.
+  - **The pedigree still resolves through them**: twins with dummy parents are siblings (the dialogs' relationship labels, the ROH tab's declared pairs). A dummy is never affected or unaffected.
+
+### Changed
+- A member whose parents are both missing or dummies counts as a founder (no sequenced parent), as the pipeline's tables already do. Twins with dummy parents are compared with the founders in the Stats dialogs, since they have no de novo calls.
+- "Has father" / "Has mother" in the cohort table and Search's "Only samples with both parents" now mean a sequenced parent: a dummy one does not count. The labels say so.
+
+### Fixed
+- Validating a child's call as inherited could record a validation for the parent `-` (the placeholder of a missing parent): only a sequenced parent is recorded now.
+
 ## [0.31.0] - 2026-11-06
 
 ### Added

@@ -10,6 +10,8 @@ before grouping or labelling.
 
 from typing import Dict, List, Optional
 
+from genetics_viz.models import is_dummy_id
+
 #: Phenotype codes in display order: affected, unaffected, unknown.
 PHENO_ORDER: List[str] = ["2", "1", "-9"]
 
@@ -68,3 +70,39 @@ def pheno_label(pheno: Optional[str]) -> str:
 def sex_label(sex: Optional[str]) -> str:
     """Display label for a sex value, normalising it first."""
     return SEX_LABELS[normalize_sex(sex)]
+
+
+# ---------------------------------------------------------------------------
+# Dummy pedigree members (``models.is_dummy_id``)
+# ---------------------------------------------------------------------------
+
+#: The badge beside a dummy's ID, wherever members are listed.
+DUMMY_LABEL = "dummy"
+
+#: The badge's tooltip: what a dummy is, and why it has no data.
+DUMMY_TOOLTIP = (
+    "Dummy pedigree member: never sequenced, it only links relatives in the"
+    " pedigree (shared parents of twins, grandparents of cousins). No data."
+)
+
+#: Muted grey, for a dummy's ID and badge.
+DUMMY_COLOR = "#6b7280"
+DUMMY_BACKGROUND = "#f3f4f6"
+
+
+def dummy_badges(member_id: Optional[str]) -> List[Dict[str, str]]:
+    """``badge_list`` cell badges for a member ID: one muted badge for a dummy.
+
+    The badge is the ID itself, grey on grey, with :data:`DUMMY_TOOLTIP`.
+    Empty for anyone else, so the cell shows the plain ID.
+    """
+    if not is_dummy_id(member_id):
+        return []
+    return [
+        {
+            "label": member_id,
+            "color": DUMMY_BACKGROUND,
+            "textColor": DUMMY_COLOR,
+            "tooltip": DUMMY_TOOLTIP,
+        }
+    ]
