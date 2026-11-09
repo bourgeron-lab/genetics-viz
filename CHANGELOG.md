@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.32.0] - 2026-11-09
 
 ### Added
 - **Dummy pedigree members.** A pedigree may now hold individuals who were never sequenced and exist only to link real members: the shared parents of MZ twins, or the grandparents joining an aunt to a cousin. Their ID starts with `DUMMY_` (`DUMMY_<barcode>_<path>`: the barcode of the real child they hang from, then `F`/`M` steps, as `DUMMY_B00IDL0_F` or `DUMMY_B00INOK_MF`), the same convention as ghfc-ngs. A dummy may have a row of its own (sex 1/2, phenotype `0`) or be named only in a child's father/mother column; both count. CANDY_mpx is the first cohort to carry them.
