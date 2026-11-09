@@ -24,6 +24,7 @@ from genetics_viz.pages.cohort.components.ancestry_tab import (
 )
 from genetics_viz.pages.cohort.components.member_selector import (
     render_member_selector,
+    sequenced_ids,
 )
 from genetics_viz.pages.cohort.components.pgs_tab import (
     probe_pgs_data,
@@ -44,7 +45,7 @@ from genetics_viz.pages.cohort.components.wombat_tab import render_wombat_tab
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.data_availability import check_family_availability
-from genetics_viz.utils.pedigree import load_family_object, load_family_pedigree
+from genetics_viz.utils.pedigree import load_family_object
 from genetics_viz.utils.sample_qc import flags_by_sample
 from genetics_viz.utils.sharding import get_family_path
 
@@ -97,15 +98,16 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
 
         # Load pedigree data asynchronously
         if pedigree_file.exists():
-            members_data = await asyncio.to_thread(load_family_pedigree, pedigree_file)
             family = await asyncio.to_thread(
                 load_family_object, pedigree_file, family_id
             )
+            members_data = family.member_rows(include_dummies=True)
         else:
             members_data = []
             family = None
 
-        sample_ids = [m["Sample ID"] for m in members_data]
+        # The sequenced members: dummies are listed, never looked up.
+        sample_ids = sequenced_ids(members_data)
 
         # Check data availability asynchronously
         avail = await asyncio.to_thread(
@@ -185,16 +187,9 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                 )
 
             # Track selected members for filtering (default: all selected)
-            selected_members: Dict[str, List[str]] = {
-                "value": [m["Sample ID"] for m in members_data]
-            }
+            selected_members: Dict[str, List[str]] = {"value": list(sample_ids)}
             data_table_refreshers: List = []
-            link_members(
-                link,
-                selected_members,
-                [m["Sample ID"] for m in members_data],
-                data_table_refreshers,
-            )
+            link_members(link, selected_members, sample_ids, data_table_refreshers)
 
             # Redraws the member QC icons after a review in the Sample QC tab.
             qc_icons: Dict[str, Any] = {"update": None}
@@ -253,8 +248,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                                                 .classes("flex-1")
                                             )
                                             sample_options = {"": "Family"} | {
-                                                m["Sample ID"]: m["Sample ID"]
-                                                for m in members_data
+                                                sid: sid for sid in sample_ids
                                             }
                                             sample_select = (
                                                 ui.select(sample_options, value="")

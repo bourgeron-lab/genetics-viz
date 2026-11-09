@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from genetics_viz.models import is_sequenced_parent
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.tsv import set_ignore
 from genetics_viz.utils.validation_badges import build_validation_badge
@@ -74,7 +75,8 @@ def parents_to_validate(
 
     ``maternal`` gives the mother, ``paternal`` the father, a mode in
     ``both_parent_modes`` both (mother first). A parent already validated for
-    the variant, or not in the pedigree, is left out.
+    the variant, not in the pedigree, or a dummy (never sequenced, so it can
+    carry no call) is left out.
     """
     if inheritance == "maternal":
         wanted = [parents.get("mother")]
@@ -84,7 +86,7 @@ def parents_to_validate(
         wanted = [parents.get("mother"), parents.get("father")]
     else:
         wanted = []
-    return [p for p in wanted if p and p not in validated]
+    return [p for p in wanted if is_sequenced_parent(p) and p not in validated]
 
 
 def load_validation_map(

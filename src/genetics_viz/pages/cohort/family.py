@@ -22,6 +22,7 @@ from genetics_viz.pages.cohort.components.ancestry_tab import (
 )
 from genetics_viz.pages.cohort.components.member_selector import (
     render_member_selector,
+    sequenced_ids,
 )
 from genetics_viz.pages.cohort.components.pgs_tab import (
     probe_pgs_data,
@@ -171,19 +172,17 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                             ),
                         ).props("flat round color=blue").tooltip(f"Next: {next_fid}")
 
-            members_data = cohort.get_family_members(family_id)
+            # Dummies are listed by the selector but never selected: the
+            # selection is what every tab looks up.
+            members_data = cohort.get_family_members(family_id, include_dummies=True)
+            sample_ids = sequenced_ids(members_data)
 
             # Track selected members for filtering (default: all selected)
-            selected_members = {"value": [m["Sample ID"] for m in members_data]}
+            selected_members = {"value": list(sample_ids)}
 
             # Store refresh functions for all data tables
             data_table_refreshers: List = []
-            link_members(
-                link,
-                selected_members,
-                [m["Sample ID"] for m in members_data],
-                data_table_refreshers,
-            )
+            link_members(link, selected_members, sample_ids, data_table_refreshers)
 
             with ui.row().classes("w-full gap-4 items-start"):
                 _, qc_active, qc_acked = qc["summary"]
@@ -248,8 +247,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                                             .classes("flex-1")
                                         )
                                         sample_options = {"": "Family"} | {
-                                            m["Sample ID"]: m["Sample ID"]
-                                            for m in members_data
+                                            sid: sid for sid in sample_ids
                                         }
                                         sample_select = (
                                             ui.select(sample_options, value="")

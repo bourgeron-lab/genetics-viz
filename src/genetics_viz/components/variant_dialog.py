@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.models import is_dummy_id
 from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.inheritance import infer_inheritance
 from genetics_viz.utils.gene_scoring import (
@@ -111,13 +112,15 @@ def show_variant_dialog(
             # Track additional samples
             additional_samples: Dict[str, List[str]] = {"value": []}
 
-            # Automatically add parents if available
+            # Automatically add parents if available. A dummy parent was
+            # never sequenced: it names siblings, but has no CRAM to look for.
             for parent_type, parent_id in sample_parents.items():
                 if (
                     parent_id
                     and parent_id != "-"
                     and parent_id != "0"
                     and parent_id != sample
+                    and not is_dummy_id(parent_id)
                 ):
                     sample_cram = (
                         get_sample_path(store.data_dir, parent_id)
@@ -226,7 +229,12 @@ def show_variant_dialog(
             def add_parents():
                 added = []
                 for parent_type, parent_id in sample_parents.items():
-                    if parent_id and parent_id != "-" and parent_id != "0":
+                    if (
+                        parent_id
+                        and parent_id != "-"
+                        and parent_id != "0"
+                        and not is_dummy_id(parent_id)
+                    ):
                         if (
                             parent_id not in additional_samples["value"]
                             and parent_id != sample

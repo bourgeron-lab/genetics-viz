@@ -23,6 +23,38 @@ PEDIGREE_COLUMNS = ["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"]
 #: float-stringified (``0.0``, ``-9.0``), as they do for sex and phenotype.
 MISSING_PARENT = frozenset({"", "0", "-9", "0.0", "-9.0"})
 
+#: The ID prefix of a dummy pedigree member.
+DUMMY_PREFIX = "DUMMY_"
+
+
+def is_dummy_id(sample_id: object) -> bool:
+    """Whether an individual ID names a dummy pedigree member.
+
+    A dummy was never sequenced: it exists only to link real members in the
+    pedigree graph, as the shared parents of MZ twins or the grandparents
+    joining an aunt to a parent. Its ID is ``DUMMY_<barcode>_<path>``: the
+    barcode of the real child it hangs from, then ``F``/``M`` steps
+    (``DUMMY_B00IDL0_F``, ``DUMMY_B00INOK_MF`` = the mother's father). The
+    prefix is the only test, the pipeline's too. A dummy has no data of any
+    kind, so nothing is looked up for it and it is never counted as a sample.
+    """
+    return isinstance(sample_id, str) and sample_id.startswith(DUMMY_PREFIX)
+
+
+def is_sequenced_parent(parent_id: str | None) -> bool:
+    """Whether a father/mother cell names a parent that has data.
+
+    False for a missing parent (``MISSING_PARENT``, or the ``-`` placeholder
+    of the display dicts) and for a dummy one.
+    """
+    return (
+        bool(parent_id)
+        and parent_id not in MISSING_PARENT
+        and parent_id != "-"
+        and not is_dummy_id(parent_id)
+    )
+
+
 #: Header names for each pedigree field, in order of preference. Matched
 #: case-insensitively; FatherBarcode/MotherBarcode are the per-family format.
 PEDIGREE_COLUMN_CANDIDATES: dict[str, tuple[str, ...]] = {
@@ -129,19 +161,54 @@ class Sample:
     phenotype: str | None = None
 
     @property
+    def is_dummy(self) -> bool:
+        """A dummy pedigree member: never sequenced (see :func:`is_dummy_id`)."""
+        return is_dummy_id(self.sample_id)
+
+    @property
     def is_founder(self) -> bool:
-        """Check if this sample is a founder (no parents in pedigree)."""
-        return (self.father_id is None or self.father_id in MISSING_PARENT) and (
-            self.mother_id is None or self.mother_id in MISSING_PARENT
+        """No sequenced parent: each parent is missing or a dummy.
+
+        What every caller needs is whether the member's parents have data:
+        MZ twins whose parents are dummies have no de novo calls, as founders.
+        The pipeline's tables likewise fill the parent columns only for
+        genotyped parents.
+        """
+        return not is_sequenced_parent(self.father_id) and not is_sequenced_parent(
+            self.mother_id
         )
+
+
+def member_row(sample: Sample) -> dict:
+    """A member as a display dict: the format of ``Cohort.get_family_members``."""
+    return {
+        "Sample ID": sample.sample_id,
+        "Father": sample.father_id or "-",
+        "Mother": sample.mother_id or "-",
+        "Sex": sample.sex or "-",
+        "Phenotype": sample.phenotype or "-",
+        "Dummy": sample.is_dummy,
+    }
 
 
 @dataclass
 class Family:
-    """Represents a family in a cohort."""
+    """Represents a family in a cohort.
+
+    ``samples`` holds the sequenced members only, so every lookup of sample
+    data, and every count, skips dummies without asking. ``dummies`` holds
+    the dummy members: those with a pedigree row, then those named only in a
+    father/mother column. Pedigree views list ``members``, both.
+    """
 
     family_id: str
     samples: list[Sample] = field(default_factory=list)
+    dummies: list[Sample] = field(default_factory=list)
+
+    @property
+    def members(self) -> list[Sample]:
+        """Every pedigree member: the sequenced samples, then the dummies."""
+        return [*self.samples, *self.dummies]
 
     @property
     def num_samples(self) -> int:
@@ -153,12 +220,38 @@ class Family:
         """Return the number of founders in this family."""
         return sum(1 for s in self.samples if s.is_founder)
 
+    def add_member(self, sample: Sample) -> None:
+        """Add a pedigree row: to ``dummies`` for a dummy, else to ``samples``."""
+        (self.dummies if sample.is_dummy else self.samples).append(sample)
+
+    def add_implied_dummies(self) -> None:
+        """Add the dummies named only in a father/mother column.
+
+        A pedigree may name a dummy parent without giving it a row; it is a
+        member all the same, a father male and a mother female. Run once the
+        rows are in.
+        """
+        known = {m.sample_id for m in self.members}
+        for member in list(self.members):
+            for parent_id, sex in ((member.father_id, "1"), (member.mother_id, "2")):
+                if is_dummy_id(parent_id) and parent_id not in known:
+                    known.add(parent_id)
+                    self.dummies.append(
+                        Sample(sample_id=parent_id, family_id=self.family_id, sex=sex)
+                    )
+
     def get_sample(self, sample_id: str) -> Sample | None:
-        """Get a sample by ID."""
+        """Get a sequenced sample by ID (``None`` for a dummy)."""
         for sample in self.samples:
             if sample.sample_id == sample_id:
                 return sample
         return None
+
+    def member_rows(self, include_dummies: bool = False) -> list[dict]:
+        """The members as display dicts; the dummies only when asked."""
+        return [
+            member_row(s) for s in (self.members if include_dummies else self.samples)
+        ]
 
 
 @dataclass
@@ -285,7 +378,10 @@ class Cohort:
             if family_id not in self.families:
                 self.families[family_id] = Family(family_id=family_id)
 
-            self.families[family_id].samples.append(sample)
+            self.families[family_id].add_member(sample)
+
+        for family in self.families.values():
+            family.add_implied_dummies()
 
     def _identify_columns(self, df: pl.DataFrame) -> dict[str, str | None]:
         """Identify column names from various naming conventions."""
@@ -304,24 +400,18 @@ class Cohort:
             )
         return data
 
-    def get_family_members(self, family_id: str) -> list[dict]:
-        """Get members of a specific family as a list of dicts (for NiceGUI tables)."""
+    def get_family_members(
+        self, family_id: str, include_dummies: bool = False
+    ) -> list[dict]:
+        """Members of a family as display dicts (see :func:`member_row`).
+
+        Sequenced samples only, unless ``include_dummies``: the default is
+        what every data lookup wants, the dummies are for pedigree views.
+        """
         family = self.families.get(family_id)
         if family is None:
             return []
-
-        data = []
-        for sample in family.samples:
-            data.append(
-                {
-                    "Sample ID": sample.sample_id,
-                    "Father": sample.father_id or "-",
-                    "Mother": sample.mother_id or "-",
-                    "Sex": sample.sex or "-",
-                    "Phenotype": sample.phenotype or "-",
-                }
-            )
-        return data
+        return family.member_rows(include_dummies)
 
 
 @dataclass(frozen=True)

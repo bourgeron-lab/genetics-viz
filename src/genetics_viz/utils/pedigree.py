@@ -5,7 +5,8 @@ header is read by column name, which covers the per-family format
 (FatherBarcode/MotherBarcode/sample_id columns) as well as the standard
 cohort names (PAT/MAT/IID). A file without one - as the ghfc-ngs pipeline
 writes ``<FID>.pedigree.tsv`` - is read by position: FID, IID, father,
-mother, sex, phenotype. Header detection is the cohort pedigree's own.
+mother, sex, phenotype. Header detection is the cohort pedigree's own, and so
+is the split of dummy members (``DUMMY_`` IDs) from the sequenced samples.
 """
 
 from pathlib import Path
@@ -22,13 +23,15 @@ from genetics_viz.models import (
 )
 
 
-def _read_family_samples(pedigree_path: Path, family_id: str) -> list[Sample]:
-    """Read a per-family pedigree into Samples, headed or headerless.
+def _read_family(pedigree_path: Path, family_id: str) -> Family:
+    """Read a per-family pedigree into a Family, headed or headerless.
 
     Parent codes in ``MISSING_PARENT`` become ``None``. Sex and phenotype are
     kept as written, as in the cohort model; ``utils/pedigree_labels``
-    normalises them for display.
+    normalises them for display. Dummies go to ``Family.dummies``, as in the
+    cohort model.
     """
+    family = Family(family_id=family_id)
     if pedigree_has_header(pedigree_path):
         df = pl.read_csv(pedigree_path, separator="\t", infer_schema_length=0)
     else:
@@ -37,13 +40,12 @@ def _read_family_samples(pedigree_path: Path, family_id: str) -> list[Sample]:
 
     sample_col = col_mapping.get("sample_id")
     if sample_col is None:
-        return []
+        return family
     father_col = col_mapping.get("father_id")
     mother_col = col_mapping.get("mother_id")
     sex_col = col_mapping.get("sex")
     phenotype_col = col_mapping.get("phenotype")
 
-    samples = []
     for row in df.iter_rows(named=True):
 
         def _val(col: str | None, treat_missing: bool = False) -> str | None:
@@ -56,7 +58,7 @@ def _read_family_samples(pedigree_path: Path, family_id: str) -> list[Sample]:
                 return None
             return str(val)
 
-        samples.append(
+        family.add_member(
             Sample(
                 sample_id=str(row[sample_col]),
                 family_id=family_id,
@@ -66,25 +68,19 @@ def _read_family_samples(pedigree_path: Path, family_id: str) -> list[Sample]:
                 phenotype=_val(phenotype_col),
             )
         )
-    return samples
+    family.add_implied_dummies()
+    return family
 
 
-def load_family_pedigree(pedigree_path: Path) -> list[dict]:
+def load_family_pedigree(
+    pedigree_path: Path, include_dummies: bool = False
+) -> list[dict]:
     """Parse a per-family pedigree TSV into a list of member dicts.
 
-    Returns the same format as Cohort.get_family_members():
-        [{"Sample ID": ..., "Father": ..., "Mother": ..., "Sex": ..., "Phenotype": ...}]
+    Returns the same format as Cohort.get_family_members(): sequenced samples
+    only, unless ``include_dummies``.
     """
-    return [
-        {
-            "Sample ID": sample.sample_id,
-            "Father": sample.father_id or "-",
-            "Mother": sample.mother_id or "-",
-            "Sex": sample.sex or "-",
-            "Phenotype": sample.phenotype or "-",
-        }
-        for sample in _read_family_samples(pedigree_path, family_id="")
-    ]
+    return _read_family(pedigree_path, family_id="").member_rows(include_dummies)
 
 
 def load_family_object(pedigree_path: Path, family_id: str) -> Family:
@@ -93,7 +89,4 @@ def load_family_object(pedigree_path: Path, family_id: str) -> Family:
     Returns a Family with Sample children, supporting .num_samples
     and .num_founders properties.
     """
-    return Family(
-        family_id=family_id,
-        samples=_read_family_samples(pedigree_path, family_id),
-    )
+    return _read_family(pedigree_path, family_id)

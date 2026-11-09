@@ -26,6 +26,7 @@ from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
 )
+from genetics_viz.models import is_dummy_id
 from genetics_viz.utils.column_names import (
     genomic_sort_key,
     get_dropped_columns,
@@ -361,11 +362,14 @@ def filter_individuals(
         ]
 
     if filters.has_parents["value"]:
+        # Both parents sequenced: a dummy parent has no genotype to compare.
         rows = [
             r
             for r in rows
             if ped(r).get("Father", "") not in PED_MISSING
             and ped(r).get("Mother", "") not in PED_MISSING
+            and not is_dummy_id(ped(r).get("Father"))
+            and not is_dummy_id(ped(r).get("Mother"))
         ]
 
     if filters.exclude_samples["value"]:

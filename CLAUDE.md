@@ -486,6 +486,15 @@ The family pages (both), the cohort page and the Search page keep their view in 
 ### Pedigree Missing Values
 The sentinel set `{"", "0", "-9"}` represents unknown/missing in pedigree fields (parent IDs, sex, phenotype). Defined as `_PED_MISSING` in `search.py` and handled in `models.py` via `treat_missing_as_null`.
 
+### Dummy Pedigree Members
+A dummy is an individual who was never sequenced and exists only to link real members: the shared parents of MZ twins, the grandparents joining an aunt to a cousin. ghfc-ngs uses the same convention (pedigree-only members, never scheduled as samples).
+- **The ID prefix `DUMMY_` is the only test**: `models.is_dummy_id`. The rest of the name is the barcode of the real child it hangs from, then `F`/`M` steps (`DUMMY_B00IDL0_F`, `DUMMY_B00INOK_MF` = mother's father). A dummy may have its own row (phenotype `0`), dummy parents of its own, or no row at all, named only in a child's father/mother column: `Family.add_implied_dummies` makes it a member (father male, mother female).
+- **Both parsers split them out**: `Family.samples` holds the sequenced members only, `Family.dummies` the dummies, `Family.members` both. Everything that reads data or counts iterates `samples`, so it skips dummies without asking; `get_family_members` / `load_family_pedigree` return sequenced members unless `include_dummies=True`. Only pedigree views ask for them: the member selector (via `sequenced_ids` for the selection), the report's family table.
+- **A dummy is never selected** in the member selector (no checkbox), so no tab looks it up. Parent IDs are the remaining leak: a lookup by a father/mother ID (the variant dialog's parent CRAMs, `parents_to_validate`) must go through `is_sequenced_parent`, which is false for a missing, `-` or dummy parent.
+- **The pedigree still resolves through dummies**: twins sharing dummy parents are siblings wherever parent IDs are compared. `Sample.is_founder` means "no sequenced parent", so twins with dummy parents are founders (they have no de novo calls). A dummy's phenotype is never read: dummies are not in `samples`, so `family_pedigree` sees no phenotype for a dummy parent.
+- **Marked with one wording**, `pedigree_labels.DUMMY_*`: a muted row and "dummy" badge in the selector, `dummy_badges` (a grey `badge_list` badge) for parent cells of TanStack tables, a greyed italic row with a dashed rule and a footnote in the report.
+- Test data: `datagen.add_dummy_case(data_dir)` adds families 2001 (MZ twins S7/S8 with dummy parents) and 2002 (three generations; S9's dummy father has no row) to DEMO. Opt-in, because it changes DEMO's counts. `tests/ui/test_dummy_pages.py` spies on `sharding.get_entity_path` to catch any sample lookup of a dummy.
+
 ### TanStack Table
 - `DataTable` in `tanstack_table.py` bridges Python to vanilla JS TanStack Table.
 - Per-client JS/CSS injection via `client._dt_scripts_injected` attribute (avoids global set memory leak).

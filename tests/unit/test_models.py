@@ -69,6 +69,7 @@ def test_family_members_render_missing_as_dash(tmp_path):
         "Mother": "-",
         "Sex": "1",
         "Phenotype": "1",
+        "Dummy": False,
     }
     assert members[2]["Father"] == "A"
     assert cohort.get_family_members("nope") == []
