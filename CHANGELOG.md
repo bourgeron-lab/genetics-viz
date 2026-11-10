@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.33.0] - 2026-11-10
 
 ### Added
 - **UPD tab on both family pages**, between ROH and STR, for the ghfc-ngs `upd` step (`families/…/upd/<FID>.<label>.{events,segments,members,windows}.tsv`). Its candidates are one row per member and chromosome that any step points at: the step's events (High and Medium by default, Low on demand), the ROH `upd_candidate_chrom` or a Sample QC `UPD_CANDIDATE` flag, plus every chromosome a curator validated. Each row has its sources, span, type (iso/het/mixed, whole or segmental, terminal), origin, the step's imprinting text as written, LOD, support and depth, and the recurrent and shared-with notes. The newest label written is shown, and a selector lists the older ones (EAGER has `upd_v2` and `upd_v3`). The tab's badge counts the candidates no curator has settled. Download: events, segments, members and windows. Readers see neither a declared parent the step excluded nor the parents' kinship.
