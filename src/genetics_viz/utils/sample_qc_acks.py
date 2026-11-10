@@ -359,3 +359,29 @@ def acknowledged_titles(
             if f in acks
         )
     )
+
+
+def unexplained_denovo_risk(data_dir: Path, family_id: str) -> List[FlagRow]:
+    """The family's flags that doubt its de novo calls, unless explained.
+
+    A parent who is not the parent, a swapped, duplicated or contaminated
+    sample: each turns inherited variants into apparent de novo calls. Only the
+    family's own QC files are read (a few KB, cached). A flag a curator
+    acknowledged as explained (known MZ twins, say) is left out; a confirmed
+    one stays, since the calls are still unreliable. Never raises.
+    """
+    try:
+        qc = sample_qc.load_family_qc(data_dir, family_id)
+    except Exception:
+        logger.warning("Failed to read sample QC of %s", family_id, exc_info=True)
+        return []
+    if qc is None:
+        return []
+    acks = load_acks(data_dir)
+    return [
+        f
+        for f in sample_qc.denovo_risk(
+            qc.flags, [r.get("sample") or "" for r in qc.sample_rows()]
+        )
+        if f not in acks or acks[f].status != "explained"
+    ]

@@ -5,6 +5,16 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Review badges on the family page's tabs**, as the UPD tab's: a count of what waits for a curator, on both family pages. Each count covers the whole family, not the member selection, and is computed off the event loop once the page is drawn.
+  - **Sample QC**: unacknowledged high and medium flags; red if any is high, orange otherwise. `UPD_CANDIDATE` flags are left to the UPD tab when there is one. Every role sees it, as the header QC badge.
+  - **Wombat**: de novo calls (configs matching `de_?novo`) of HIGH or MODERATE impact, one per variant and carrier, after the LCR, gnomAD and MNV exclusions, never validated. When Sample QC holds the de novo table back, the badge shows `!` instead of a count. In family 88171200009 (CANDY_mpx_ghent), 5 of the 190 de novo calls left after the LCR and gnomAD exclusions are HIGH or MODERATE.
+  - **STR**: genotypes the pipeline flags (severity high or medium) never validated.
+  - The Wombat, STR and UPD counts are for curators and administrators only: readers cannot settle them. The UPD badge was shown to every role.
+  - A validation saved from the variant dialog or the STR locus dialog, an acknowledgement or a UPD review updates its badge.
+
 ## [0.33.0] - 2026-11-10
 
 ### Added

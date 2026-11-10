@@ -5,7 +5,7 @@ import asyncio
 
 import datagen
 from nicegui import ui
-from ui_helpers import capture_tables, login, open_tab
+from ui_helpers import badge_becomes, badge_text, capture_tables, login, open_tab
 
 
 async def _open_family(user, monkeypatch, username):
@@ -170,13 +170,19 @@ async def _open_upd_tab(user, monkeypatch, username="curator"):
 
 async def test_upd_tab_sits_between_roh_and_str(user, monkeypatch, data_dir):
     datagen.add_upd_calls(data_dir)
-    await _open_family(user, monkeypatch, "reader")
+    await _open_family(user, monkeypatch, "curator")
     labels = _tab_labels(user)
     assert labels[labels.index("ROH") + 1] == "UPD"
     assert labels[labels.index("UPD") + 1] == "STR"
     # S2's medium and S3's high event wait for a curator.
-    count = user.find(marker="upd-tab-count").elements.pop()
-    assert count.text == "2"
+    assert await badge_text(user, "upd-tab-count") == "2"
+
+
+async def test_readers_get_no_upd_count(user, monkeypatch, data_dir):
+    datagen.add_upd_calls(data_dir)
+    await _open_family(user, monkeypatch, "reader")
+    await user.should_see(marker="qc-tab-count", retries=50)
+    await user.should_not_see(marker="upd-tab-count")
 
 
 async def test_standalone_family_has_the_upd_tab(user, data_dir):
@@ -239,8 +245,7 @@ async def test_curator_reviews_an_event_in_the_upd_tab(user, monkeypatch, data_d
         await asyncio.sleep(0.05)
     s3 = next(r for r in _candidates(tables)["rows"] if r["sample"] == "S3")
     assert s3["validation"] == "present"
-    await user.should_see(marker="upd-tab-count", retries=10)
-    assert user.find(marker="upd-tab-count").elements.pop().text == "1"
+    assert await badge_becomes(user, "upd-tab-count", "1")
 
 
 def upd_rows(data_dir):

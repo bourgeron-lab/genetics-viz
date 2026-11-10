@@ -1,5 +1,7 @@
 """Helpers for the simulated-browser tests."""
 
+import asyncio
+
 from nicegui import ui
 from nicegui.testing import User
 
@@ -63,3 +65,27 @@ def roh_threshold_labels(user: User) -> list:
             for line in series.get("markLine", {}).get("data", []):
                 labels.append(line.get("name", ""))
     return labels
+
+
+async def badge_text(user: User, marker: str) -> str:
+    """A tab badge's text once it is drawn (the count is computed off-thread)."""
+    await user.should_see(marker=marker, retries=50)
+    return user.find(marker=marker).elements.pop().text
+
+
+async def badge_becomes(user: User, marker: str, text: str) -> bool:
+    """Whether a tab badge shows ``text`` within a few seconds (counts refresh async)."""
+    for _ in range(100):
+        found = user.find(marker=marker).elements if _exists(user, marker) else []
+        if found and found.pop().text == text:
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+def _exists(user: User, marker: str) -> bool:
+    try:
+        user.find(marker=marker)
+        return True
+    except AssertionError:
+        return False

@@ -67,6 +67,7 @@ from genetics_viz.utils.str_eh import (
 )
 from genetics_viz.utils.str_plots import distribution_option
 from genetics_viz.utils.str_validation import (
+    curated_statuses,
     INHERITANCES,
     VALIDATIONS,
     read_str_validations,
@@ -86,6 +87,7 @@ def render_str_tab(
     cohort_name: str,
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
+    on_review_changed: Optional[Callable[[], None]] = None,
 ) -> None:
     """Render the STR tab panel content.
 
@@ -95,6 +97,8 @@ def render_str_tab(
         cohort_name: Cohort name ("" on the standalone family page)
         selected_members: Dict with 'value' key containing list of selected member IDs
         data_table_refreshers: List to append refresh functions to
+        on_review_changed: Called after a locus review saved something, so
+            the tab's review badge recounts
     """
     eh_dir = get_family_eh_dir(store.data_dir, family_id)
     labels = find_eh_labels(eh_dir, family_id)
@@ -131,6 +135,7 @@ def render_str_tab(
                     labels=labels,
                     selected_members=selected_members,
                     data_table_refreshers=data_table_refreshers,
+                    on_review_changed=on_review_changed,
                 )
 
 
@@ -167,6 +172,7 @@ def render_eh_subtab(
     labels: List[str],
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
+    on_review_changed: Optional[Callable[[], None]] = None,
 ) -> None:
     """The ExpansionHunter table of one family."""
     eh_dir = get_family_eh_dir(store.data_dir, family_id)
@@ -382,6 +388,11 @@ def render_eh_subtab(
                 {"id": "cohort_flagged", "header": "Flagged", "group": "Cohort founders", **num},
             ]  # fmt: skip
 
+        def saved() -> None:
+            content.refresh()
+            if on_review_changed is not None:
+                on_review_changed()
+
         def on_row_action(e: Dict[str, Any]) -> None:
             locus = (e.get("row") or {}).get("locus")
             if locus:
@@ -394,7 +405,7 @@ def render_eh_subtab(
                     state["context"],
                     state["label"],
                     locus,
-                    on_saved=content.refresh,
+                    on_saved=saved,
                 )
 
         dt_ref: Dict[str, Any] = {"dt": None}
@@ -426,43 +437,18 @@ def render_eh_subtab(
         ui.timer(0.05, load_context, once=True)
 
 
-def _curated_statuses(
-    cmap: Dict[Tuple[str, str], Any],
-    fam: pl.DataFrame,
-    add_status: Callable[[Dict[str, Any], Any, str, str], None],
-    field: str,
-) -> Dict[Tuple[str, str], str]:
-    """``(locus, sample)`` -> the curators' aggregated status, ignored rows left out.
-
-    ``cmap`` is a validation or diagnostic map keyed by the STR variant key;
-    ``add_status`` the loader's matching row helper, which writes ``field``.
-    """
-    if not cmap:
-        return {}
-    out: Dict[Tuple[str, str], str] = {}
-    cols = ["locus", "chrom", "pos", "end", "sample"]
-    for r in fam.select(cols).unique().to_dicts():
-        key = str_variant_key(r["chrom"], r["pos"], r["end"], r["locus"])
-        if (key, r["sample"]) in cmap:
-            row: Dict[str, Any] = {}
-            add_status(row, cmap, key, r["sample"])
-            if row[field]:
-                out[(r["locus"], r["sample"])] = row[field]
-    return out
-
-
 def _validation_statuses(
     data_dir: Any, family_id: str, fam: pl.DataFrame
 ) -> Dict[Tuple[str, str], str]:
     vmap = load_validation_map(str_validation_file(data_dir), family_id)
-    return _curated_statuses(vmap, fam, add_validation_status_to_row, "Validation")
+    return curated_statuses(vmap, fam, add_validation_status_to_row, "Validation")
 
 
 def _diagnostic_statuses(
     data_dir: Any, family_id: str, fam: pl.DataFrame
 ) -> Dict[Tuple[str, str], str]:
     dmap = load_diagnostic_map(diagnostic_path(data_dir, "STR"), family_id)
-    return _curated_statuses(dmap, fam, add_diagnostic_status_to_row, "Diagnostic")
+    return curated_statuses(dmap, fam, add_diagnostic_status_to_row, "Diagnostic")
 
 
 def _render_validation(
