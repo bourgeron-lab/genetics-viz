@@ -1,0 +1,117 @@
+# Wording and colours of the ghfc-ngs upd step's tables (utils/upd_calls.py).
+#
+# The pipeline grades every event (confidence), its origin, composition and
+# extent; the app only words and draws them. An unknown code is shown raw, grey.
+
+# Event confidence, most confident first. "rank" orders the candidates.
+confidences:
+  high:
+    label: "High"
+    color: "#c62828"
+    rank: 3
+  medium:
+    label: "Medium"
+    color: "#ef6c00"
+    rank: 2
+  low:
+    label: "Low"
+    color: "#9e9e9e"
+    rank: 1
+
+# Confidences shown by default in the family tab and the cohort panel. GHFC-NT
+# upd_v2 has 4,814 low duo events (haplotypes the parents share).
+default_confidences: [high, medium]
+
+# Parent of origin: both copies come from this parent.
+origins:
+  maternal:
+    label: "maternal"
+    color: "#c2185b"
+  paternal:
+    label: "paternal"
+    color: "#1565c0"
+  unknown:
+    label: "unknown origin"
+    color: "#757575"
+
+# Event composition (iso, het or mixed) and segment state (iso or het).
+compositions:
+  iso:
+    label: "isodisomy"
+  het:
+    label: "heterodisomy"
+  mixed:
+    label: "mixed"
+  unknown:
+    label: "unknown"
+
+extents:
+  whole_chromosome:
+    label: "whole chromosome"
+  segmental:
+    label: "segmental"
+
+# Analysis mode of a member.
+modes:
+  trio:
+    label: "trio"
+    help: "Both parents sequenced: isodisomy and heterodisomy, from Mendelian errors."
+  duo:
+    label: "duo"
+    help: "One parent sequenced: the missing parent's alleles are drawn at the gnomAD frequency."
+  solo:
+    label: "solo"
+    help: "No parent sequenced: isodisomy only, from the ROH step's runs."
+
+# Member status: the code before ":" (several are joined by "; "). Readers get
+# reader_label; null hides the part (it would say what the role wording hides:
+# a declared parent excluded, the parents' kinship).
+statuses:
+  analysed:
+    label: "Analysed"
+    reader_label: "Analysed"
+  not_in_bcf:
+    label: "Not in the family BCF"
+    reader_label: "Not analysed"
+  no_sites:
+    label: "No usable sites"
+    reader_label: "Not analysed"
+  not_isolated:
+    label: "Not isolated"
+    reader_label: null
+  parentage:
+    label: "Parentage"
+    reader_label: null
+  no_roh_tables:
+    label: "No ROH tables (solo mode needs them)"
+    reader_label: "No ROH tables"
+  not_in_roh_tables:
+    label: "Not in the ROH tables"
+    reader_label: "Not in the ROH tables"
+
+# The chromosome view and the genome overview (windows.tsv, from upd_v4).
+windows:
+  # Allele from the mother only (n_mat) and Mendelian errors against the
+  # father (n_lacks_father) are drawn up; the paternal ones down.
+  maternal: "#f48fb1"
+  maternal_error: "#ad1457"
+  paternal: "#90caf9"
+  paternal_error: "#0d47a1"
+  het_rate: "#424242"
+  depth_ratio: "#2e7d32"
+  # Depth ratio at or below this reads as a deletion (the step's DELETION_DEPTH_MAX).
+  deletion_depth: 0.75
+  # Lanes under the bars.
+  roh: "#6a1b9a"
+  qc_span: "#f9a825"
+  # Genome overview: the share of origin-informative alleles from each parent,
+  # and the het rate of a solo member, dark where it falls to 0.
+  balance_min_sites: 20
+  solo_het_dark: "#4a148c"
+  solo_het_light: "#f3e5f5"
+  no_data: "#eeeeee"
+
+# Validation form: composition and extent a curator records (the codes above).
+validation:
+  compositions: [iso, het, mixed, unknown]
+  extents: [whole_chromosome, segmental]

@@ -78,7 +78,14 @@ from genetics_viz.utils.sample_qc_acks import (
     split_acknowledged,
     withdraw_flag_ack,
 )
-from genetics_viz.utils.upd import child_of, chrom_from_evidence, is_upd_flag
+from genetics_viz.utils.upd import (
+    child_of,
+    chrom_from_evidence,
+    is_upd_flag,
+    latest_validation,
+    read_upd_validations,
+    upd_key,
+)
 from genetics_viz.utils.sample_qc_export import (
     flags_export,
     pairs_export,
@@ -879,6 +886,8 @@ def render_sample_qc_tab(
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
     on_acks_changed: Optional[Callable[[], None]] = None,
+    on_open_upd: Optional[Callable[[str, str], None]] = None,
+    upd_listeners: Optional[List[Callable[[], None]]] = None,
 ) -> None:
     """Render the Sample QC tab panel content.
 
@@ -890,6 +899,11 @@ def render_sample_qc_tab(
         data_table_refreshers: List to append refresh functions to
         on_acks_changed: Called after a curator acknowledges or withdraws a
             flag, so the page header and member icons follow
+        on_open_upd: Opens the UPD tab on a child and chromosome. A
+            ``UPD_CANDIDATE`` flag no curator settled is reviewed there, so
+            the chromosome view is looked at; a settled one in place.
+        upd_listeners: Called after a UPD review anywhere on the page; the
+            tab adds its own redraw
     """
     family_qc = load_family_qc(store.data_dir, family_id)
     if family_qc is None:
@@ -975,8 +989,17 @@ def render_sample_qc_tab(
             return
         if is_upd_flag(flag):
             # A UPD is reviewed by validating it: the validation acknowledges
-            # the flag, and the ROH tab opens the same record.
+            # the flag, and the UPD and ROH tabs open the same record. Until a
+            # curator settles it, the review happens in the UPD tab.
             chrom = chrom_from_evidence(flag)
+            if chrom is not None and on_open_upd is not None:
+                standing = latest_validation(
+                    read_upd_validations(store.data_dir, family_id, upd_key(chrom)),
+                    child_of(flag),
+                )
+                if (standing or {}).get("Validation") not in ("present", "absent"):
+                    on_open_upd(child_of(flag), chrom)
+                    return
             if chrom is not None:
                 show_upd_dialog(
                     dialog_anchor,
@@ -1129,6 +1152,8 @@ def render_sample_qc_tab(
 
     render_content()
     data_table_refreshers.append(render_content.refresh)
+    if upd_listeners is not None:
+        upd_listeners.append(render_content.refresh)
     if has_cohort:
         ui.timer(0.05, load_cohort, once=True)
 

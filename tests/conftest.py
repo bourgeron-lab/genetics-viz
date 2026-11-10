@@ -34,6 +34,7 @@ from genetics_viz.utils import (
     user_preferences,
     str_eh,
     sharding,
+    upd_calls,
     vedette,
 )
 
@@ -68,6 +69,7 @@ def _reset_globals() -> None:
     gene_index.clear_gene_index()
     login_throttle.clear_login_throttle()
     vedette.clear_vedette_cache()
+    upd_calls.clear_upd_cache()
     change_monitor._change_callbacks.clear()
 
 

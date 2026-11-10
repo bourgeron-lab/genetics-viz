@@ -139,6 +139,32 @@ def test_upd_candidate_from_both_signals(store, data_dir):
     assert section.attention
 
 
+def test_upd_step_events_are_candidates(store, data_dir, monkeypatch):
+    from genetics_viz.utils import upd
+
+    datagen.add_upd_calls(data_dir)
+    section = _report(store).section("upd")
+    rows = {(r["iid"], r["chrom"]): r for r in section.rows}
+    assert set(rows) == {("S2", "chr15"), ("S3", "chr2")}  # S3's low chr16 is left out
+    s3 = rows[("S3", "chr2")]
+    assert s3["evidence"] == "UPD step (upd_v4, high)"
+    assert s3["type"] == "isodisomy · segmental · terminal"
+    assert s3["span"] == "0.1–39.7 Mb" and s3["origin"] == "paternal"
+    assert rows[("S2", "chr15")]["imprinting"].startswith("Prader-Willi if maternal")
+    assert "UPD segments (upd_v4)" in dict(_report(store).methods)["Uniparental disomy"]
+    # What a curator validated wins over the event.
+    monkeypatch.setattr(upd, "can_write", lambda: True)
+    upd.save_upd_validation(
+        data_dir, family_id="1001", sample="S3", chrom="2", user="curator",
+        validation="present", origin="paternal", start=100_000, end=30_000_000,
+        composition="mixed", extent="segmental",
+    )  # fmt: skip
+    s3 = next(r for r in _report(store).section("upd").rows if r["iid"] == "S3")
+    assert (s3["validation"], s3["type"], s3["span"]) == (
+        "present", "mixed · segmental", "0.1–30.0 Mb",
+    )  # fmt: skip
+
+
 def test_diagnostics_keep_pathogenic_and_uncertain(store, data_dir):
     datagen.add_report_case(data_dir)
     section = _report(store).section("diagnostics")

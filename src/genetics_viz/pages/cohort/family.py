@@ -38,6 +38,7 @@ from genetics_viz.pages.cohort.components.sample_qc_tab import (
     render_sample_qc_tab,
 )
 from genetics_viz.pages.cohort.components.str_tab import probe_eh_data, render_str_tab
+from genetics_viz.pages.cohort.components.upd_tab import render_upd_tab
 from genetics_viz.pages.cohort.components.svs_tab import probe_svs_data, render_svs_tab
 from genetics_viz.utils.auth import can_write, check_auth, get_current_user
 from genetics_viz.pages.cohort.components.wombat_tab import (
@@ -50,6 +51,12 @@ from genetics_viz.utils.sample_qc import (
     flags_by_sample,
     severity_info,
     severity_summary,
+)
+from genetics_viz.utils.upd import (
+    count_to_review,
+    family_candidates,
+    parse_upd_link,
+    probe_family_upd,
 )
 
 
@@ -199,10 +206,13 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     qc_acked=flags_by_sample(qc_acked),
                 )
 
-                # After a QC review or a UPD validation/diagnostic (ROH and
-                # Sample QC tabs): the header badge, the member icons and the
-                # Diagnostics panel follow.
+                # After a QC review or a UPD validation/diagnostic (UPD, ROH
+                # and Sample QC tabs): the header badge, the member icons, the
+                # Diagnostics panel, the UPD tab's count and every tab showing
+                # a UPD's status follow.
                 diagnostics_refresh: Dict[str, Any] = {"fn": None}
+                upd_listeners: List = []
+                upd_count: Dict[str, Any] = {"refresh": None}
 
                 def on_acks_changed() -> None:
                     qc["summary"] = family_qc_summary(store, family_id)
@@ -211,6 +221,10 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     update_qc_icons(flags_by_sample(active), flags_by_sample(acked))
                     if diagnostics_refresh["fn"] is not None:
                         diagnostics_refresh["fn"]()
+                    if upd_count["refresh"] is not None:
+                        upd_count["refresh"]()
+                    for listener in upd_listeners:
+                        listener()
 
                 # ---- Right column: tabbed info panel ----
                 with ui.column().classes("flex-1").style("gap: 0.5rem; min-width: 0"):
@@ -366,6 +380,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             has_roh = probe_roh_data(store.data_dir, family_id)
             has_str = probe_eh_data(store.data_dir, family_id)
             has_qc = probe_qc_data(store.data_dir, family_id)
+            has_upd = probe_family_upd(store.data_dir, family_id)
 
             # Track loading state for each tab
             wombat_state = {"loaded": False}
@@ -375,6 +390,10 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             roh_state = {"loaded": False}
             str_state = {"loaded": False}
             qc_state = {"loaded": False}
+            upd_state = {"loaded": False}
+            # The UPD tab's review opener, once it is drawn; a review asked for
+            # before that (a link, the Sample QC tab) waits in "pending".
+            upd_review: Dict[str, Any] = {"open": None, "pending": None}
 
             # Analysis tabs section
             with ui.tabs().classes("w-full").mark("family-tabs") as tabs:
@@ -383,6 +402,23 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 ancestry_tab = ui.tab("Ancestry")
                 pgs_tab = ui.tab("Polygenic Scores")
                 roh_tab = ui.tab("ROH")
+                upd_tab = ui.tab("UPD").tooltip("Uniparental disomy")
+                with upd_tab:
+
+                    @ui.refreshable
+                    def upd_badge() -> None:
+                        if not has_upd:
+                            return
+                        n = count_to_review(
+                            family_candidates(store.data_dir, family_id)
+                        )
+                        if n:
+                            ui.badge(str(n), color="orange").props("floating").tooltip(
+                                f"{n} UPD candidate(s) no curator settled"
+                            ).mark("upd-tab-count")
+
+                    upd_badge()
+                    upd_count["refresh"] = upd_badge.refresh
                 str_tab = ui.tab("STR").tooltip("Short tandem repeats")
                 qc_tab = ui.tab("Sample QC").tooltip(
                     "Relatedness, sex and contamination checks (somalier)"
@@ -397,6 +433,8 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     pgs_tab.props("disable")
                 if not has_roh:
                     roh_tab.props("disable")
+                if not has_upd:
+                    upd_tab.props("disable")
                 if not has_str:
                     str_tab.props("disable")
                 if not has_qc:
@@ -413,6 +451,8 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 default_tab_name = "pgs"
             elif has_roh:
                 default_tab_name = "roh"
+            elif has_upd:
+                default_tab_name = "upd"
             elif has_str:
                 default_tab_name = "str"
             elif has_qc:
@@ -428,11 +468,14 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 "ancestry": has_ancestry,
                 "pgs": has_pgs,
                 "roh": has_roh,
+                "upd": has_upd,
                 "str": has_str,
                 "qc": has_qc,
             }
             if tab_has_data.get(link.get("tab") or ""):
                 default_tab_name = link.get("tab")
+            if default_tab_name == "upd":
+                upd_review["pending"] = parse_upd_link(link.get("upd"))
 
             default_tab = {
                 "wombat": wombat_tab,
@@ -440,6 +483,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 "ancestry": ancestry_tab,
                 "pgs": pgs_tab,
                 "roh": roh_tab,
+                "upd": upd_tab,
                 "str": str_tab,
                 "qc": qc_tab,
             }[default_tab_name]
@@ -592,6 +636,8 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
                                 on_acks_changed=on_acks_changed,
+                                on_open_upd=show_upd_tab if has_upd else None,
+                                upd_listeners=upd_listeners,
                             )
                         else:
                             with ui.column().classes(
@@ -603,6 +649,42 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                                 )
 
                     roh_content()
+
+                # Uniparental disomy tab panel
+                with ui.tab_panel(upd_tab).classes(
+                    "border border-gray-300 rounded-lg p-4"
+                ):
+
+                    @ui.refreshable
+                    def upd_content():
+                        if not has_upd:
+                            ui.label("No UPD data available").classes(
+                                "text-gray-500 italic"
+                            )
+                        elif upd_state["loaded"]:
+                            upd_review["open"] = render_upd_tab(
+                                store=store,
+                                family_id=family_id,
+                                cohort_name=cohort_name,
+                                selected_members=selected_members,
+                                data_table_refreshers=data_table_refreshers,
+                                on_acks_changed=on_acks_changed,
+                                link=link,
+                                upd_listeners=upd_listeners,
+                            )
+                            pending, upd_review["pending"] = upd_review["pending"], None
+                            if pending:
+                                upd_review["open"](*pending)
+                        else:
+                            with ui.column().classes(
+                                "w-full items-center justify-center py-16"
+                            ):
+                                ui.spinner(size="xl", color="blue")
+                                ui.label("Loading uniparental disomy...").classes(
+                                    "text-lg text-gray-600 mt-4"
+                                )
+
+                    upd_content()
 
                 # Short tandem repeats tab panel
                 with ui.tab_panel(str_tab).classes(
@@ -653,6 +735,8 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
                                 on_acks_changed=on_acks_changed,
+                                on_open_upd=show_upd_tab if has_upd else None,
+                                upd_listeners=upd_listeners,
                             )
                         else:
                             with ui.column().classes(
@@ -673,6 +757,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 "Ancestry": (has_ancestry, ancestry_state, ancestry_content),
                 "Polygenic Scores": (has_pgs, pgs_state, pgs_content),
                 "ROH": (has_roh, roh_state, roh_content),
+                "UPD": (has_upd, upd_state, upd_content),
                 "STR": (has_str, str_state, str_content),
                 "Sample QC": (has_qc, qc_state, qc_content),
             }
@@ -682,6 +767,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 "ancestry": "Ancestry",
                 "pgs": "Polygenic Scores",
                 "roh": "ROH",
+                "upd": "UPD",
                 "str": "STR",
                 "qc": "Sample QC",
             }
@@ -727,6 +813,19 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     ui.timer(0.1, make_loader(qc_state, qc_content), once=True)
 
             open_qc_tab["fn"] = show_qc_tab
+
+            def show_upd_tab(sample: str, chrom: str) -> None:
+                """Open the UPD tab on ``sample``'s ``chrom``, its review open."""
+                if not has_upd:
+                    return
+                tabs.set_value(upd_tab)
+                link_tab("UPD")
+                if upd_state["loaded"] and upd_review["open"] is not None:
+                    upd_review["open"](sample, chrom)
+                    return
+                upd_review["pending"] = (sample, chrom)
+                if not upd_state["loaded"]:
+                    ui.timer(0.1, make_loader(upd_state, upd_content), once=True)
 
     except Exception as e:
         import traceback

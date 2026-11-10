@@ -5,6 +5,20 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.33.0] - 2026-11-10
+
+### Added
+- **UPD tab on both family pages**, between ROH and STR, for the ghfc-ngs `upd` step (`families/…/upd/<FID>.<label>.{events,segments,members,windows}.tsv`). Its candidates are one row per member and chromosome that any step points at: the step's events (High and Medium by default, Low on demand), the ROH `upd_candidate_chrom` or a Sample QC `UPD_CANDIDATE` flag, plus every chromosome a curator validated. Each row has its sources, span, type (iso/het/mixed, whole or segmental, terminal), origin, the step's imprinting text as written, LOD, support and depth, and the recurrent and shared-with notes. The newest label written is shown, and a selector lists the older ones (EAGER has `upd_v2` and `upd_v3`). The tab's badge counts the candidates no curator has settled. Download: events, segments, members and windows. Readers see neither a declared parent the step excluded nor the parents' kinship.
+- **Chromosome view in the UPD review dialog**, from `upd_v4`'s new `windows.tsv` (500 kb windows). Up: alleles only the mother has, and Mendelian errors against the father. Down: the same for the father. Then the het rate and the depth ratio, over lanes for the step's segments, the ROH runs, the Sample QC span, the validated span and the cytobands. A maternal UPD has no paternal-only allele, an isodisomy has no het call, and a deletion looks like an isodisomy at half the depth. Earlier labels have no windows and draw the lanes only. The tab also draws a genome overview: each member's windows coloured by parent of origin (het rate for members without parents), with the events outlined.
+- **The UPD validation records what was validated.** `validations/upds.tsv` gains `Start End Composition Extent UpdLabel`, prefilled from the event. Older files gain the columns on their next save. The key is still `chr<N>:UPD`, so one validation still acknowledges the Sample QC flag and settles the ROH candidate.
+- **Unsettled UPD flags are reviewed in the UPD tab.** The Sample QC Issues action on a `UPD_CANDIDATE` flag, and the ROH tab's UPD candidates, open the UPD tab with the review when no curator has validated it present or absent. Once validated, they open the review in place as before. In the cohort Sample QC panel, the family link of such a sample opens its UPD tab. A link `?tab=upd&upd=S3:2` opens a review.
+- **UPD on the cohort page.** A right-hand UPD sub-tab follows the table's filters: individuals analysed by mode, events by confidence, reviewed candidates, events per chromosome stacked by confidence, and an events table whose family links open the review. A switch leaves out recurrent events. The individuals table gains a UPD column and filter (confidence, validated present or absent, not reviewed, no event, not analysed).
+
+### Changed
+- **The ROH `UPD? chrN` badge follows the validation**: `present` turns it into `UPD chrN · <origin>`, and `absent` drops it, also from the family report's ROH flags.
+- **The family report's UPD section counts the upd step's High and Medium events.** A UPD only the step calls is no longer missing from it. It adds Type, Span (the validated values, else the event's) and Imprinting: C0XYEAK in family 88171200009 (CANDY_mpx_ghent) now reads a maternal isodisomy, segmental and terminal, chr15 80.0–101.9 Mb, where the report gave only the chromosome. The methods text describes the step (`methods_source` ghfc-ngs 9b821d8).
+- The Diagnostics panel words a UPD with its validated composition and span (`chr15 · maternal · iso 80.0–101.9 Mb`).
+
 ## [0.32.0] - 2026-11-09
 
 ### Added

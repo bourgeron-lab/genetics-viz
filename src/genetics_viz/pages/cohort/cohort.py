@@ -32,6 +32,14 @@ from genetics_viz.pages.cohort.components.cohort_str_tab import (
     probe_cohort_eh_data,
     render_cohort_str_tab,
 )
+from genetics_viz.pages.cohort.components.cohort_upd_tab import (
+    UPD_ANY,
+    cohort_standing,
+    probe_cohort_upd_data,
+    render_cohort_upd_tab,
+    upd_column_fields,
+    upd_filter_options,
+)
 from genetics_viz.pages.cohort.components.docs_panel import render_params_doc_panel
 from genetics_viz.pages.cohort.components.params_panel import render_params_panel
 from genetics_viz.pages.cohort.components.stats_panel import render_stats_panel
@@ -57,6 +65,7 @@ from genetics_viz.utils.sample_qc_acks import (
     muted_color,
     split_acknowledged,
 )
+from genetics_viz.utils.upd_calls import load_cohort_upd
 
 #: QC filter options besides the categories.
 _QC_ANY = "Any issue"
@@ -120,6 +129,7 @@ _FILTER_LINK = {
     "Phenotype": ("pheno", []),
     "Diagnostic": ("diag", []),
     "QC": ("qc", []),
+    "UPD": ("upd", []),
     "Father": ("father", False),
     "Mother": ("mother", False),
 }
@@ -130,6 +140,7 @@ _PANEL_SLUGS = {
     "Ancestry": "ancestry",
     "Polygenic Scores": "pgs",
     "ROH": "roh",
+    "UPD": "upd",
     "STR": "str",
     "Sample QC": "qc",
 }
@@ -278,6 +289,17 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                 "_qc_rank": max((f.rank for f in flags), default=0),
             }
 
+        # The upd step's events per (family, sample), when the cohort ran it:
+        # a few hundred KB, cached on their stat.
+        try:
+            cohort_upd = load_cohort_upd(cohort)
+            upd_fields = upd_column_fields(
+                cohort_upd, cohort_standing(store.data_dir) if cohort_upd else {}
+            )
+        except Exception:
+            cohort_upd = None
+            upd_fields = upd_column_fields(None, {})
+
         # Build flat list of all individuals from pedigree
         all_individuals: List[Dict[str, Any]] = []
         for family in cohort.families.values():
@@ -301,6 +323,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                             "conflicting": "#f59e0b",
                         }.get(sample_diag.get(sample.sample_id, ""), ""),
                         **qc_fields(sample.family_id, sample.sample_id),
+                        **upd_fields(sample.family_id, sample.sample_id),
                     }
                 )
 
@@ -440,6 +463,20 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                         )
                                     ]
 
+                                # UPD filter (confidences, review, any, none)
+                                upd_vals = filters.get("UPD") or []
+                                if upd_vals:
+                                    wanted_upd = set(upd_vals)
+                                    filtered = [
+                                        ind
+                                        for ind in filtered
+                                        if wanted_upd & set(ind.get("_upd_cats", []))
+                                        or (
+                                            UPD_ANY in wanted_upd
+                                            and ind.get("_upd_rank", -1) > 0
+                                        )
+                                    ]
+
                                 # Has father / mother checkboxes: a sequenced
                                 # one, so not a dummy
                                 if filters.get("Father"):
@@ -575,6 +612,28 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                     ]
                                     if cohort_qc is not None
                                     else []
+                                )
+                                + (
+                                    [
+                                        {
+                                            "id": "UPD",
+                                            "header": "UPD",
+                                            "cellType": "badge_list",
+                                            # Badges wrap: the panel beside
+                                            # the table needs the width.
+                                            "maxWidth": 110,
+                                            "sortable": True,
+                                            "sortField": "_upd_rank",
+                                            "sorting": "numerical",
+                                            "filter": {
+                                                "type": "multiselect",
+                                                "options": upd_filter_options(),
+                                                "placeholder": "All",
+                                            },
+                                        }
+                                    ]
+                                    if cohort_upd is not None
+                                    else []
                                 ),
                                 rows=all_individuals,
                                 row_key="Sample ID",
@@ -597,12 +656,14 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         has_roh = probe_cohort_roh_data(cohort)
                         has_str = probe_cohort_eh_data(cohort)
                         has_qc = probe_cohort_qc_data(cohort)
+                        has_upd = probe_cohort_upd_data(cohort)
 
                         # Each tab reads its files on first view, not on first paint.
                         tab_state: Dict[str, Dict[str, bool]] = {
                             "Ancestry": {"loaded": False},
                             "Polygenic Scores": {"loaded": False},
                             "ROH": {"loaded": False},
+                            "UPD": {"loaded": False},
                             "STR": {"loaded": False},
                             "Sample QC": {"loaded": False},
                         }
@@ -623,6 +684,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                 ancestry_tab = ui.tab("Ancestry")
                                 pgs_tab = ui.tab("Polygenic Scores")
                                 roh_tab = ui.tab("ROH")
+                                upd_tab = ui.tab("UPD").tooltip("Uniparental disomy")
                                 str_tab = ui.tab("STR").tooltip("Short tandem repeats")
                                 qc_tab = ui.tab("Sample QC").tooltip(
                                     "Relatedness, sex and contamination (somalier)"
@@ -633,6 +695,8 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                     pgs_tab.props("disable")
                                 if not has_roh:
                                     roh_tab.props("disable")
+                                if not has_upd:
+                                    upd_tab.props("disable")
                                 if not has_str:
                                     str_tab.props("disable")
                                 if not has_qc:
@@ -644,6 +708,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                 "Ancestry": has_ancestry,
                                 "Polygenic Scores": has_pgs,
                                 "ROH": has_roh,
+                                "UPD": has_upd,
                                 "STR": has_str,
                                 "Sample QC": has_qc,
                             }
@@ -652,6 +717,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                 "Ancestry": ancestry_tab,
                                 "Polygenic Scores": pgs_tab,
                                 "ROH": roh_tab,
+                                "UPD": upd_tab,
                                 "STR": str_tab,
                                 "Sample QC": qc_tab,
                             }
@@ -733,6 +799,26 @@ def cohort_page(cohort_name: str, request: Request) -> None:
 
                                     roh_content()
 
+                                with ui.tab_panel(upd_tab).classes("w-full p-0"):
+
+                                    @ui.refreshable
+                                    def upd_content() -> None:
+                                        if not has_upd:
+                                            ui.label(
+                                                "No cohort-level UPD results"
+                                            ).classes("text-gray-500 italic")
+                                        elif tab_state["UPD"]["loaded"]:
+                                            render_cohort_upd_tab(
+                                                store,
+                                                cohort,
+                                                filtered_state,
+                                                refreshers,
+                                            )
+                                        else:
+                                            _loading("Loading uniparental disomy...")
+
+                                    upd_content()
+
                                 with ui.tab_panel(str_tab).classes("w-full p-0"):
 
                                     @ui.refreshable
@@ -780,6 +866,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                                 "Ancestry": (has_ancestry, ancestry_content),
                                 "Polygenic Scores": (has_pgs, pgs_content),
                                 "ROH": (has_roh, roh_content),
+                                "UPD": (has_upd, upd_content),
                                 "STR": (has_str, str_content),
                                 "Sample QC": (has_qc, qc_content),
                             }

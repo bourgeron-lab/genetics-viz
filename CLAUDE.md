@@ -21,7 +21,7 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
 ## Tests and CI
 
 - `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
-- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle, the gene index manifests and the Vedette table cache. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle, the gene index manifests, the Vedette table cache and the UPD tables cache. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
 - An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
 - **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
   - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
@@ -65,7 +65,7 @@ src/genetics_viz/
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
     diagnostic_dialog.py          # Diagnostic review dialog
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
-    upd_dialog.py                 # UPD review: evidence, validation, diagnostic (ROH + Sample QC tabs)
+    upd_dialog.py                 # UPD review: evidence, chromosome view, validation, diagnostic (UPD, ROH, Sample QC tabs)
     family_report_dialog.py       # Family report: "See report"/"PDF" buttons, dialog, conclusion, print
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
@@ -73,6 +73,7 @@ src/genetics_viz/
     gene_index.yaml               # Gene index refresh period, Parquet row group size
     inheritance.yaml              # MOI flag: GeneTrek mode strings -> codes, verdict colours, PAR
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
+    upd.yaml                      # upd step: confidence/origin/mode wording, member statuses (role), window colours
     sample_qc.yaml                # Sample QC flag wording (curator/reader), categories, plot lines
     str.yaml                      # STR class/status colours, support codes, REViewer filename
     report.yaml                   # Family report: wording, PGS traits, aneuploidy cut-off, methods
@@ -105,8 +106,10 @@ src/genetics_viz/
         cohort_ancestry_tab.py    # Ancestry PCA tab (cohort-wide)
         cohort_pgs_tab.py         # Polygenic score violins (cohort-wide)
         roh_tab.py                # Runs of homozygosity tab (per-family)
+        upd_tab.py                # UPD tab (per-family): candidates from every source, genome overview, members
         str_tab.py                # STR tab (per-family): EH sub-tab + locus dialog
         cohort_roh_tab.py         # Runs of homozygosity sub-tab + islands dialog (cohort-wide)
+        cohort_upd_tab.py         # UPD sub-tab (cohort-wide) + the individuals table's UPD column
         cohort_str_tab.py         # STR sub-tab (cohort-wide): loci counts + flagged genotypes
         sample_qc_tab.py          # Sample QC tab (per-family): issues, kinship, sex, quality
         cohort_sample_qc_tab.py   # Sample QC sub-tab (cohort-wide) + cross-family network dialog
@@ -148,7 +151,9 @@ src/genetics_viz/
     variant_rows.py               # Wombat rows: VEP/ClinVar/score badges, LCR/gnomAD/MNV/consequence filters
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR/UPD) and their files
     diagnostic_labels.py          # Diagnostics panel wording: STR repeat counts, UPD origin
-    upd.py                        # validations/upds.tsv (role-guarded), UPD key, flag/ROH evidence
+    upd.py                        # validations/upds.tsv (role-guarded), UPD key, evidence, candidates merged from every source
+    upd_calls.py                  # upd step tables: discovery (newest label), reading, windows, wording, exports
+    upd_plots.py                  # UPD chromosome view (ECharts), genome overview (SVG), cohort chart
     family_report.py              # Family report sections (pure, off-thread): pedigree … diagnostics, methods
     report_html.py                # Family report as one self-contained HTML document (Jinja2)
     report_svg.py                 # Static SVG plots for the report: PGS normal curves, PCA scatter
@@ -313,11 +318,20 @@ Config files (YAML) are loaded once at module level.
   - **Readers see the status, and the note only for categories with `reader_note: true`** in `sample_qc.yaml` (sex, mendelian, sample quality). Elsewhere a note such as "known cousins" would name what `reader_label` hides.
 
 ### Uniparental Disomy (UPD)
-- Two steps point at a UPD and share no identifier: the ROH `froh` column `upd_candidate_chrom` (one chromosome per person, no span) and the Sample QC pair flag `UPD_CANDIDATE` (`sample_a` the parent whose allele is missing, `sample_b` the child; the chromosome only in the evidence, `"… lie on chr2, between …"`, parsed by `upd.chrom_from_evidence`).
-- **A UPD is keyed by family, child and chromosome**: `Variant` is `chr<N>:UPD`, in `validations/upds.tsv` and `diagnostics/upds.tsv`. The validation file has the SNV/SV header; `Inheritance` holds the parental origin (`maternal`, `paternal`, `unknown`), so `load_validation_map` works unchanged. Writes go through `save_upd_validation`, which checks `can_write()` itself.
-- **Both tabs open `show_upd_dialog`** (`components/upd_dialog.py`), from an anchor outside their refreshable section: the ROH tab's "UPD candidates" strip, and the Sample QC Issues review action on a `UPD_CANDIDATE` flag (instead of the plain acknowledgement dialog). On close after a save, the page's `on_acks_changed` redraws the header badge, member icons and Diagnostics panel. The diagnostic's `Impact` is the evidence source (`ROH`, `Sample QC`, `ROH + Sample QC`).
-- **A standing `present`/`absent` UPD validation acknowledges the flag** (`confirmed`/`explained`; the last non-ignored row wins). It cannot be an `AckKey` (it does not know the parent), so `load_acks` returns an `Acks` object that matches it to the flag by family, child and chromosome. **Look flags up through it** — `acks.get(flag)`, `flag in acks` — never by `flag.ack_key`. Its cache key covers both files.
-- Test data: `datagen.add_upd_case(data_dir)` gives 1001's S3 a chr2 UPD (ROH and flag, family and cohort files). It is opt-in because it changes every flag count of 1001.
+- **Three steps point at a UPD and share no identifier**:
+  - the ghfc-ngs `upd` step's events (`families/…/upd/<FID>.<label>.{events,segments,members,inputs}.tsv`, and `windows.tsv` from `upd_v4`; cohort tables concatenated, with `recurrent_families`/`recurrent` on the events and no windows). A span, an origin, a composition (iso/het/mixed), an extent and a confidence per member, analysed as trio, duo or solo (from the ROH runs);
+  - the ROH `froh` column `upd_candidate_chrom` (one chromosome per person, no span);
+  - the Sample QC pair flag `UPD_CANDIDATE` (`sample_a` the parent whose allele is missing, `sample_b` the child; the chromosome and span only in the evidence, `"… lie on chr2, between 0.1 and 39.7 Mb"`, parsed by `upd.chrom_from_evidence` / `span_from_evidence`).
+- **Read the step's tables through `utils/upd_calls.py`**: `find_upd_labels` = `tsv.find_labels(…, "events")`, the newest-written label first (each label is a version of the analysis written beside the older ones; EAGER has `upd_v2` and `upd_v3`). IDs and `chrom` are forced to strings (`family_id` is numeric-looking), `chrom` loses its `chr`, and older labels' missing columns are nulls (`upd_v1` has no `support_fraction`, `shared_with`), so a family's events read `recurrent` as null too. Cached on `(path, mtime, size)` (`clear_upd_cache`).
+- **`windows.tsv` counts raw Mendelian classes per 500 kb window**, with the parents the step *used*: `n_mat` (father homozygous, child het), `n_pat`, `n_lacks_father`/`n_lacks_mother` (opposite homozygotes), the child's `n_het`/`n_hom_alt` and `depth_ratio`. A duo has only the present parent's pair (the others `.`), solo none. The app only draws them (`upd_plots.chromosome_option`, mirrored: maternal up, paternal down); it never reads `norm.bcf`, so the classification stays in ghfc-ngs. Labels before `upd_v4` have no windows: the chromosome view draws the lanes only.
+- **A UPD is keyed by family, child and chromosome**: `Variant` is `chr<N>:UPD`, in `validations/upds.tsv` and `diagnostics/upds.tsv`. The validation file has the SNV/SV header plus `Start End Composition Extent UpdLabel` (what the curator validated, prefilled from the event; appended, so an older file gains them on its next save); `Inheritance` holds the parental origin (`maternal`, `paternal`, `unknown`), so `load_validation_map` works unchanged. Writes go through `save_upd_validation`, which checks `can_write()` itself. A validation's span and type win over the event's in the report.
+- **`upd.upd_candidates` merges the sources into one row per child and chromosome**: an event of the shown confidences (`default_confidences` in `upd.yaml`: high, medium; GHFC-NT `upd_v2` has 4,814 low duo events), the ROH chromosome, a flag naming it, or a standing validation (a validated chromosome stays when a new label drops its event). Once listed, a row carries all its events, whatever their confidence. `family_candidates` and `count_to_review` (not validated present or absent) feed the tab's badge; `probe_family_upd` enables the tab when the family has upd tables, a ROH/QC hint or a validation.
+- **Every review opens `show_upd_dialog`** (`components/upd_dialog.py`) from an anchor outside its refreshable section: the UPD tab's candidates, the ROH tab's "UPD candidates" strip and the Sample QC Issues action on a `UPD_CANDIDATE` flag. **A candidate no curator settled is reviewed in the UPD tab**: the ROH strip and the QC action call `on_open_upd(child, chrom)` (the page's `show_upd_tab`, which switches tab and opens the review; a review asked before the tab is drawn waits in `upd_review["pending"]`). A settled one opens in place. The cohort Sample QC panel's family link of such a sample (`hrefField: "_href"`) and the cohort UPD panel's links open `?tab=upd&upd=<sample>:<chrom>`.
+- **After a UPD save anywhere, every tab showing a UPD's status follows**: the pages' `on_acks_changed` redraws the header badge, member icons, Diagnostics panel and the UPD tab's count, then runs `upd_listeners` (the UPD, ROH and Sample QC tabs append their inner refresh; never an outer tab content, whose re-render would append its refreshers again). The diagnostic's `Impact` is the evidence source (`UPD step + ROH + Sample QC` or part of it).
+- **A standing `present`/`absent` UPD validation acknowledges the flag** (`confirmed`/`explained`; the last non-ignored row wins). It cannot be an `AckKey` (it does not know the parent), so `load_acks` returns an `Acks` object that matches it to the flag by family, child and chromosome. **Look flags up through it** — `acks.get(flag)`, `flag in acks` — never by `flag.ack_key`. Its cache key covers both files. **It also settles the ROH candidate**: `roh.flag_badges(row, validation)` shows `UPD chrN · <origin>` for `present` and drops the badge for `absent`; `roh.is_flagged` ignores an `absent` one (tab, export, report).
+- **Wording is role-dependent for the members table only**: a member's `status` (`parentage: S1 excluded`, `not_isolated: parents' kinship …`) is worded through `member_status_label` (readers get `reader_label`, null parts left out) and readers get no `father_used`/`mother_used` (`table_export`): which declared parent was used says when one was excluded as not the parent.
+- **Imprinting is the step's `imprinting` column, as written** (per region in trios and duos, per chromosome in solo mode). GeneTrek's imprinting regions are on the roadmap.
+- Test data: `datagen.add_upd_case(data_dir)` gives 1001's S3 a chr2 UPD (ROH and flag, family and cohort files). `datagen.add_upd_calls(data_dir)` writes the step's tables for 1001 and DEMO under `upd_v3` (no windows, dated a day earlier) and `upd_v4` (windows): S3 trio paternal iso chr2 0.1–39.7 Mb `high` (the flag's span), S3 chr16 `low` (recurrent at cohort level), S2 solo chr15 `medium` with the Prader-Willi/Angelman text. Both are opt-in: they change flag counts and report sections.
 
 ### Family Report
 Curators send it to the referring clinician of each centre, who decides whether to recontact the family; it is not addressed to patients. "See report" and "PDF" sit at the right end of the title row of both family pages (`render_report_buttons`), for `can_write()` only, so it always uses the curator wording.
@@ -419,7 +433,7 @@ The page has two levels of tabs, and they are separate mechanisms.
 
 - **Page-level, full width**: `General` (the individuals table plus the right-hand panels that follow its filters) and `Workflow`. `Workflow` is *created only when the cohort has a params file* — absent, not disabled — and its own lazy loader is the only `async` one, because it warms the run-record and document caches off-thread before rendering.
 - **Right-hand panel, inside `General`**: `Statistics` / `Ancestry` / `Polygenic Scores` / `ROH` / `STR`, nested inside the General tab panel. Anything describing the pipeline run belongs on `Workflow` instead: it is a property of the cohort, not of the current filter, and does not fit a 400px column.
-- The right-hand panel also has `Sample QC`.
+- The right-hand panel also has `UPD` (between ROH and STR, as on the family page) and `Sample QC`.
 - Both levels use the same lazy pattern — a `{"loaded": False}` dict, a `@ui.refreshable` body with `_loading(...)`, and `ui.timer(0.1, load, once=True)` on tab change. The inner level keys `tab_state` and `lazy_tabs` by the exact tab label and `tab_state[e.args]` is an unguarded lookup, so a label must be added to both dicts or removed from both.
 - `render_status_panel(cohort, title=None)` suppresses the panel's own heading, because the Workflow tab's expansion header already carries the title, status chip and step summary.
 
@@ -476,7 +490,7 @@ Every cohort right-hand tab but Statistics, and every family tab, has a `Downloa
 ### Shareable Links (view state in the URL)
 The family pages (both), the cohort page and the Search page keep their view in the URL query, so the address bar is a link a curator can send (`components/page_link.py`).
 - **Read at build, written as it changes.** A page takes `request: Request`, builds `PageLink.from_request(request)` and opens with its values; every change calls `link.set(...)` then `link.push()` (`history.replaceState`: no reload, no history entry per click). Only non-default values are written, so a page opened bare is in its usual state.
-- **Keys:** family pages `tab`, `m` (members), the Wombat tab's shown config `wcfg` and its `wlcr`/`wgnomad`/`wmnv`/`wgs`/`wimp`/`wval`/`wsort`/`wpage`, the SV tab `svtab` and `svcalls`, the Vedette sub-tab `vpre` (preset, or `custom` with `vtype`/`vkind`/`vown`/`vsize`/`vfreq`/`vgq`/`vimp`/`vinh`), `vgs`/`vval` and `vnp` (non-PASS shown); cohort page `view=workflow`, `panel`, and the individuals table's column filters (`fid`, `sid`, `sex`, `pheno`, `diag`, `qc`, `father`, `mother`); Search `q`, the whole form as compact JSON, written when Search runs and run on open.
+- **Keys:** family pages `tab`, `m` (members), the Wombat tab's shown config `wcfg` and its `wlcr`/`wgnomad`/`wmnv`/`wgs`/`wimp`/`wval`/`wsort`/`wpage`, the SV tab `svtab` and `svcalls`, the Vedette sub-tab `vpre` (preset, or `custom` with `vtype`/`vkind`/`vown`/`vsize`/`vfreq`/`vgq`/`vimp`/`vinh`), `vgs`/`vval` and `vnp` (non-PASS shown), the UPD tab's `updl` (label, when not the newest), `updc` (confidences) and `upd=<sample>:<chrom>` (the review open); cohort page `view=workflow`, `panel`, and the individuals table's column filters (`fid`, `sid`, `sex`, `pheno`, `diag`, `qc`, `upd`, `father`, `mother`); Search `q`, the whole form as compact JSON, written when Search runs and run on open.
 - Lists are comma-joined, `-` is an emptied list (not the same as absent). Consequences shorten to impact levels (`wimp=HIGH`). Search names sources by display name, never by directory: a link carries no server path.
 - Only the shown Wombat config is in the link; the others keep their state while hidden. A linked value the page cannot honour (a tab without data, an unknown config or member) falls back to the default.
 - **The query is in the server's access log**, as the path already is. The fragment would not be, but Python could only read it after the page was built, through a JavaScript round trip.
