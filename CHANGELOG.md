@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.34.0] - 2026-11-10
 
 ### Added
 - **Review badges on the family page's tabs**, as the UPD tab's: a count of what waits for a curator, on both family pages. Each count covers the whole family, not the member selection, and is computed off the event loop once the page is drawn.
