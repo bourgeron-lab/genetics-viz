@@ -4,7 +4,7 @@ import asyncio
 
 import datagen
 from nicegui import ui
-from ui_helpers import capture_tables, login, open_tab
+from ui_helpers import badge_becomes, badge_text, capture_tables, login, open_tab
 
 
 def _tab(user, name):
@@ -235,6 +235,8 @@ def _icons(user, name):
 async def test_curator_acknowledges_and_withdraws_a_flag(user, monkeypatch, data_dir):
     tables = await open_family_qc(user, monkeypatch, "curator")
     await user.should_see("QC: 1 high · 1 medium")
+    # The tab's badge counts the same flags.
+    assert await badge_text(user, "qc-tab-count") == "2"
     issues = _issues(tables)
     row = next(r for r in issues["rows"] if r["flag"] == "Not the declared parent")
     with user.client:
@@ -258,6 +260,7 @@ async def test_curator_acknowledges_and_withdraws_a_flag(user, monkeypatch, data
     # S2's only flag, the declared consanguinity, was acknowledged already.
     await user.should_see("QC: 1 medium", retries=10)
     assert len(_icons(user, "warning")) == 1 and len(_icons(user, "task_alt")) == 2
+    assert await badge_becomes(user, "qc-tab-count", "1")
 
     row = next(r for r in issues["rows"] if r["flag"] == "Not the declared parent")
     with user.client:
@@ -267,6 +270,7 @@ async def test_curator_acknowledges_and_withdraws_a_flag(user, monkeypatch, data
     await user.should_see("Acknowledgement withdrawn", retries=30)
     await user.should_see("QC: 1 high · 1 medium", retries=10)
     assert len(_icons(user, "warning")) == 2
+    assert await badge_becomes(user, "qc-tab-count", "2")
 
 
 async def test_show_acknowledged_switch_hides_them(user, monkeypatch):

@@ -7,7 +7,6 @@ functions return.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -29,8 +28,6 @@ from genetics_viz.utils.column_names import (
     get_column_sorting,
     get_column_type,
     get_display_label,
-    get_dropped_columns,
-    get_schema_overrides,
     reorder_columns_by_group,
 )
 from genetics_viz.utils.gene_scoring import (
@@ -40,65 +37,17 @@ from genetics_viz.utils.gene_scoring import (
 )
 from genetics_viz.utils.genetrek import get_snapshot
 from genetics_viz.utils.inheritance import annotate_moi, family_pedigree
-from genetics_viz.utils.tsv import read_tsv_or_none
 from genetics_viz.utils.variant_rows import add_score_badges, add_vep_badges
+from genetics_viz.utils.wombat import (  # noqa: F401 - re-exported for the tab
+    DENOVO_CONFIG,
+    find_wombat_files,
+    load_config_frame,
+    variant_key,
+    wombat_file_pattern,
+)
 from genetics_viz.utils.vep import get_highest_priority_consequence
 
 logger = logging.getLogger(__name__)
-
-
-def wombat_file_pattern(family_id: str) -> re.Pattern:
-    """``<FID>.rare.<vep config>.annotated.<wombat config>.tsv``."""
-    return re.compile(rf"{re.escape(family_id)}\.rare\.([^.]+)\.annotated\.(.+?)\.tsv$")
-
-
-def find_wombat_files(wombat_dir: Path, family_id: str) -> List[Dict[str, Any]]:
-    """The family's Wombat result files, by name: path, VEP and Wombat config."""
-    pattern = wombat_file_pattern(family_id)
-    files = []
-    for tsv_file in sorted(wombat_dir.glob("*.tsv")):
-        match = pattern.match(tsv_file.name)
-        if match:
-            files.append(
-                {
-                    "file_path": tsv_file,
-                    "vep_config": match.group(1),
-                    "wombat_config": match.group(2),
-                }
-            )
-    return files
-
-
-def load_config_frame(path: Path) -> Optional[pl.DataFrame]:
-    """One config's table, dropped columns removed; None when it has no rows.
-
-    An empty file comes back as None too: wombat leaves one behind when a step
-    had nothing to report, so it needs no warning - the sub-tab is simply
-    disabled, same as a header-only file. A file that fails to read is logged
-    and treated the same way.
-    """
-    try:
-        df = read_tsv_or_none(
-            path,
-            infer_schema_length=10000,
-            schema_overrides=get_schema_overrides(),
-            null_values=[".", ""],
-        )
-    except Exception:
-        logger.warning("Failed to pre-load %s", path, exc_info=True)
-        return None
-    if df is None or len(df) == 0:
-        return None
-    dropped = get_dropped_columns() & set(df.columns)
-    return df.drop(list(dropped)) if dropped else df
-
-
-def variant_key(row: Dict[str, Any]) -> str:
-    """``chrom:pos:ref:alt``, the key of the SNV validation and diagnostic files."""
-    return (
-        f"{row.get('#CHROM', '')}:{row.get('POS', '')}"
-        f":{row.get('REF', '')}:{row.get('ALT', '')}"
-    )
 
 
 def add_curation_status(

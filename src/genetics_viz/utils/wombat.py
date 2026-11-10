@@ -3,10 +3,24 @@
 Wombat writes one row per variant, sample and transcript/annotation, so the
 same variant appears several times with differing annotation columns. Both the
 family Wombat tab and the cohort search collapse those rows; the logic lives
-here so the two stay identical.
+here so the two stay identical, as do the family result files' discovery and
+reading, shared by the tab and the page's review badges.
 """
 
+import logging
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import polars as pl
+
+from .column_names import get_dropped_columns, get_schema_overrides
+from .tsv import read_tsv_or_none
+
+logger = logging.getLogger(__name__)
+
+#: A Wombat config holding de novo calls (``de_novo_mutations``, ``rare_denovo``).
+DENOVO_CONFIG = re.compile(r"de_?novo", re.IGNORECASE)
 
 #: The columns identifying one variant in one sample.
 GROUPING_COLUMNS = ["#CHROM", "POS", "REF", "ALT", "sample"]
@@ -92,3 +106,62 @@ def aggregate_by_variant(df: pl.DataFrame) -> pl.DataFrame:
         pl.when(picked & ~pl.col(name).is_in(_EMPTY)).then(pl.col(name)).alias(name)
         for name in PICKED_HGVS_COLUMNS
     ).drop("_hgvs_rank")
+
+
+# ---------------------------------------------------------------------------
+# A family's result files
+# ---------------------------------------------------------------------------
+
+
+def wombat_file_pattern(family_id: str) -> re.Pattern:
+    """``<FID>.rare.<vep config>.annotated.<wombat config>.tsv``."""
+    return re.compile(rf"{re.escape(family_id)}\.rare\.([^.]+)\.annotated\.(.+?)\.tsv$")
+
+
+def find_wombat_files(wombat_dir: Path, family_id: str) -> List[Dict[str, Any]]:
+    """The family's Wombat result files, by name: path, VEP and Wombat config."""
+    pattern = wombat_file_pattern(family_id)
+    files = []
+    for tsv_file in sorted(wombat_dir.glob("*.tsv")):
+        match = pattern.match(tsv_file.name)
+        if match:
+            files.append(
+                {
+                    "file_path": tsv_file,
+                    "vep_config": match.group(1),
+                    "wombat_config": match.group(2),
+                }
+            )
+    return files
+
+
+def load_config_frame(path: Path) -> Optional[pl.DataFrame]:
+    """One config's table, dropped columns removed; None when it has no rows.
+
+    An empty file comes back as None too: wombat leaves one behind when a step
+    had nothing to report, so it needs no warning - the sub-tab is simply
+    disabled, same as a header-only file. A file that fails to read is logged
+    and treated the same way.
+    """
+    try:
+        df = read_tsv_or_none(
+            path,
+            infer_schema_length=10000,
+            schema_overrides=get_schema_overrides(),
+            null_values=[".", ""],
+        )
+    except Exception:
+        logger.warning("Failed to pre-load %s", path, exc_info=True)
+        return None
+    if df is None or len(df) == 0:
+        return None
+    dropped = get_dropped_columns() & set(df.columns)
+    return df.drop(list(dropped)) if dropped else df
+
+
+def variant_key(row: Dict[str, Any]) -> str:
+    """``chrom:pos:ref:alt``, the key of the SNV validation and diagnostic files."""
+    return (
+        f"{row.get('#CHROM', '')}:{row.get('POS', '')}"
+        f":{row.get('REF', '')}:{row.get('ALT', '')}"
+    )

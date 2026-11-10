@@ -9,6 +9,7 @@ from nicegui import ui
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
+from genetics_viz.components.tab_badge import family_review_badges
 from genetics_viz.components.page_link import PageLink, link_members
 from genetics_viz.components.notes_loader import (
     delete_note,
@@ -52,12 +53,7 @@ from genetics_viz.utils.sample_qc import (
     severity_info,
     severity_summary,
 )
-from genetics_viz.utils.upd import (
-    count_to_review,
-    family_candidates,
-    parse_upd_link,
-    probe_family_upd,
-)
+from genetics_viz.utils.upd import parse_upd_link, probe_family_upd
 
 
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
@@ -212,7 +208,8 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 # a UPD's status follow.
                 diagnostics_refresh: Dict[str, Any] = {"fn": None}
                 upd_listeners: List = []
-                upd_count: Dict[str, Any] = {"refresh": None}
+                # The tabs' review badges, keyed by tab slug, once drawn.
+                review_badges: Dict[str, Any] = {}
 
                 def on_acks_changed() -> None:
                     qc["summary"] = family_qc_summary(store, family_id)
@@ -221,8 +218,9 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     update_qc_icons(flags_by_sample(active), flags_by_sample(acked))
                     if diagnostics_refresh["fn"] is not None:
                         diagnostics_refresh["fn"]()
-                    if upd_count["refresh"] is not None:
-                        upd_count["refresh"]()
+                    for key in ("qc", "upd"):
+                        if key in review_badges:
+                            review_badges[key].refresh()
                     for listener in upd_listeners:
                         listener()
 
@@ -403,22 +401,6 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 pgs_tab = ui.tab("Polygenic Scores")
                 roh_tab = ui.tab("ROH")
                 upd_tab = ui.tab("UPD").tooltip("Uniparental disomy")
-                with upd_tab:
-
-                    @ui.refreshable
-                    def upd_badge() -> None:
-                        if not has_upd:
-                            return
-                        n = count_to_review(
-                            family_candidates(store.data_dir, family_id)
-                        )
-                        if n:
-                            ui.badge(str(n), color="orange").props("floating").tooltip(
-                                f"{n} UPD candidate(s) no curator settled"
-                            ).mark("upd-tab-count")
-
-                    upd_badge()
-                    upd_count["refresh"] = upd_badge.refresh
                 str_tab = ui.tab("STR").tooltip("Short tandem repeats")
                 qc_tab = ui.tab("Sample QC").tooltip(
                     "Relatedness, sex and contamination checks (somalier)"
@@ -439,6 +421,27 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     str_tab.props("disable")
                 if not has_qc:
                     qc_tab.props("disable")
+
+            # Counts of what waits for a curator, drawn on the tabs once in
+            review_badges.update(
+                family_review_badges(
+                    store.data_dir,
+                    family_id,
+                    {
+                        "qc": qc_tab,
+                        "wombat": wombat_tab,
+                        "str": str_tab,
+                        "upd": upd_tab,
+                    },
+                    {
+                        "qc": has_qc,
+                        "wombat": has_wombat,
+                        "str": has_str,
+                        "upd": has_upd,
+                    },
+                    can_write(),
+                )
+            )
 
             # Pick the first enabled tab as the default
             if has_wombat:
@@ -514,6 +517,9 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                                     else None
                                 ),
                                 link=link,
+                                on_review_changed=_badge_refresh(
+                                    review_badges, "wombat"
+                                ),
                             )
                         else:
                             with ui.column().classes(
@@ -704,6 +710,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                                 cohort_name=cohort_name,
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
+                                on_review_changed=_badge_refresh(review_badges, "str"),
                             )
                         else:
                             with ui.column().classes(
@@ -836,3 +843,9 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             ui.label(traceback.format_exc()).classes(
                 "text-red-500 text-xs font-mono whitespace-pre"
             )
+
+
+def _badge_refresh(badges: Dict[str, Any], key: str) -> Any:
+    """The refresh of one review badge, or ``None`` when the tab has none."""
+    badge = badges.get(key)
+    return badge.refresh if badge is not None else None

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -38,6 +37,7 @@ from genetics_viz.pages.cohort.components.wombat_rows import (
     add_variant_counts,
     build_rows,
     count_rows,
+    DENOVO_CONFIG,
     find_wombat_files,
     load_config_frame,
     presort_rows,
@@ -61,7 +61,10 @@ from genetics_viz.utils.sample_qc import (
     gates_denovo,
     load_family_qc,
 )
-from genetics_viz.utils.sample_qc_acks import ack_summary, load_acks
+from genetics_viz.utils.sample_qc_acks import (
+    ack_summary,
+    load_acks,
+)
 from genetics_viz.utils.sharding import get_family_path
 from genetics_viz.utils.view_presets import VIEW_PRESETS, select_preset_for_config
 from genetics_viz.utils.diagnostic_snapshot import snv_snapshot
@@ -80,7 +83,7 @@ def probe_wombat_data(data_dir: Path, family_id: str) -> bool:
 
 
 #: Wombat configs whose calls are de novo mutations.
-_DENOVO_CONFIG = re.compile(r"de_?novo", re.IGNORECASE)
+_DENOVO_CONFIG = DENOVO_CONFIG
 
 
 @dataclass
@@ -347,6 +350,7 @@ def render_wombat_tab(
     family: Optional[Family] = None,
     on_open_qc: Optional[Callable[[], None]] = None,
     link: Optional[PageLink] = None,
+    on_review_changed: Optional[Callable[[], None]] = None,
 ) -> None:
     """Render the Wombat tab panel content.
 
@@ -360,6 +364,8 @@ def render_wombat_tab(
             phenotypes
         on_open_qc: Opens the family's Sample QC tab, from the de novo warning
         link: The page link: the shown config, its filters, sorting and page
+        on_review_changed: Called after a validation or diagnostic is saved,
+            so the tab's review badge recounts
     """
     wombat_dir = get_family_path(store.data_dir, family_id) / "wombat"
 
@@ -444,6 +450,7 @@ def render_wombat_tab(
         on_open_qc=on_open_qc,
         link=_WombatLink(link, default_cfg, first_active_name),
         denovo_qc=denovo_qc,
+        on_review_changed=on_review_changed,
     )
 
     # Each sub-tab is built the first time it is shown, as the family page's
@@ -507,6 +514,8 @@ class _Tab:
     on_open_qc: Optional[Callable[[], None]]
     link: _WombatLink
     denovo_qc: Optional[_DenovoQC]
+    #: Called after a validation or diagnostic is saved: the tab's badge.
+    on_review_changed: Optional[Callable[[], None]] = None
 
 
 def _render_config_panel(tab: _Tab, wf: Dict[str, Any], df: pl.DataFrame) -> None:
@@ -664,6 +673,8 @@ def _render_prepared(tab: _Tab, wf: Dict[str, Any], prepared: _Prepared) -> None
             with page_client:
                 for rfn in tab.data_table_refreshers:
                     rfn()
+                if tab.on_review_changed is not None:
+                    tab.on_review_changed()
 
         tab.data_table_refreshers.append(render_data_table.refresh)
         render_data_table()

@@ -62,6 +62,7 @@ src/genetics_viz/
     vedette_details.py            # SV dialog for a Vedette call: details card, own call, SVSource
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
+    tab_badge.py                  # A count on a tab, computed off-thread: the family page's review badges
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
     diagnostic_dialog.py          # Diagnostic review dialog
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
@@ -154,6 +155,7 @@ src/genetics_viz/
     upd.py                        # validations/upds.tsv (role-guarded), UPD key, evidence, candidates merged from every source
     upd_calls.py                  # upd step tables: discovery (newest label), reading, windows, wording, exports
     upd_plots.py                  # UPD chromosome view (ECharts), genome overview (SVG), cohort chart
+    review_counts.py              # What the family tabs' review badges count (QC, de novo, STR, UPD)
     family_report.py              # Family report sections (pure, off-thread): pedigree … diagnostics, methods
     report_html.py                # Family report as one self-contained HTML document (Jinja2)
     report_svg.py                 # Static SVG plots for the report: PGS normal curves, PCA scatter
@@ -185,7 +187,7 @@ src/genetics_viz/
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
     sharding.py                   # Two-level sharded directory path resolution
     tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels, append_tsv_row(s), rewrite_tsv_rows, set_ignore
-    wombat.py                     # aggregate_by_variant, shared by the Wombat tab and search
+    wombat.py                     # aggregate_by_variant (Wombat tab, search); family result files, DENOVO_CONFIG
     gene_index.py                 # Cross-cohort gene index: cohort tables -> local Parquet, lookups
     gene_rows.py                  # Gene/variant page rows: carriers, curation joined, /goto links
     search_rows.py                # Search page logic without UI: sources, filters, result rows, columns
@@ -361,6 +363,22 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - **Rows of another data directory link through `/goto/<n>?next=<path>`** (`_dir`, `_next`; `n` from the `/data-N` prefix, never a path), which sets `app.storage.user["data_dir"]` and follows `safe_next`.
 - The pages only read. Their diagnostic column is a `badge_list` (`DiagnosticBadges`), not the `diagnostic` cell, which would offer a "+" that opens nothing.
 - Test data: `datagen.add_gene_case(data_dir)` adds cohort OTHER sharing DEMO's SHANK3 de novo, with validations and diagnostics; `datagen.build_second_data_dir(root)` gives a second data directory. Both opt-in.
+
+### Family Page Review Badges
+- **The family tabs carry a count of what waits for a curator** (`components/tab_badge.py`, counts in `utils/review_counts.py`), on both family pages, through `family_review_badges`.
+  - **Sample QC**: unacknowledged high/medium flags of the family files, `UPD_CANDIDATE` left to the UPD tab when it exists. Shown to every role, as the header badge.
+  - **Wombat**: de novo configs (`wombat.DENOVO_CONFIG`) aggregated per variant and carrier, after the LCR/gnomAD/MNV exclusions, HIGH or MODERATE impact (`VEP_IMPACT`, else the consequences' impact), never validated (`UNVALIDATED`). A family whose de novo table Sample QC holds back is not read: `!`.
+  - **STR**: flagged genotypes (`flagged_expr`) of the newest catalog, no validation.
+  - **UPD**: `upd.count_to_review`.
+  - Wombat, STR and UPD are for `can_write()` only, resolved on the event loop before the counts run in `asyncio.to_thread`.
+- **Counts cover the whole family**, not the member selection, and are computed once the page is drawn (`ui.timer(0.2)`), so a page never waits on them.
+- **Refresh points**:
+  - `on_acks_changed` (QC, UPD);
+  - `render_wombat_tab(on_review_changed=…)`, called from `refresh_curation` after a variant dialog save;
+  - `render_str_tab(on_review_changed=…)`, called from the locus dialog's `on_saved`.
+
+  A badge refresh's timer hangs from the tab, which outlives the dialog that saved.
+- Shared with the Wombat tab: `utils/wombat.py` holds the family result files' discovery and reading (`find_wombat_files`, `load_config_frame`, `variant_key`, `DENOVO_CONFIG`), re-exported by `wombat_rows`. The de novo gate flags come from `sample_qc_acks.unexplained_denovo_risk`, and the STR curated statuses from `str_validation.curated_statuses`.
 
 ### Family Diagnostics Panel
 - One renderer, `components/diagnostics_panel.py`, for the cohort and standalone family pages; each page wraps it in its own refreshable.

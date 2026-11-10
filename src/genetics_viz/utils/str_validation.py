@@ -18,7 +18,9 @@ Append-only under an exclusive ``flock``, like the other curation files.
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import polars as pl
 
 from .auth import can_write
 from .tsv import append_tsv_row
@@ -97,3 +99,28 @@ def read_str_validations(
             if row.get("FID") == family_id
             and (variant_key is None or row.get("Variant") == variant_key)
         ]
+
+
+def curated_statuses(
+    cmap: Dict[Tuple[str, str], Any],
+    fam: pl.DataFrame,
+    add_status: Callable[[Dict[str, Any], Any, str, str], None],
+    field: str,
+) -> Dict[Tuple[str, str], str]:
+    """``(locus, sample)`` -> the curators' aggregated status, ignored rows left out.
+
+    ``cmap`` is a validation or diagnostic map keyed by the STR variant key;
+    ``add_status`` the loader's matching row helper, which writes ``field``.
+    """
+    if not cmap:
+        return {}
+    out: Dict[Tuple[str, str], str] = {}
+    cols = ["locus", "chrom", "pos", "end", "sample"]
+    for r in fam.select(cols).unique().to_dicts():
+        key = str_variant_key(r["chrom"], r["pos"], r["end"], r["locus"])
+        if (key, r["sample"]) in cmap:
+            row: Dict[str, Any] = {}
+            add_status(row, cmap, key, r["sample"])
+            if row[field]:
+                out[(r["locus"], r["sample"])] = row[field]
+    return out
