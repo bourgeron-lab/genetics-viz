@@ -35,7 +35,9 @@ from .upd import (
     latest_validation,
     origin_label,
     read_upd_validations,
+    validated_span,
 )
+from .upd_calls import span_text
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +154,8 @@ def describe_upd(
     chrom = chrom_of_key(key)
     samples = [s.strip() for s in (entry.get("Sample") or "").split(",") if s.strip()]
     validations = read_upd_validations(data_dir, family_id, key)
-    origins = []
+    origins: List[str] = []
+    kinds: List[str] = []
     lines = [f"Uniparental disomy of chromosome {chrom}"]
     for sample in samples:
         latest = latest_validation(validations, sample)
@@ -162,13 +165,29 @@ def describe_upd(
         origin = origin_label(latest.get("Inheritance") or "")
         if origin:
             origins.append(origin)
+        kind = _upd_kind(latest)
+        if kind:
+            kinds.append(kind)
         lines.append(
             f"{sample}: validated {latest.get('Validation', '')}"
             + (f", {origin}" if origin else "")
+            + (f", {kind}" if kind else "")
         )
     if entry.get("Impact"):
         lines.append(f"Found by: {entry['Impact']}")
     text = f"chr{chrom}"
     if origins:
         text += " · " + "/".join(dict.fromkeys(origins))
+    if kinds:
+        text += " · " + "/".join(dict.fromkeys(kinds))
     return text, "\n".join(lines)
+
+
+def _upd_kind(row: Dict[str, str]) -> str:
+    """``iso 80.0–101.9 Mb`` from a validation's recorded composition and span."""
+    composition = row.get("Composition") or ""
+    span = validated_span(row)
+    parts = [composition if composition not in ("", "unknown") else ""]
+    if span:
+        parts.append(span_text(*span))
+    return " ".join(p for p in parts if p)

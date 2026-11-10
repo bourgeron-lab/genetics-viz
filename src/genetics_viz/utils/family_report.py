@@ -46,6 +46,7 @@ from genetics_viz.components.validation_loader import (
 from . import roh as roh_utils
 from . import sample_qc as qc_utils
 from . import upd as upd_utils
+from . import upd_calls
 from .ancestry import (
     AncestryFiles,
     ancestry_export,
@@ -243,6 +244,17 @@ def _pipeline_text(cohort: Any) -> str:
 class _Defaults(dict):
     def __missing__(self, key: str) -> str:
         return "n/a"
+
+
+def _upd_label(data_dir: Path, family_id: str) -> str:
+    """The upd step's newest label of the family, ``n/a`` without one."""
+    try:
+        labels = upd_calls.find_upd_labels(
+            upd_calls.get_family_upd_dir(data_dir, family_id), family_id
+        )
+    except OSError:
+        labels = []
+    return labels[0] if labels else "n/a"
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +547,14 @@ def _roh(
         return Section.missing("roh", title, "No ROH results for this family."), None
     people = {p["IID"]: p for p in _people(members, family_id)}
     paired = [(r, people[r["IID"]]) for r in froh.to_dicts() if r.get("IID") in people]
-    export_rows, _ = roh_utils.froh_export(paired, show_relationship=True)
+    # A UPD a curator validated is worded as such; one validated absent no
+    # longer flags the person.
+    upd_validations = upd_utils.standing_validations(
+        upd_utils.read_upd_validations(data_dir, family_id)
+    )
+    export_rows, _ = roh_utils.froh_export(
+        paired, show_relationship=True, upd_validations=upd_validations
+    )
     rows = []
     for r in export_rows:
         grade = roh_utils.grade_for(r.get("froh_category"))
@@ -567,7 +586,19 @@ def _roh(
                 "flags": r.get("flags") or "",
             }
         )
-    flagged = [r for r in paired if roh_utils.is_flagged(r[0])]
+    flagged = [
+        r
+        for r in paired
+        if roh_utils.is_flagged(
+            r[0],
+            upd_validations.get(
+                (
+                    r[0].get("IID") or "",
+                    upd_utils.normalise_chrom(r[0].get("upd_candidate_chrom")),
+                )
+            ),
+        )
+    ]
     note = (
         f"Unusual homozygosity in {len(flagged)} of {len(rows)} individual(s)."
         if flagged
@@ -789,29 +820,36 @@ def _upd(
     family_qc: Optional[qc_utils.QcData],
     diagnostics: List[Dict[str, Any]],
 ) -> Section:
+    """One row per member and chromosome a UPD step points at or a curator validated.
+
+    The upd step's events count at its default confidences (high, medium) of
+    its newest label; a validation's recorded span and type win over the
+    event's, so the report says what was validated.
+    """
     title = "Uniparental disomy"
-    if froh is None and family_qc is None:
+    try:
+        calls = upd_calls.load_family_upd(data_dir, family_id)
+    except Exception:
+        logger.warning("Failed to read the UPD calls of %s", family_id, exc_info=True)
+        calls = None
+    if froh is None and family_qc is None and calls is None:
         return Section.missing(
-            "upd", title, "No ROH or sample QC results for this family."
+            "upd", title, "No UPD, ROH or sample QC results for this family."
         )
-    member_ids = {m.iid for m in members}
-    candidates: Dict[Tuple[str, str], None] = {}
-    for r in froh.to_dicts() if froh is not None else []:
-        if r.get("upd_candidate_chrom") and r.get("IID") in member_ids:
-            candidates[
-                (r["IID"], upd_utils.normalise_chrom(r["upd_candidate_chrom"]))
-            ] = None
-    for f in family_qc.flags if family_qc is not None else []:
-        if upd_utils.is_upd_flag(f):
-            chrom = upd_utils.chrom_from_evidence(f)
-            if chrom:
-                candidates[(upd_utils.child_of(f), chrom)] = None
-    validations = upd_utils.read_upd_validations(data_dir, family_id)
-    for v in validations:
-        if v.get("Sample") in member_ids and v.get("Ignore", "0") != "1":
-            candidates[
-                (v["Sample"], upd_utils.chrom_of_key(v.get("Variant") or ""))
-            ] = None
+    member_ids = [m.iid for m in members]
+    froh_rows = [
+        r
+        for r in (froh.to_dicts() if froh is not None else [])
+        if r.get("upd_candidate_chrom")
+    ]
+    candidates = upd_utils.upd_candidates(
+        calls.events if calls is not None else [],
+        froh_rows,
+        family_qc.flags if family_qc is not None else [],
+        upd_utils.read_upd_validations(data_dir, family_id),
+        upd_calls.DEFAULT_CONFIDENCES,
+        member_ids,
+    )
     upd_diag = {
         (s.strip(), e.get("Variant")): e.get("Diagnostic", "")
         for e in diagnostics
@@ -819,37 +857,46 @@ def _upd(
         for s in (e.get("Sample") or "").split(",")
     }
     rows = []
-    for child, chrom in candidates:
-        if not chrom:
-            continue
-        evidence = upd_utils.gather_evidence(data_dir, family_id, child, chrom)
-        key = upd_utils.upd_key(chrom)
-        latest = upd_utils.latest_validation(
-            [v for v in validations if v.get("Variant") == key], child
+    for c in candidates:
+        event = c.event or {}
+        validation = c.validation or {}
+        evidence = []
+        if event:
+            info = upd_calls.confidence_info(event.get("confidence"))
+            evidence.append(
+                f"UPD step ({calls.label if calls else ''}, {info['label'].lower()})"
+            )
+        if c.roh:
+            evidence.append("ROH")
+        if c.flags:
+            evidence.append("Sample QC")
+        kind = " · ".join(
+            p
+            for p in (
+                upd_calls.composition_label(validation.get("Composition")),
+                upd_calls.extent_label(validation.get("Extent")),
+            )
+            if p
+        ) or (upd_calls.event_type(event) if event else "")
+        span = c.span
+        status = c.status or "not reviewed"
+        origin = upd_utils.origin_label(validation.get("Inheritance") or "") or (
+            upd_utils.origin_label(event.get("origin") or "") if event else ""
         )
-        validation = (latest or {}).get("Validation") or "not reviewed"
         rows.append(
             {
-                "iid": child,
-                "chrom": f"chr{chrom}",
-                "evidence": evidence.source,
-                "validation": validation,
-                "origin": upd_utils.origin_label(
-                    (latest or {}).get("Inheritance") or ""
-                )
-                or "—",
-                "diagnostic": upd_diag.get((child, key)) or "—",
-                "_muted": validation == "absent",
+                "iid": c.sample,
+                "chrom": f"chr{c.chrom}",
+                "evidence": " + ".join(evidence) or "Curator",
+                "type": kind or "—",
+                "span": upd_calls.span_text(*span) if span else "—",
+                "imprinting": event.get("imprinting") or "—",
+                "validation": status,
+                "origin": origin or "—",
+                "diagnostic": upd_diag.get((c.sample, c.key)) or "—",
+                "_muted": status == "absent",
             }
         )
-    member_order = {m.iid: i for i, m in enumerate(members)}
-    chrom_order = {c: i for i, c in enumerate(CHROM_ORDER)}
-    rows.sort(
-        key=lambda r: (
-            member_order.get(r["iid"], len(member_order)),
-            chrom_order.get(r["chrom"][3:], len(chrom_order)),
-        )
-    )
     return Section(
         key="upd",
         title=title,
@@ -858,6 +905,9 @@ def _upd(
             ("iid", "Individual"),
             ("chrom", "Chromosome"),
             ("evidence", "Evidence"),
+            ("type", "Type"),
+            ("span", "Span"),
+            ("imprinting", "Imprinting"),
             ("validation", "Curator validation"),
             ("origin", "Parental origin"),
             ("diagnostic", "Diagnostic"),
@@ -1169,6 +1219,7 @@ def _methods(
         ),
         wcx_args=params.get("wisecondorx_predict_args", "default settings"),
         aneuploidy_pct=f"{float(CONFIG.get('aneuploidy_min_fraction', 0.75)) * 100:.0f}",
+        upd_label=_upd_label(data_dir, family_id),
     )
     wanted = ["sequencing"]
     if "aneuploidy" in available:

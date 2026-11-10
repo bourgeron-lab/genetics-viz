@@ -520,11 +520,33 @@ def pattern_badge(pattern: Optional[str]) -> Dict[str, str]:
     }
 
 
-def flag_badges(row: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Warning badges of one ``froh`` row: UPD candidate, failed QC."""
+def flag_badges(
+    row: Dict[str, Any], upd_validation: Optional[Dict[str, str]] = None
+) -> List[Dict[str, str]]:
+    """Warning badges of one ``froh`` row: UPD candidate, failed QC.
+
+    ``upd_validation`` is the standing UPD validation of the row's candidate
+    chromosome (``validations/upds.tsv``): ``present`` turns the badge into a
+    confirmed UPD, ``absent`` drops it, anything else leaves the question.
+    """
     badges = []
     upd = row.get("upd_candidate_chrom")
-    if upd:
+    status = (upd_validation or {}).get("Validation")
+    if upd and status == "present":
+        origin = (upd_validation or {}).get("Inheritance") or ""
+        badges.append(
+            {
+                "label": f"UPD chr{upd}"
+                + (f" · {origin}" if origin and origin != "unknown" else ""),
+                "color": "#6a1b9a",
+                "tooltip": "UPD validated by {} ({}). This chromosome is left"
+                " out of the grade.".format(
+                    (upd_validation or {}).get("User", ""),
+                    ((upd_validation or {}).get("Timestamp") or "")[:10],
+                ),
+            }
+        )
+    elif upd and status != "absent":
         badges.append(
             {
                 "label": f"UPD? chr{upd}",
@@ -553,12 +575,21 @@ def flag_badges(row: Dict[str, Any]) -> List[Dict[str, str]]:
     return badges
 
 
-def is_flagged(row: Dict[str, Any]) -> bool:
-    """True when a row deserves a look: graded, unusual pattern, UPD or failed QC."""
+def is_flagged(
+    row: Dict[str, Any], upd_validation: Optional[Dict[str, str]] = None
+) -> bool:
+    """True when a row deserves a look: graded, unusual pattern, UPD or failed QC.
+
+    A UPD candidate a curator validated ``absent`` no longer counts.
+    """
+    upd = (
+        bool(row.get("upd_candidate_chrom"))
+        and (upd_validation or {}).get("Validation") != "absent"
+    )
     return (
         (row.get("froh_category") or "none") != "none"
         or (row.get("homozygosity_pattern") or "typical") != "typical"
-        or bool(row.get("upd_candidate_chrom"))
+        or upd
         or row.get("qc_pass") is False
     )
 
@@ -579,13 +610,27 @@ _FROH_EXPORT_METRICS = [
 ]  # fmt: skip
 
 
+def _upd_validation(
+    row: Dict[str, Any], validations: Optional[Dict[Tuple[str, str], Dict[str, str]]]
+) -> Optional[Dict[str, str]]:
+    """The standing validation of a ``froh`` row's UPD candidate chromosome."""
+    chrom = str(row.get("upd_candidate_chrom") or "")
+    if not validations or not chrom:
+        return None
+    chrom = chrom[3:] if chrom.lower().startswith("chr") else chrom
+    return validations.get((row.get("IID") or "", chrom))
+
+
 def froh_export(
-    paired: List[Tuple[Dict[str, Any], Dict[str, Any]]], show_relationship: bool
+    paired: List[Tuple[Dict[str, Any], Dict[str, Any]]],
+    show_relationship: bool,
+    upd_validations: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """One row per person: ``(froh row, export.person dict)`` -> ``(rows, columns)``.
 
     Readers get the neutral grade and no category, parents' kinship or
-    expected F, as on the tabs.
+    expected F, as on the tabs. ``upd_validations`` (``(IID, chrom) ->
+    standing validation``, one family's) words the UPD flag as the tab does.
     """
     columns = [
         "FID", "IID", "sex", "phenotype", "region", "ref_group", "ref_n",
@@ -606,7 +651,9 @@ def froh_export(
             F_BACKGROUND: background(r),
             "pattern": pattern_info(r.get("homozygosity_pattern"))["label"],
             "grade": grade_text(r.get("froh_category"), show_relationship),
-            "flags": "; ".join(b["label"] for b in flag_badges(r)),
+            "flags": "; ".join(
+                b["label"] for b in flag_badges(r, _upd_validation(r, upd_validations))
+            ),
             "froh_category": r.get("froh_category"),
         }
         for name in ("froh_1.5mb", "f_short", "f_intermediate", "f_long"):

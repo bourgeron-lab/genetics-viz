@@ -96,7 +96,7 @@ none:
   upd: "No uniparental disomy candidate was found."
   diagnostics: "No pathogenic or uncertain finding has been recorded by the curators."
 
-methods_source: "ghfc-ngs 4c7ac2b (2026-10-21)"
+methods_source: "ghfc-ngs 9b821d8 (2026-11-10)"
 
 # Methods paragraphs, printed for the sections that have data. Placeholders in
 # braces are filled from the family's own files; unknown ones print "n/a".
@@ -158,10 +158,22 @@ methods:
   upd:
     title: "Uniparental disomy"
     text: >-
-      Two independent signals are used: the runs of homozygosity above, and,
-      in trios, 20 or more sites where the child is homozygous for the allele
-      a parent lacks, 80% of them on one chromosome (somalier sites). A
-      curator reviews each candidate.
+      UPD segments ({upd_label}) are called from the family's DeepVariant and
+      GLnexus genotypes (SNVs of GQ 20 and depth 10 or more, outside the
+      centromeres, segmental duplications and the MHC): with both parents, a
+      hidden Markov model of the child's genotypes given theirs (after UPDhmm,
+      with states for alleles the parents share) calls iso- and
+      heterodisomy and the parent of origin from Mendelian errors; with one
+      parent, the missing parent's alleles are drawn at their gnomAD v4.1
+      frequency; without parents, isodisomy only, from runs of homozygosity of
+      15 Mb or more (10 Mb on chromosomes with an imprinted region), terminal
+      ones from 5 Mb, in an otherwise outbred genome. A copy-number loss
+      (depth 0.75 or less) is left to the CNV analysis. Two further signals
+      are shown: the runs of homozygosity above and, in trios, 20 or more
+      sites where the child is homozygous for the allele a parent lacks, 80%
+      of them on one chromosome (somalier sites). A curator reviews each
+      candidate on the child's and parents' genotypes; imprinting is
+      annotated per chromosome or imprinted region.
   pgs:
     title: "Polygenic scores"
     text: >-

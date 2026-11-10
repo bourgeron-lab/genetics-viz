@@ -62,6 +62,11 @@ from genetics_viz.utils.roh import (
     segments_export,
     to_float,
 )
+from genetics_viz.utils.upd import (
+    normalise_chrom,
+    read_upd_validations,
+    standing_validations,
+)
 from genetics_viz.utils.roh_plots import (
     genome_svg,
     pattern_scatter_option,
@@ -104,7 +109,12 @@ def _group_label(group: Optional[str], n: Optional[int]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_summary(rows: List[Dict], show_relationship: bool) -> None:
+def _render_summary(
+    rows: List[Dict],
+    show_relationship: bool,
+    upd_validations: Optional[Dict[Any, Dict[str, str]]] = None,
+) -> None:
+    upd_validations = upd_validations or {}
     table_rows = []
     for r in rows:
         pct = to_float(r.get("pct_froh_1.5mb"))
@@ -129,7 +139,12 @@ def _render_summary(rows: List[Dict], show_relationship: bool) -> None:
                     grade_badge(r.get("froh_category"), show_relationship)
                 ],
                 "flags": "",
-                "flags_badges": flag_badges(r),
+                "flags_badges": flag_badges(
+                    r,
+                    upd_validations.get(
+                        (r.get("IID"), normalise_chrom(r.get("upd_candidate_chrom")))
+                    ),
+                ),
                 "parents_kinship": to_float(r.get("parents_kinship")),
                 "expected_f": to_float(r.get("expected_f")),
             }
@@ -189,8 +204,13 @@ def _render_upd_candidates(
     rows: List[Dict],
     anchor: ui.element,
     on_saved: Callable[[], None],
+    on_open_upd: Optional[Callable[[str, str], None]] = None,
 ) -> None:
-    """One line per UPD candidate chromosome: its review status and the review."""
+    """One line per UPD candidate chromosome: its review status and the review.
+
+    Until a curator settles it (present or absent), the review happens in the
+    UPD tab, when the page has one; then in place.
+    """
     candidates = [
         (r["IID"], r["upd_candidate_chrom"])
         for r in rows
@@ -203,10 +223,20 @@ def _render_upd_candidates(
         for iid, chrom in candidates:
             with ui.row().classes("items-center gap-2"):
                 ui.label(f"{iid} · chr{chrom}").classes("text-sm font-medium")
-                status_chips(upd_status(data_dir, family_id, iid, chrom))
+                status = upd_status(data_dir, family_id, iid, chrom)
+                status_chips(status)
+                if status.get("validation") == "absent":
+                    ui.label("excluded").classes("text-xs text-gray-500 italic")
+                in_tab = on_open_upd is not None and status.get("validation") not in (
+                    "present",
+                    "absent",
+                )
 
-                def make_open(iid: str, chrom: str) -> Callable[[], None]:
+                def make_open(iid: str, chrom: str, in_tab: bool) -> Callable[[], None]:
                     def handler() -> None:
+                        if in_tab and on_open_upd is not None:
+                            on_open_upd(iid, chrom)
+                            return
                         show_upd_dialog(
                             anchor, data_dir, family_id, iid, chrom, on_saved=on_saved
                         )
@@ -214,13 +244,15 @@ def _render_upd_candidates(
                     return handler
 
                 ui.button(
-                    "Validate / diagnose" if can_write() else "Review",
+                    "Review in the UPD tab"
+                    if in_tab
+                    else ("Validate / diagnose" if can_write() else "Review"),
                     icon="rate_review",
-                    on_click=make_open(iid, chrom),
+                    on_click=make_open(iid, chrom, in_tab),
                 ).props("flat dense no-caps").mark(f"roh-upd-review-{iid}")
         ui.label(
             "A validated UPD (present or absent) also acknowledges the matching"
-            " Sample QC flag."
+            " Sample QC flag; absent drops the UPD badge from the summary."
         ).classes("text-xs text-gray-500")
 
 
@@ -545,7 +577,11 @@ def _download_menu(
         paired = [
             (r, people[r["IID"]]) for r in froh.to_dicts() if r.get("IID") in people
         ]
-        rows, columns = froh_export(paired, show_relationship)
+        rows, columns = froh_export(
+            paired,
+            show_relationship,
+            standing_validations(read_upd_validations(store.data_dir, family_id)),
+        )
         return rows_to_tsv(rows, columns)
 
     def build_segments() -> str:
@@ -617,6 +653,8 @@ def render_roh_tab(
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
     on_acks_changed: Optional[Callable[[], None]] = None,
+    on_open_upd: Optional[Callable[[str, str], None]] = None,
+    upd_listeners: Optional[List[Callable[[], None]]] = None,
 ) -> None:
     """Render the ROH tab panel content.
 
@@ -628,6 +666,10 @@ def render_roh_tab(
         data_table_refreshers: List to append refresh functions to
         on_acks_changed: Called after a UPD validation or diagnostic, which
             may acknowledge a Sample QC flag, so the page header follows
+        on_open_upd: Opens the UPD tab on a child and chromosome (a candidate
+            no curator settled is reviewed there)
+        upd_listeners: Called after a UPD review anywhere on the page; the
+            tab adds its own redraw
     """
     roh_dir = get_roh_dir(store.data_dir, family_id)
     files = find_roh_files(store.data_dir, family_id)
@@ -720,8 +762,14 @@ def render_roh_tab(
             ui.label("No members selected").classes("text-gray-500 italic")
             return
 
-        _render_summary(rows, show_relationship)
-        _render_upd_candidates(store.data_dir, family_id, rows, upd_anchor, upd_saved)
+        _render_summary(
+            rows,
+            show_relationship,
+            standing_validations(read_upd_validations(store.data_dir, family_id)),
+        )
+        _render_upd_candidates(
+            store.data_dir, family_id, rows, upd_anchor, upd_saved, on_open_upd
+        )
 
         _section(
             "Compared with the reference",
@@ -763,3 +811,5 @@ def render_roh_tab(
 
     render_roh_content()
     data_table_refreshers.append(render_roh_content.refresh)
+    if upd_listeners is not None:
+        upd_listeners.append(render_roh_content.refresh)

@@ -36,6 +36,7 @@ exercise the traps found so far:
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
@@ -1397,6 +1398,173 @@ def add_dummy_case(data: Path) -> None:
         WOMBAT_COLUMNS,
         [DUMMY_WOMBAT_ROW],
     )
+
+
+# ---------------------------------------------------------------------------
+# The upd step (opt-in: it adds UPD candidates to 1001 and its report)
+# ---------------------------------------------------------------------------
+
+#: ``upd_segments``'s column lists (ghfc-ngs ``modules/upd/scripts``).
+UPD_SEGMENT_COLUMNS = [
+    "family_id", "sample", "mode", "father", "mother", "chrom", "start", "end",
+    "length_mb", "state", "origin", "source", "n_sites", "n_informative",
+    "n_supporting", "n_contradicting", "n_strong", "support_fraction", "lod",
+    "depth_ratio", "roh_fraction", "interpretation", "confidence", "event_id",
+]  # fmt: skip
+UPD_EVENT_COLUMNS = [
+    "family_id", "sample", "mode", "event_id", "chrom", "start", "end",
+    "length_mb", "origin", "composition", "extent", "terminal", "n_segments",
+    "n_supporting", "n_strong", "support_fraction", "lod", "depth_ratio",
+    "interpretation", "imprinting", "confidence", "shared_with", "notes",
+]  # fmt: skip
+UPD_MEMBER_COLUMNS = [
+    "family_id", "sample", "father", "mother", "mode", "father_used",
+    "mother_used", "chrx", "n_sites", "error_rate", "status", "n_events",
+    "n_events_high",
+]  # fmt: skip
+UPD_WINDOW_COLUMNS = [
+    "family_id", "sample", "mode", "chrom", "start", "end", "n_sites", "n_het",
+    "n_hom_alt", "n_mat", "n_pat", "n_lacks_father", "n_lacks_mother",
+    "depth_ratio",
+]  # fmt: skip
+UPD_LABELS = ("upd_v3", "upd_v4")
+UPD_WINDOW_BP = 500_000
+
+#: S3's paternal isodisomy of distal 2p, the span of :data:`UPD_FLAG`.
+UPD_EVENT = ("2", 100_000, 39_700_000)
+UPD_PRADER_WILLI = (
+    "Prader-Willi if maternal or Angelman if paternal (15q11-q13, if the UPD"
+    " reaches it)"
+)
+
+#: Per event: (sample, mode, chrom, start, end, origin, composition, extent,
+#: terminal, confidence, imprinting, notes, recurrent families).
+UPD_EVENTS = [
+    ("S3", "trio", *UPD_EVENT, "paternal", "iso", "segmental", "yes", "high",
+     ".", ".", 0),
+    ("S3", "trio", "16", 29_315_232, 48_696_811, "maternal", "het", "segmental",
+     "no", "low", ".", ".", 4),
+    ("S2", "solo", "15", 33_600_000, 58_400_000, "unknown", "iso", "segmental",
+     "no", "medium", UPD_PRADER_WILLI, "from ROH (interstitial); rest F_ROH 0.0040",
+     0),
+]  # fmt: skip
+
+_UPD_PARENTS = {"S3": ("S1", "S2")}
+_UPD_CHROM_MB = {"2": 242.2, "15": 102.0, "16": 90.3}
+
+
+def _upd_event_rows(fid: str, recurrent: bool) -> List[List]:
+    rows = []
+    for (
+        sample,
+        mode,
+        chrom,
+        start,
+        end,
+        origin,
+        comp,
+        extent,
+        term,
+        conf,
+        imp,
+        notes,
+        rec,
+    ) in UPD_EVENTS:
+        event_id = f"{sample}:{chrom}:{origin}:{start}"
+        row = [
+            fid, sample, mode, event_id, chrom, start, end, f"{(end - start) / 1e6:.4f}",
+            origin, comp, extent, term, 2, 900, 450 if mode == "trio" else 120,
+            "0.9950", "2400.5000", "0.9900", "UPD", imp, conf, ".", notes,
+        ]  # fmt: skip
+        if recurrent:
+            row += [rec, "yes" if rec >= 3 else "no"]
+        rows.append(row)
+    return rows
+
+
+def _upd_segment_rows(fid: str) -> List[List]:
+    rows = []
+    for sample, mode, chrom, start, end, origin, comp, _, _, conf, *_ in UPD_EVENTS:
+        father, mother = _UPD_PARENTS.get(sample, (".", "."))
+        source = "hmm" if mode == "trio" else "roh"
+        mid = (start + end) // 2
+        for a, b in ((start, mid), (mid + 50_000, end)):
+            rows.append([
+                fid, sample, mode, father, mother, chrom, a, b, f"{(b - a) / 1e6:.4f}",
+                comp, origin, source, 2000, 700, 690, 2, 300, "0.9971", "1200.2500",
+                "0.9900", "1.0000", "isodisomy" if comp == "iso" else "heterodisomy",
+                conf, f"{sample}:{chrom}:{origin}:{start}",
+            ])  # fmt: skip
+    return rows
+
+
+def _upd_member_rows(fid: str) -> List[List]:
+    return [
+        [fid, "S1", "0", "0", "solo", ".", ".", "no", ".", ".", "analysed", 0, 0],
+        [fid, "S2", "0", "0", "solo", ".", ".", "yes", ".", ".", "analysed", 1, 0],
+        [fid, "S3", "S1", "S2", "trio", "S1", "S2", "no", 4507704, "0.0001",
+         "analysed", 2, 1],
+    ]  # fmt: skip
+
+
+def _upd_window_rows(fid: str) -> List[List]:
+    """500 kb windows of S3 (trio) on chr2 and chr16, S1 and S2 (solo) on chr2
+    and chr15: S3's paternal isodisomy has no het call and many errors against
+    its mother; elsewhere the parents' alleles balance."""
+    rows = []
+    iso_chrom, iso_start, iso_end = UPD_EVENT
+    for sample, mode, chroms in (
+        ("S3", "trio", ("2", "16")),
+        ("S1", "solo", ("2", "15")),
+        ("S2", "solo", ("2", "15")),
+    ):
+        for chrom in chroms:
+            for i in range(int(_UPD_CHROM_MB[chrom] * 1e6) // UPD_WINDOW_BP):
+                start, end = i * UPD_WINDOW_BP + 1, (i + 1) * UPD_WINDOW_BP
+                iso = chrom == iso_chrom and sample == "S3" and start <= iso_end
+                if mode == "trio":
+                    counts = (
+                        [400, 0, 150, 0, 0, 0, 90] if iso
+                        else [400, 120, 80, 55, 50, 0, 1 if i % 40 == 0 else 0]
+                    )  # fmt: skip
+                else:
+                    counts = [400, 120, 80, ".", ".", ".", "."]
+                rows.append([fid, sample, mode, chrom, start, end, *counts, "1.0000"])
+    return rows
+
+
+def add_upd_calls(data: Path, fid: str = "1001", cohort: str = "DEMO") -> None:
+    """The upd step's tables of ``fid`` and its cohort, under two labels.
+
+    ``upd_v3`` is written first (and dated a day earlier) without windows,
+    ``upd_v4`` after it with them: the newest label is the one shown.
+    """
+    family = family_dir(data, fid) / "upd"
+    cohort_dir = data / "cohorts" / cohort / "upd"
+    for n, label in enumerate(UPD_LABELS):
+        paths = [
+            write_tsv(family / f"{fid}.{label}.events.tsv", UPD_EVENT_COLUMNS,
+                      _upd_event_rows(fid, recurrent=False)),
+            write_tsv(family / f"{fid}.{label}.segments.tsv", UPD_SEGMENT_COLUMNS,
+                      _upd_segment_rows(fid)),
+            write_tsv(family / f"{fid}.{label}.members.tsv", UPD_MEMBER_COLUMNS,
+                      _upd_member_rows(fid)),
+            write_tsv(cohort_dir / f"{cohort}.{label}.events.tsv",
+                      UPD_EVENT_COLUMNS + ["recurrent_families", "recurrent"],
+                      _upd_event_rows(fid, recurrent=True)),
+            write_tsv(cohort_dir / f"{cohort}.{label}.segments.tsv",
+                      UPD_SEGMENT_COLUMNS, _upd_segment_rows(fid)),
+            write_tsv(cohort_dir / f"{cohort}.{label}.members.tsv",
+                      UPD_MEMBER_COLUMNS, _upd_member_rows(fid)),
+        ]  # fmt: skip
+        if label == "upd_v4":
+            paths.append(
+                write_tsv(family / f"{fid}.{label}.windows.tsv", UPD_WINDOW_COLUMNS,
+                          _upd_window_rows(fid))
+            )  # fmt: skip
+        stamp = 1_700_000_000 + n * 86_400
+        for path in paths:
+            os.utime(path, (stamp, stamp))
 
 
 # ---------------------------------------------------------------------------

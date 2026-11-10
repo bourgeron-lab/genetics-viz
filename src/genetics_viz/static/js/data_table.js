@@ -829,7 +829,8 @@ class DataTable {
 
     _renderLinkCell(value, meta, rowData) {
         if (value === null || value === undefined || value === '') return '';
-        var href = meta.href || '#';
+        // A row's own link (a site path built in Python) wins over the template.
+        var href = (meta.hrefField && rowData[meta.hrefField]) || meta.href || '#';
         // Interpolate {field} placeholders from rowData
         href = href.replace(/\{([^}]+)\}/g, function(match, field) {
             return rowData[field] !== undefined ? encodeURIComponent(rowData[field]) : match;

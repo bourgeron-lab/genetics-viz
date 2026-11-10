@@ -20,6 +20,7 @@ on; they are then listed greyed.
 import asyncio
 import logging
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from urllib.parse import quote, urlencode
 
 from nicegui import ui
 
@@ -69,6 +70,7 @@ from genetics_viz.utils.sample_qc_export import (
     pairs_export,
     samples_export,
 )
+from genetics_viz.utils.upd import child_of, chrom_from_evidence, is_upd_flag
 from genetics_viz.utils.sample_qc_plots import (
     PairSeverities,
     charr_lines,
@@ -146,6 +148,18 @@ def _render_counts(by_key: Dict[Key, List[FlagRow]], keys: Set[Key]) -> None:
                 )
 
 
+def _upd_link(cohort_name: str, key: Key, active: List[FlagRow]) -> Optional[str]:
+    """The family's UPD tab on the child's chromosome, for a ``UPD_CANDIDATE``
+    flag no curator settled; ``None`` otherwise (the family page)."""
+    fid, sample = key
+    for f in active:
+        chrom = chrom_from_evidence(f) if is_upd_flag(f) else None
+        if chrom and child_of(f) == sample:
+            query = urlencode({"tab": "upd", "upd": f"{sample}:{chrom}"})
+            return f"/cohort/{quote(cohort_name)}/family/{quote(fid)}?{query}"
+    return None
+
+
 def _render_flagged(
     by_key: Dict[Key, List[FlagRow]],
     keys: Set[Key],
@@ -165,6 +179,7 @@ def _render_flagged(
         rows.append(
             {
                 "key": f"{key[0]}|{key[1]}",
+                "_href": _upd_link(cohort_name, key, active),
                 "FID": key[0],
                 "sample": key[1],
                 "issues": "",
@@ -190,6 +205,8 @@ def _render_flagged(
                     "header": "Family",
                     "cellType": "link",
                     "href": f"/cohort/{cohort_name}/family/{{FID}}",
+                    # An unsettled UPD flag opens the family's UPD tab on it.
+                    "hrefField": "_href",
                     "sortable": True,
                 },
                 {
