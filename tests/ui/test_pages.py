@@ -46,11 +46,11 @@ async def test_cohort_page_and_its_tabs(user):
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
     for label, expected in [
-        ("Ancestry", "individuals"),
+        ("Ancestry", "Show reference panel"),
         ("Polygenic Scores", "Polygenic Scores"),
-        ("ROH", "Runs of homozygosity"),
+        ("ROH", "Population vs recent"),
     ]:
-        open_tab(user, "cohort-panel-tabs", label)
+        open_tab(user, "cohort-tabs", label)
         await user.should_see(expected, retries=30)
     plots = [e for e in user.find(ui.plotly).elements]
     assert plots, "the ROH and PGS tabs draw Plotly violins"
@@ -178,7 +178,7 @@ async def test_workflow_tab_shows_the_run_record_and_parameters(user):
     )
     await login(user, "reader")
     await user.open("/cohort/DEMO")
-    open_tab(user, "cohort-page-tabs", "Workflow")
+    open_tab(user, "cohort-tabs", "Workflow")
     await user.should_see("Runs of homozygosity", retries=30)
     await user.should_see("Ancestry & PGS", retries=30)
     await user.should_see("not measured", retries=30)
@@ -241,7 +241,7 @@ async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
     tables = capture_tables(monkeypatch)
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
-    open_tab(user, "cohort-panel-tabs", "STR")
+    open_tab(user, "cohort-tabs", "STR")
     await user.should_see("flagged genotypes", retries=30)
 
     flagged = next(t for t in tables if "alleles" in t["columns"])
@@ -640,6 +640,7 @@ async def test_cohort_statistics_plot_a_headerless_cohort_wombat_table(user, dat
     await login(user, "reader")
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Statistics")
     config = user.find(kind=ui.select, content="Wombat config").elements.pop()
     # The older ".annotated." name is listed under its config, not "annotated.strict"
     assert list(config.options) == ["default", "strict"]

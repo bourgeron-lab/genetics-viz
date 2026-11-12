@@ -84,11 +84,40 @@ async def test_address_bar_follows_the_view(user, monkeypatch):
     await wait_for(lambda: pushed[-1].endswith("?wcfg=strict"))
 
 
-async def test_cohort_link_restores_filters_and_panel(user, monkeypatch):
+async def test_cohort_link_restores_filters_and_tab(user, monkeypatch):
     await login(user, "reader")
+    await user.open("/cohort/DEMO?fid=1002&tab=roh")
+    await user.should_see("1 of 6 individuals", retries=30)
+    await user.should_see("Population vs recent", retries=30)
+    await user.should_see("Family ID: 1002", retries=10)  # the filter's chip
+
+
+async def test_older_cohort_links_open_their_tab(user, monkeypatch):
+    """``panel=`` and ``view=workflow`` named the tab before ``tab=``."""
+    await login(user, "reader")
+    pushed = record_pushes(monkeypatch)
     await user.open("/cohort/DEMO?fid=1002&panel=roh")
-    await user.should_see("1 individuals (of 6 total)", retries=30)
-    await user.should_see("Runs of homozygosity", retries=30)
+    await user.should_see("Population vs recent", retries=30)
+    await wait_for(lambda: pushed and "tab=roh" in pushed[-1])
+    assert "panel" not in pushed[-1]
+    tabs = user.find(marker="cohort-tabs").elements.pop()
+    assert tabs.value == "ROH"
+
+    await user.open("/cohort/DEMO?view=workflow")
+    await wait_for(lambda: pushed[-1].endswith("/cohort/DEMO?tab=workflow"))
+    tabs = user.find(marker="cohort-tabs").elements.pop()
+    assert tabs.value == "Workflow"
+
+
+async def test_cohort_tab_follows_the_address_bar(user, monkeypatch):
+    await login(user, "reader")
+    pushed = record_pushes(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Sample QC")
+    await wait_for(lambda: pushed and pushed[-1].endswith("?tab=qc"))
+    open_tab(user, "cohort-tabs", "Individuals")
+    await wait_for(lambda: pushed[-1] == "/cohort/DEMO")
 
 
 async def test_search_link_runs_the_search(user, monkeypatch):

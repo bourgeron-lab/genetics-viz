@@ -153,7 +153,7 @@ async def test_cohort_qc_panel_follows_the_filters(user, monkeypatch):
     tables = capture_tables(monkeypatch)
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
-    open_tab(user, "cohort-panel-tabs", "Sample QC")
+    open_tab(user, "cohort-tabs", "Sample QC")
     await user.should_see("Flagged individuals", retries=30)
     await user.should_see("5 of 6 shown individuals checked", retries=30)
     flagged = [t for t in tables if "issues" in t["columns"]][-1]
@@ -194,13 +194,13 @@ async def test_cohort_table_qc_column_filters(user, monkeypatch):
     assert by_sample["S6"]["_qc_rank"] == 0
     with user.client:
         individuals["on_filter"]({"filters": {"QC": ["Sex chromosomes"]}})
-    await user.should_see("1 individuals (of 6 total)", retries=10)
+    await user.should_see("1 of 6 individuals", retries=10)
     with user.client:
         individuals["on_filter"]({"filters": {"QC": ["Any issue"]}})
-    await user.should_see("3 individuals (of 6 total)", retries=10)
+    await user.should_see("3 of 6 individuals", retries=10)
     with user.client:
         individuals["on_filter"]({"filters": {"QC": ["Acknowledged"]}})
-    await user.should_see("4 individuals (of 6 total)", retries=10)
+    await user.should_see("4 of 6 individuals", retries=10)
 
 
 async def test_home_card_shows_the_qc_figure(user):
@@ -314,7 +314,7 @@ async def test_cohort_panel_switch_counts_acknowledged_flags(user, monkeypatch):
     tables = capture_tables(monkeypatch)
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
-    open_tab(user, "cohort-panel-tabs", "Sample QC")
+    open_tab(user, "cohort-tabs", "Sample QC")
     await user.should_see("Flagged individuals", retries=30)
     built = len(tables)
     user.find(marker="cohort-qc-include-acked").click()

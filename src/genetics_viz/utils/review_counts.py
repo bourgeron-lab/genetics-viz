@@ -1,8 +1,9 @@
-"""What the family page's tab badges count: content a curator has not looked at yet.
+"""What the family and cohort pages' tab badges count.
 
-Each count covers the whole family, not the member selection, like the header
-QC badge, and is blocking but pure: the page runs it off the event loop and
-draws the number on the tab (``components/tab_badge.py``).
+Mostly content a curator has not looked at yet. On the family page each count
+covers the whole family, not the member selection, like the header QC badge,
+and is blocking but pure: the page runs it off the event loop and draws the
+number on the tab (``components/tab_badge.py``).
 
 - **Sample QC**: unacknowledged high and medium flags of the family's own QC
   files. ``UPD_CANDIDATE`` flags are left to the UPD tab when there is one.
@@ -15,29 +16,43 @@ draws the number on the tab (``components/tab_badge.py``).
   or medium), one per locus and member, with no validation in ``strs.tsv``.
 - **UPD**: the candidates no curator validated present or absent
   (:func:`genetics_viz.utils.upd.count_to_review`).
+
+The cohort page counts over the individuals its table's filters leave, so its
+badges are :class:`Pill` lists rebuilt in memory at each filter change; only
+the STR flags and the run record are read, once, off the loop. Sample QC and
+UPD count individuals and candidate chromosomes, split high and medium; STR
+the open flagged genotypes, split the same way. The Individuals tab shows how
+many the filters leave, and Workflow the last run's status.
 """
 
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from genetics_viz.components.validation_loader import (
     add_validation_status_to_row,
     load_validation_map,
 )
 
-from . import upd
+from . import cohort_state, upd
 from .sample_qc import (
     FlagRow,
     count_by_severity,
     gates_denovo,
     load_family_qc,
+    severity_info,
     severity_summary,
 )
 from .sample_qc_acks import load_acks, split_acknowledged, unexplained_denovo_risk
 from .sharding import get_family_path
-from .str_eh import eh_path, find_eh_labels, flagged_expr, get_family_eh_dir
+from .str_eh import (
+    eh_path,
+    find_eh_labels,
+    flagged_expr,
+    get_cohort_eh_dir,
+    get_family_eh_dir,
+)
 from .str_eh import read_eh_table_cached
 from .str_validation import curated_statuses, str_validation_file
 from .validation_status import UNVALIDATED, row_status
@@ -219,3 +234,200 @@ def qc_family_to_review(data_dir: Path, family_id: str, upd_tab: bool) -> Review
         return ReviewCount()
     active, _ = split_acknowledged(qc.flags, load_acks(data_dir))
     return qc_to_review(active, upd_tab)
+
+
+# ---------------------------------------------------------------------------
+# Cohort page: counts over the individuals the table's filters leave
+# ---------------------------------------------------------------------------
+
+#: ``(family_id, sample)``.
+Key = Tuple[str, str]
+
+#: The severities a cohort badge counts, most severe first.
+COUNTED_SEVERITIES = ("high", "medium")
+
+#: The Individuals tab's badge colour (a Quasar colour).
+FILTER_COLOR = "blue-8"
+
+
+@dataclass(frozen=True)
+class Pill:
+    """One badge on a cohort tab: a count, or an icon, in a colour."""
+
+    text: str
+    color: str
+    tooltip: str = ""
+    icon: str = ""
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n:,} {one if n == 1 else many}"
+
+
+def _severity_pills(
+    counts: Mapping[str, int], tooltips: Mapping[str, str]
+) -> List[Pill]:
+    return [
+        Pill(f"{counts[sev]:,}", severity_info(sev)["color"], tooltips[sev])
+        for sev in COUNTED_SEVERITIES
+        if counts.get(sev)
+    ]
+
+
+def filter_pills(shown: int, total: int, n_filters: int) -> List[Pill]:
+    """The Individuals tab's badge: how many individuals the filters leave."""
+    if not n_filters:
+        return []
+    return [
+        Pill(
+            f"{shown:,}",
+            FILTER_COLOR,
+            f"{shown:,} of {_plural(total, 'individual', 'individuals')} shown"
+            f" ({_plural(n_filters, 'filter', 'filters')}). Every tab but"
+            " Workflow shows these only.",
+        )
+    ]
+
+
+def qc_worst_by_individual(flags: Iterable[FlagRow], upd_tab: bool) -> Dict[Key, str]:
+    """Each individual's worst high or medium flag, by ``(FID, sample)``.
+
+    ``flags`` are the cohort's active (unacknowledged) flags; a pair flag
+    counts for both its samples. With ``upd_tab`` a ``UPD_CANDIDATE`` flag is
+    left to the UPD tab, as on the family page.
+    """
+    worst: Dict[Key, str] = {}
+    for f in flags:
+        if upd_tab and upd.is_upd_flag(f):
+            continue
+        sev = severity_info(f.severity)["key"]
+        if sev not in COUNTED_SEVERITIES:
+            continue
+        for key in f.keys:
+            if worst.get(key) != "high":
+                worst[key] = sev
+    return worst
+
+
+def qc_cohort_pills(
+    worst: Mapping[Key, str], shown: Collection[Key], upd_tab: bool
+) -> List[Pill]:
+    """Sample QC: the shown individuals by worst unacknowledged flag."""
+    counts = {sev: 0 for sev in COUNTED_SEVERITIES}
+    for key in shown:
+        sev = worst.get(key)
+        if sev:
+            counts[sev] += 1
+    among = f", among the {len(shown):,} shown"
+    after = " UPD candidates are counted on the UPD tab." if upd_tab else ""
+    return _severity_pills(
+        counts,
+        {
+            "high": f"{_plural(counts['high'], 'individual', 'individuals')} with"
+            f" a high-severity Sample QC flag not acknowledged{among}.{after}",
+            "medium": f"{_plural(counts['medium'], 'individual', 'individuals')}"
+            f" whose worst unacknowledged Sample QC flag is medium{among}.{after}",
+        },
+    )
+
+
+def upd_cohort_pills(
+    open_confidences: Iterable[Sequence[str]], n_shown: int
+) -> List[Pill]:
+    """UPD: the candidate chromosomes no curator settled, by confidence.
+
+    ``open_confidences`` holds, for each shown individual, the confidence of
+    each of its chromosomes with an event of the shown confidences and no
+    validation present or absent (the table rows' ``_upd_open``).
+    """
+    counts = {sev: 0 for sev in COUNTED_SEVERITIES}
+    for confidences in open_confidences:
+        for conf in confidences:
+            counts["high" if conf == "high" else "medium"] += 1
+    among = f", among the {n_shown:,} individuals shown"
+    return _severity_pills(
+        counts,
+        {
+            "high": f"{_plural(counts['high'], 'high-confidence UPD candidate', 'high-confidence UPD candidates')}"
+            f" no curator settled{among}",
+            "medium": f"{_plural(counts['medium'], 'medium-confidence UPD candidate', 'medium-confidence UPD candidates')}"
+            f" no curator settled{among}",
+        },
+    )
+
+
+def str_cohort_open_flags(cohort: Any, data_dir: Path) -> List[Tuple[Key, str, str]]:
+    """The newest catalog's flagged genotypes no curator validated.
+
+    ``((FID, sample), locus, severity)``, severity ``high`` or ``medium``, one
+    per locus and individual. Reads the cohort's ``flags.tsv`` (a few KB),
+    else its genotype table. Blocking: run it in a thread.
+    """
+    directory = get_cohort_eh_dir(cohort)
+    labels = find_eh_labels(directory, cohort.name)
+    if not labels:
+        return []
+    df = None
+    for kind in ("flags", "genotypes"):
+        df = read_eh_table_cached(eh_path(directory, cohort.name, labels[0], kind))
+        if df is not None:
+            break
+    if df is None or len(df) == 0:
+        return []
+    flagged = df.filter(flagged_expr(df))
+    if len(flagged) == 0:
+        return []
+    statuses = curated_statuses(
+        load_validation_map(str_validation_file(data_dir)),
+        flagged,
+        add_validation_status_to_row,
+        "Validation",
+    )
+    found: Dict[Tuple[Key, str], str] = {}
+    for r in flagged.to_dicts():
+        locus, sample = r.get("locus") or "", r.get("sample") or ""
+        if (locus, sample) in statuses:
+            continue
+        ident = ((r.get("family_id") or "", sample), locus)
+        if found.get(ident) != "high":
+            found[ident] = "high" if r.get("severity") == "high" else "medium"
+    return [(key, locus, sev) for (key, locus), sev in found.items()]
+
+
+def str_cohort_pills(
+    open_flags: Iterable[Tuple[Key, str, str]], shown: Collection[Key]
+) -> List[Pill]:
+    """STR: the shown individuals' flagged genotypes no curator validated."""
+    keys = set(shown)
+    counts = {sev: 0 for sev in COUNTED_SEVERITIES}
+    for key, _locus, sev in open_flags:
+        if key in keys:
+            counts[sev] += 1
+    among = f", among the {len(keys):,} individuals shown"
+    return _severity_pills(
+        counts,
+        {
+            "high": f"{_plural(counts['high'], 'flagged STR genotype', 'flagged STR genotypes')}"
+            f" in the pathogenic range not yet validated{among}",
+            "medium": f"{_plural(counts['medium'], 'flagged STR genotype', 'flagged STR genotypes')}"
+            f" (premutation range) not yet validated{among}",
+        },
+    )
+
+
+def workflow_pills(
+    state: "cohort_state.CohortState | None", caption: str = ""
+) -> List[Pill]:
+    """Workflow: the last run's status, as its chip's icon and colour.
+
+    Nothing without a run record, or for a status this build does not know:
+    the tab says it then.
+    """
+    run = state.last_run if state is not None and not state.unsupported else None
+    if run is None or run.status not in cohort_state.RUN_STATUS_META:
+        return []
+    meta = cohort_state.record_status_meta(run)
+    tooltip = f"Last run: {meta.get('label', run.status)}"
+    if caption:
+        tooltip += f" ({caption})"
+    return [Pill("", meta.get("color", "grey"), tooltip, icon=meta.get("icon", "help"))]

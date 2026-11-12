@@ -95,6 +95,8 @@ def upd_column_fields(
 
     One badge per chromosome with an event of the default confidences: the
     validation's colour once a curator settled it, the confidence's before.
+    ``_upd_open`` lists the confidence of each such chromosome no curator
+    validated present or absent: the UPD tab's badge counts them.
     """
     if calls is None:
         return lambda fid, sid: {}
@@ -115,8 +117,13 @@ def upd_column_fields(
 
     def fields(fid: str, sid: str) -> Dict[str, Any]:
         if (fid, sid) not in analysed and (fid, sid) not in by_key:
-            return {"UPD": "", "_upd_cats": [UPD_NOT_ANALYSED], "_upd_rank": -1}
-        badges, cats, rank = [], set(), 0
+            return {
+                "UPD": "",
+                "_upd_cats": [UPD_NOT_ANALYSED],
+                "_upd_rank": -1,
+                "_upd_open": [],
+            }
+        badges, cats, rank, open_ = [], set(), 0, []
         for chrom, e in sorted(
             by_key.get((fid, sid), {}).items(), key=lambda t: order.get(t[0], 99)
         ):
@@ -132,6 +139,8 @@ def upd_column_fields(
                 cats.add(UPD_TO_REVIEW)
             if e.get("confidence") not in DEFAULT_CONFIDENCES and not status:
                 continue
+            if status not in ("present", "absent"):
+                open_.append(e.get("confidence") or "")
             rank = max(rank, info["rank"])
             label = f"chr{chrom} · {status or info['label']}"
             badges.append(
@@ -157,6 +166,7 @@ def upd_column_fields(
             "UPD_badges": badges,
             "_upd_cats": sorted(cats),
             "_upd_rank": rank,
+            "_upd_open": open_,
         }
 
     return fields

@@ -127,3 +127,78 @@ def test_cohort_filters_round_trip():
         "Sex": ["Female"],
         "Father": True,
     }
+
+
+def test_cohort_tab_from_older_links():
+    from genetics_viz.pages.cohort import cohort
+
+    def tab(params):
+        return cohort._linked_tab(pl.PageLink("/cohort/DEMO", params))
+
+    assert tab({"tab": "roh"}) == "roh"
+    assert tab({"panel": "qc"}) == "qc"  # the former right-hand panel
+    assert tab({"view": "workflow", "panel": "qc"}) == "workflow"
+    assert tab({}) is None
+
+
+def test_cohort_filter_chips_and_count():
+    from genetics_viz.pages.cohort import cohort
+
+    columns = cohort._individual_columns(
+        "DEMO", ["1", "2"], ["1", "2"], ["NA"], with_qc=True, with_upd=False
+    )
+    filters = {
+        "FID": " 100 ",
+        "Sample ID": "",
+        "Sex": [],
+        "QC": ["Any issue", "Sex", "Mendelian", "Sample quality", "No issue"],
+        "Father": True,
+        "Mother": False,
+    }
+    assert cohort._filter_chips(filters, columns) == [
+        ("FID", "Family ID: 100"),
+        ("Father", "Has sequenced father"),
+        ("QC", "Sample QC: Any issue, Sex, Mendelian +2"),
+    ]
+    assert cohort._filter_chips({}, columns) == []
+    assert cohort._count_text(6, 6, False) == "6 individuals"
+    assert cohort._count_text(1, 2700, True) == "1 of 2,700 individuals"
+
+
+def test_cohort_filter_individuals():
+    from genetics_viz.pages.cohort import cohort
+
+    rows = [
+        {
+            "FID": "1001",
+            "Sample ID": "S1",
+            "Sex": "1",
+            "Phenotype": "2",
+            "Father": "-",
+            "Mother": "-",
+            "Diagnostic": "",
+            "_qc_cats": ["No issue"],
+            "_qc_rank": 0,
+        },
+        {
+            "FID": "1001",
+            "Sample ID": "S3",
+            "Sex": "2",
+            "Phenotype": "2",
+            "Father": "S1",
+            "Mother": "DUMMY_S3_M",
+            "Diagnostic": "pathogenic",
+            "_qc_cats": ["Sex"],
+            "_qc_rank": 3,
+        },
+    ]
+
+    def ids(filters):
+        return [r["Sample ID"] for r in cohort._filter_individuals(rows, filters)]
+
+    assert ids({}) == ["S1", "S3"]
+    assert ids({"Sample ID": "s3"}) == ["S3"]
+    assert ids({"Diagnostic": ["NA"]}) == ["S1"]
+    assert ids({"QC": ["Any issue"]}) == ["S3"]
+    assert ids({"Father": True}) == ["S3"]
+    assert ids({"Mother": True}) == []  # a dummy mother is not sequenced

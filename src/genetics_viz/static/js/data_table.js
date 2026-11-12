@@ -186,6 +186,13 @@ class DataTable {
         this._rebuildTable();
     }
 
+    // Replace the filter row's values (a filter cleared outside the table).
+    // No filterChange is emitted: the caller has applied them already.
+    setFilters(values) {
+        this._filterValues = Object.assign({}, values || {});
+        this.render();
+    }
+
     _rebuildTable() {
         var self = this;
         this.table.setOptions(function(prev) {
