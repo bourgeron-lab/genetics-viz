@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.35.0] - 2026-11-12
 
 ### Changed
 - **The cohort page has one row of tabs, each with an icon**: Individuals, Statistics, Ancestry, Polygenic Scores, ROH, UPD, STR, Sample QC and Workflow. The analyses used to sit in a column beside the individuals table: once the table had nine columns (1,366 px wide), that column was 138 px wide in a 1,600 px window. The table and every analysis now get the full width, and the tab row stays in view under the page header while a long tab scrolls. It fits a 1,280 px window.
