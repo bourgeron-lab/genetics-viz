@@ -124,7 +124,7 @@ def test_uncurated_or_absent_sv_keeps_its_call(tmp_path):
     shown = {e["Sample"]: (e["_shown_variant"], e["_curated"]) for e in entries}
     # A curated start alone keeps the call's end.
     assert shown == {
-        "S3": ("chr2:1004558-240770000:dup", True),
+        "S3": ("chr2:1004558-1100000:dup", True),
         "S1": (FATHER_CALL, False),
     }
 
