@@ -4,11 +4,17 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from genetics_viz.components.validation_loader import (
+    curated_sv_key,
+    load_validation_map,
+    merge_validation_maps,
+)
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.diagnostic_snapshot import SNAPSHOT_COLUMNS, snapshot_values
 from genetics_viz.utils.tsv import append_tsv_row, append_tsv_rows, set_ignore
+from genetics_viz.utils.validation_files import validation_path
 
 # Verdict used when curators disagree on the same variant for the same sample.
 CONFLICTING_DIAGNOSTIC = "conflicting"
@@ -194,8 +200,13 @@ def load_family_diagnostics(
     ``_entries`` keeps the underlying records so a caller can show who recorded
     what - see :func:`format_diagnostic_contributors`.
 
-    Returns one row dict per (source, variant, verdict). ``_source`` is the
-    kind in lower case: ``"snv"``, ``"sv"`` or ``"str"``.
+    An SV with a standing present validation carrying curated bounds is keyed
+    by those bounds (``_shown_variant``, ``_curated``), so carriers whose calls
+    were curated to one locus share a row; ``_sample_variants`` keeps each
+    sample's own key, under which its validations are filed.
+
+    Returns one row dict per (source, shown variant, verdict). ``_source`` is
+    the kind in lower case: ``"snv"``, ``"sv"``, ``"str"`` or ``"upd"``.
     """
     per_sample: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
     sample_set = set(sample_ids)
@@ -215,16 +226,31 @@ def load_family_diagnostics(
                     key = (source, row.get("Variant", ""), row.get("Sample", ""))
                     per_sample.setdefault(key, []).append(row)
 
+    # An SV is shown, and met, at its curated bounds: a transmitted CNV is
+    # called with slightly different breakpoints in each carrier, and the
+    # curators bring them to one locus when they validate it.
+    sv_validations = (
+        _sv_validations(data_dir, family_id)
+        if any(source == "sv" for source, _, _ in per_sample)
+        else {}
+    )
+
     # Settle each sample's verdict, then key by it so same-verdict samples meet.
     merged: Dict[Tuple[str, str, str], List[Dict[str, str]]] = {}
-    for (source, variant, _sample), rows in per_sample.items():
+    for (source, variant, sample), rows in per_sample.items():
         verdicts = {r.get("Diagnostic", "") for r in rows}
         verdict = next(iter(verdicts)) if len(verdicts) == 1 else CONFLICTING_DIAGNOSTIC
-        merged.setdefault((source, variant, verdict), []).extend(rows)
+        shown = variant
+        if source == "sv":
+            shown = (
+                curated_sv_key(variant, sv_validations.get((variant, sample), []))
+                or variant
+            )
+        merged.setdefault((source, shown, verdict), []).extend(rows)
 
     sample_order = {sid: i for i, sid in enumerate(sample_ids)}
     entries: List[Dict[str, Any]] = []
-    for (source, _variant, verdict), rows in merged.items():
+    for (source, shown, verdict), rows in merged.items():
         rows = sorted(rows, key=lambda r: r.get("Timestamp", ""), reverse=True)
         # dict.fromkeys de-duplicates while preserving order, for the curator
         # who recorded one variant twice and the sample carrying two records.
@@ -233,18 +259,44 @@ def load_family_diagnostics(
             dict.fromkeys(r.get("Sample", "") for r in rows if r.get("Sample")),
             key=lambda s: sample_order.get(s, len(sample_order)),
         )
-        entries.append(
-            {
-                **rows[0],
-                "_source": source,
-                "_entries": rows,
-                "Diagnostic": verdict,
-                "User": ", ".join(users),
-                "Sample": ", ".join(samples),
-            }
+        sample_variants = list(
+            dict.fromkeys((r.get("Sample", ""), r.get("Variant", "")) for r in rows)
         )
+        entry = {
+            **rows[0],
+            "_source": source,
+            "_entries": rows,
+            # The key the row is shown at (curated for a curated SV), and each
+            # sample's own key, under which its validations are filed.
+            "_shown_variant": shown,
+            "_curated": any(v != shown for _, v in sample_variants),
+            "_sample_variants": sample_variants,
+            "Diagnostic": verdict,
+            "User": ", ".join(users),
+            "Sample": ", ".join(samples),
+        }
+        if len({v for _, v in sample_variants}) > 1:
+            # Calls of one curated SV each list the genes of their own span.
+            genes: Dict[str, str] = {}
+            for r in rows:
+                for g in (r.get("Gene") or "").split(","):
+                    symbol = g.split(":")[0].strip()
+                    if symbol and symbol not in ("-", "."):
+                        genes.setdefault(symbol, g.strip())
+            entry["Gene"] = ",".join(genes.values())
+        entries.append(entry)
 
     return entries
+
+
+def _sv_validations(data_dir: Path, family_id: str) -> Dict:
+    """The family's SV validations, WisecondorX's and Vedette's together."""
+    return merge_validation_maps(
+        *(
+            load_validation_map(validation_path(data_dir, kind), family_id)
+            for kind in ("SV", "Vedette")
+        )
+    )
 
 
 def format_diagnostic_contributors(entry: Dict[str, Any]) -> str:

@@ -18,7 +18,7 @@ columns, the details card, and whether breakpoints are base-pair resolved
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from nicegui import ui
 
@@ -43,6 +43,7 @@ from genetics_viz.components.sv_validation_panel import (
 )
 from genetics_viz.components.validation_loader import (
     SV_VALIDATION_HEADER,
+    curated_position,
     load_validation_map,
     merge_validation_maps,
 )
@@ -85,24 +86,6 @@ def _expanded_locus(chrom: str, start: int, end: int) -> str:
     expanded_length = int((end - start) * 1.6)
     expanded_start = max(0, center - (expanded_length // 2))
     return f"{chrom}:{expanded_start}-{center + (expanded_length // 2)}"
-
-
-def _curated_position(
-    validations: List[Tuple],
-) -> Tuple[Optional[str], Optional[str]]:
-    """Curated start and end of the newest present validation that has one.
-
-    Keep original coordinates for the title and validation lookups; curated
-    ones are only for the ROI and the IGV locus.
-    """
-    present_with_curated = [
-        v for v in validations if v[0] == "present" and v[3] != "1" and (v[4] or v[5])
-    ]
-    if not present_with_curated:
-        return None, None
-    present_with_curated.sort(key=lambda v: v[6], reverse=True)
-    most_recent = present_with_curated[0]
-    return most_recent[4] or None, most_recent[5] or None
 
 
 def show_sv_dialog(
@@ -155,7 +138,7 @@ def show_sv_dialog(
     sv_type = infer_sv_type(sv_data)
     variant_key = source.variant_key or f"{chrom}:{start}-{end}:{sv_type}"
 
-    curated_start, curated_end = _curated_position(
+    curated_start, curated_end = curated_position(
         validation_map.get((variant_key, sample), [])
     )
     curated_locus = None

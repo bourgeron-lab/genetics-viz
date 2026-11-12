@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **SV diagnostics are shown at their curated breakpoints**, in the family Diagnostics panel and the family report. Both used to show the caller's coordinates even after a curator validated the SV present with curated bounds, the coordinates the SV tables already show. A transmitted CNV is called with other breakpoints in each carrier, so its carriers stayed on separate lines. Carriers whose calls were curated to the same locus, with the same verdict, now share one line, with the genes of every call. The panel draws a curated locus in green, with each carrier's original call on hover. The report adds "Breakpoints curated on the reads" under it and still reads each carrier's validation under that carrier's own call.
+
 ## [0.35.0] - 2026-11-12
 
 ### Changed

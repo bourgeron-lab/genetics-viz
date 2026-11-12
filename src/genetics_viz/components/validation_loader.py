@@ -148,6 +148,37 @@ def load_validation_map(
     return validation_map
 
 
+def curated_position(validations: List[Tuple]) -> Tuple[Optional[str], Optional[str]]:
+    """Curated start and end of the newest present validation that has one.
+
+    ``validations`` are :func:`load_validation_map` tuples. Ignored rows and
+    other statuses are skipped; a bound left empty is ``None``.
+    """
+    present_with_curated = [
+        v for v in validations if v[0] == "present" and v[3] != "1" and (v[4] or v[5])
+    ]
+    if not present_with_curated:
+        return None, None
+    newest = max(present_with_curated, key=lambda v: v[6])
+    return newest[4] or None, newest[5] or None
+
+
+def curated_sv_key(variant_key: str, validations: List[Tuple]) -> Optional[str]:
+    """``chr:start-end[:type]`` with the curated bounds, or ``None`` if none.
+
+    A missing curated bound keeps the call's own, as the SV table shows it.
+    """
+    curated_start, curated_end = curated_position(validations)
+    if not (curated_start or curated_end):
+        return None
+    chrom, _, rest = variant_key.partition(":")
+    span, sep, kind = rest.partition(":")
+    start, dash, end = span.partition("-")
+    if not (chrom and dash):
+        return None
+    return f"{chrom}:{curated_start or start}-{curated_end or end}{sep}{kind}"
+
+
 def merge_validation_maps(*maps: Dict) -> Dict:
     """One map from several files' maps (lists of a shared key concatenated)."""
     out: Dict = {}
