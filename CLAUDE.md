@@ -62,6 +62,7 @@ src/genetics_viz/
     vedette_details.py            # SV dialog for a Vedette call: details card, own call, SVSource
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
+    family_tabs.py                # Family pages' tab bar: link value, label, icon, tooltip per tab
     tab_badge.py                  # Counts on tabs: the family page's review badges (TabBadge), the cohort page's (TabPills)
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
     diagnostic_dialog.py          # Diagnostic review dialog
@@ -363,6 +364,11 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - **Rows of another data directory link through `/goto/<n>?next=<path>`** (`_dir`, `_next`; `n` from the `/data-N` prefix, never a path), which sets `app.storage.user["data_dir"]` and follows `safe_next`.
 - The pages only read. Their diagnostic column is a `badge_list` (`DiagnosticBadges`), not the `diagnostic` cell, which would offer a "+" that opens nothing.
 - Test data: `datagen.add_gene_case(data_dir)` adds cohort OTHER sharing DEMO's SHANK3 de novo, with validations and diagnostics; `datagen.build_second_data_dir(root)` gives a second data directory. Both opt-in.
+
+### Family Page Tabs
+- **Both family pages draw their analysis tabs through `components/family_tabs.family_tab_bar`.** `FAMILY_TABS` holds each tab's link value (`tab=`), label, icon and tooltip; `TAB_LABELS` / `TAB_SLUGS` derive from it, and a tab mapped to false in the availability dict is disabled. A new tab is one entry there plus its panel and lazy loader on each page.
+- **The row matches the cohort page's**: icon left of the label, mixed case, from the left (`TABS_PROPS`, `inline-label no-caps align=left`), and a tab the cohort page also has takes its icon. Eight tabs take about 900 of the 1,185 px a 1,280 px window leaves, so Quasar's 16 px padding stays; the floating review badges sit at the top right of the label, as before.
+- **A tooltip is text `should_see` matches.** The ROH tab's "Runs of homozygosity" is also the panel's title, so a test waiting for the panel waits for something only the panel draws.
 
 ### Family Page Review Badges
 - **The family tabs carry a count of what waits for a curator** (`components/tab_badge.py`, counts in `utils/review_counts.py`), on both family pages, through `family_review_badges`.
