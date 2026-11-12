@@ -71,9 +71,9 @@ def test_locus_gene():
 
 
 # A transmitted duplication, called with other breakpoints in each carrier.
-CHILD_CALL = "chr2:240686001-240770000:dup"
-FATHER_CALL = "chr2:240730001-240767000:dup"
-CURATED = "chr2:240674558-240770312:dup"
+CHILD_CALL = "chr2:1020001-1100000:dup"
+FATHER_CALL = "chr2:1050001-1090000:dup"
+CURATED = "chr2:1004558-1100312:dup"
 
 
 def _sv_diag(data_dir, variant, sample, genes, ts):
@@ -101,30 +101,30 @@ def _sv_validation(data_dir, variant, sample, start, end, status="present"):
 
 
 def test_svs_curated_to_one_locus_share_a_row(tmp_path):
-    _sv_diag(tmp_path, CHILD_CALL, "S3", "KIF1A:exonic,AQP12A:exonic", "t2")
-    _sv_diag(tmp_path, FATHER_CALL, "S1", "KIF1A:intronic", "t1")
-    _sv_validation(tmp_path, CHILD_CALL, "S3", "240674558", "240770312")
-    _sv_validation(tmp_path, FATHER_CALL, "S1", "240674558", "240770312")
+    _sv_diag(tmp_path, CHILD_CALL, "S3", "GENE1:exonic,GENE2:exonic", "t2")
+    _sv_diag(tmp_path, FATHER_CALL, "S1", "GENE1:intronic", "t1")
+    _sv_validation(tmp_path, CHILD_CALL, "S3", "1004558", "1100312")
+    _sv_validation(tmp_path, FATHER_CALL, "S1", "1004558", "1100312")
 
     [entry] = dl.load_family_diagnostics(tmp_path, "1001", ["S1", "S3"])
     assert entry["_shown_variant"] == CURATED and entry["_curated"]
     assert entry["Sample"] == "S1, S3"
     assert dict(entry["_sample_variants"]) == {"S3": CHILD_CALL, "S1": FATHER_CALL}
     # The newest record's overlap wins for a gene both calls list.
-    assert entry["Gene"] == "KIF1A:exonic,AQP12A:exonic"
+    assert entry["Gene"] == "GENE1:exonic,GENE2:exonic"
 
 
 def test_uncurated_or_absent_sv_keeps_its_call(tmp_path):
-    _sv_diag(tmp_path, CHILD_CALL, "S3", "KIF1A", "t2")
-    _sv_diag(tmp_path, FATHER_CALL, "S1", "KIF1A", "t1")
-    _sv_validation(tmp_path, CHILD_CALL, "S3", "240674558", "")
-    _sv_validation(tmp_path, FATHER_CALL, "S1", "240674558", "240770312", "absent")
+    _sv_diag(tmp_path, CHILD_CALL, "S3", "GENE1", "t2")
+    _sv_diag(tmp_path, FATHER_CALL, "S1", "GENE1", "t1")
+    _sv_validation(tmp_path, CHILD_CALL, "S3", "1004558", "")
+    _sv_validation(tmp_path, FATHER_CALL, "S1", "1004558", "1100312", "absent")
 
     entries = dl.load_family_diagnostics(tmp_path, "1001", ["S1", "S3"])
     shown = {e["Sample"]: (e["_shown_variant"], e["_curated"]) for e in entries}
     # A curated start alone keeps the call's end.
     assert shown == {
-        "S3": ("chr2:240674558-240770000:dup", True),
+        "S3": ("chr2:1004558-240770000:dup", True),
         "S1": (FATHER_CALL, False),
     }
 
@@ -132,14 +132,14 @@ def test_uncurated_or_absent_sv_keeps_its_call(tmp_path):
 def test_report_shows_the_curated_sv_and_each_carriers_validation(tmp_path):
     from genetics_viz.utils import family_report
 
-    _sv_diag(tmp_path, CHILD_CALL, "S3", "KIF1A", "t2")
-    _sv_diag(tmp_path, FATHER_CALL, "S1", "KIF1A", "t1")
-    _sv_validation(tmp_path, CHILD_CALL, "S3", "240674558", "240770312")
-    _sv_validation(tmp_path, FATHER_CALL, "S1", "240674558", "240770312")
+    _sv_diag(tmp_path, CHILD_CALL, "S3", "GENE1", "t2")
+    _sv_diag(tmp_path, FATHER_CALL, "S1", "GENE1", "t1")
+    _sv_validation(tmp_path, CHILD_CALL, "S3", "1004558", "1100312")
+    _sv_validation(tmp_path, FATHER_CALL, "S1", "1004558", "1100312")
 
     entries = dl.load_family_diagnostics(tmp_path, "1001", ["S1", "S3"])
     [row] = family_report._diagnostics(tmp_path, "1001", entries).rows
-    assert row["finding"].startswith("DUP chr2:240674558-240770312")
+    assert row["finding"].startswith("DUP chr2:1004558-1100312")
     assert row["samples"] == "S1, S3"
     assert row["validation"] == "S1: present (paternal); S3: present (paternal)"
     assert "curated" in row["_finding_note"]
