@@ -213,6 +213,21 @@ class DataTable:
             f"function(t) {{ t.setColumnVisibility({vis}); }});"
         )
 
+    def set_filters(self, filters: dict[str, Any]) -> None:
+        """Show *filters* in the filter row, in ``initial_filters``' shape.
+
+        For a filter changed outside the table (a filter bar's clear button).
+        No filter event follows: the caller applies the filters itself. Later
+        filter events report these values plus the user's next change.
+        """
+        self.initial_filters = dict(filters)
+        values = json.dumps(filters, default=str)
+        inst_id = self.instance_id
+        ui.run_javascript(
+            f"window._dtMount.whenReady('{inst_id}', "
+            f"function(t) {{ t.setFilters({values}); }});"
+        )
+
     def destroy(self) -> None:
         """Clean up the JS instance."""
         inst_id = self.instance_id

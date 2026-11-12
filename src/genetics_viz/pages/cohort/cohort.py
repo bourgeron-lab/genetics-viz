@@ -2,14 +2,16 @@
 
 import asyncio
 import csv
+import logging
 from collections import defaultdict
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import Request
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.components.page_link import PageLink
+from genetics_viz.components.tab_badge import TabPills
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.models import is_sequenced_parent
 from genetics_viz.pages.cohort.components.cohort_ancestry_tab import (
@@ -53,6 +55,15 @@ from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.ghfc_ngs_docs import fetch_params_doc
 from genetics_viz.utils.pedigree_labels import dummy_badges
+from genetics_viz.utils.review_counts import (
+    filter_pills,
+    qc_cohort_pills,
+    qc_worst_by_individual,
+    str_cohort_open_flags,
+    str_cohort_pills,
+    upd_cohort_pills,
+    workflow_pills,
+)
 from genetics_viz.utils.sample_qc import (
     CATEGORIES,
     category_badges,
@@ -66,6 +77,8 @@ from genetics_viz.utils.sample_qc_acks import (
     split_acknowledged,
 )
 from genetics_viz.utils.upd_calls import load_cohort_upd
+
+logger = logging.getLogger(__name__)
 
 #: QC filter options besides the categories.
 _QC_ANY = "Any issue"
@@ -134,16 +147,256 @@ _FILTER_LINK = {
     "Mother": ("mother", False),
 }
 
-#: Link value of each right-hand panel tab.
-_PANEL_SLUGS = {
-    "Statistics": "stats",
-    "Ancestry": "ancestry",
-    "Polygenic Scores": "pgs",
-    "ROH": "roh",
-    "UPD": "upd",
-    "STR": "str",
-    "Sample QC": "qc",
-}
+#: The page's tabs, in order: label, link value (``tab=``), icon, tooltip.
+_TABS: List[Tuple[str, str, str, str]] = [
+    ("Individuals", "individuals", "groups", ""),
+    ("Statistics", "stats", "bar_chart", "Carriers per geneset"),
+    ("Ancestry", "ancestry", "public", ""),
+    ("Polygenic Scores", "pgs", "functions", ""),
+    ("ROH", "roh", "linear_scale", "Runs of homozygosity"),
+    ("UPD", "upd", "content_copy", "Uniparental disomy"),
+    ("STR", "str", "repeat", "Short tandem repeats"),
+    ("Sample QC", "qc", "fact_check", "Relatedness, sex and contamination (somalier)"),
+    ("Workflow", "workflow", "account_tree", "Pipeline run status and parameters"),
+]
+_SLUGS = {label: slug for label, slug, _icon, _tip in _TABS}
+_DEFAULT_TAB = "individuals"
+
+#: Values a filter chip lists before ``+N``.
+_CHIP_VALUES = 3
+
+#: Keeps ``--gv-header-height`` at the fixed page header's height, which
+#: grows when its menus wrap: the sticky tab row sits right under it.
+_HEADER_HEIGHT_JS = """
+(() => {
+    const header = document.querySelector('.q-header');
+    if (!header) return;
+    const set = () => document.documentElement.style.setProperty(
+        '--gv-header-height', header.offsetHeight + 'px');
+    set();
+    new ResizeObserver(set).observe(header);
+})();
+"""
+
+
+#: Nine tabs with icons and badges fit a 1280 px window only with Quasar's
+#: 16 px tab padding cut to 12 (and mixed-case labels): about 1,140 px.
+_TABS_CSS = ".cohort-tabs .q-tab { padding: 0 12px; }"
+
+
+def _linked_tab(link: PageLink) -> Optional[str]:
+    """The tab a link opens. Older links name it ``panel`` or ``view=workflow``."""
+    if link.get("tab"):
+        return link.get("tab")
+    if link.get("view") == "workflow":
+        return "workflow"
+    return link.get("panel")
+
+
+def _filter_active(value: Any) -> bool:
+    return bool(value.strip()) if isinstance(value, str) else bool(value)
+
+
+def _filter_chips(
+    filters: Dict[str, Any], columns: Sequence[Dict[str, Any]]
+) -> List[Tuple[str, str]]:
+    """``(column id, chip text)`` of each filter in use, in column order."""
+    chips: List[Tuple[str, str]] = []
+    for col in columns:
+        spec = col.get("filter")
+        value = filters.get(col["id"])
+        if not spec or not _filter_active(value):
+            continue
+        if spec.get("type") == "checkbox":
+            text = spec.get("label") or col["header"]
+        elif isinstance(value, list):
+            text = f"{col['header']}: " + ", ".join(
+                str(v) for v in value[:_CHIP_VALUES]
+            )
+            if len(value) > _CHIP_VALUES:
+                text += f" +{len(value) - _CHIP_VALUES}"
+        else:
+            text = f"{col['header']}: {str(value).strip()}"
+        chips.append((col["id"], text))
+    return chips
+
+
+def _count_text(shown: int, total: int, filtered: bool) -> str:
+    noun = "individual" if total == 1 else "individuals"
+    if not filtered:
+        return f"{total:,} {noun}"
+    return f"{shown:,} of {total:,} {noun}"
+
+
+def _filter_individuals(
+    individuals: List[Dict[str, Any]], filters: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """The individuals the table's column filters leave."""
+    filtered = individuals
+
+    # Text filters: a case-insensitive substring
+    for col in ("FID", "Sample ID"):
+        text = (filters.get(col) or "").strip().lower()
+        if text:
+            filtered = [ind for ind in filtered if text in ind[col].lower()]
+
+    # Multiselect filters: any of the selected values
+    for col in ("Sex", "Phenotype"):
+        wanted = set(filters.get(col) or [])
+        if wanted:
+            filtered = [ind for ind in filtered if ind[col] in wanted]
+
+    # Diagnostic, with "NA" for no diagnostic
+    diag_vals = set(filters.get("Diagnostic") or [])
+    if diag_vals:
+        has_na = "NA" in diag_vals
+        filtered = [
+            ind
+            for ind in filtered
+            if ind["Diagnostic"] in diag_vals - {"NA"}
+            or (has_na and not ind["Diagnostic"])
+        ]
+
+    # Sample QC (categories, any, none, unchecked)
+    wanted_qc = set(filters.get("QC") or [])
+    if wanted_qc:
+        filtered = [
+            ind
+            for ind in filtered
+            if wanted_qc & set(ind.get("_qc_cats", []))
+            or (_QC_ANY in wanted_qc and ind.get("_qc_rank", -1) > 0)
+        ]
+
+    # UPD (confidences, review, any, none)
+    wanted_upd = set(filters.get("UPD") or [])
+    if wanted_upd:
+        filtered = [
+            ind
+            for ind in filtered
+            if wanted_upd & set(ind.get("_upd_cats", []))
+            or (UPD_ANY in wanted_upd and ind.get("_upd_rank", -1) > 0)
+        ]
+
+    # Has father / mother: a sequenced one, so not a dummy
+    for col in ("Father", "Mother"):
+        if filters.get(col):
+            filtered = [ind for ind in filtered if is_sequenced_parent(ind[col])]
+    return filtered
+
+
+def _individual_columns(
+    cohort_name: str,
+    sex_values: List[str],
+    phenotype_values: List[str],
+    diag_options: List[str],
+    *,
+    with_qc: bool,
+    with_upd: bool,
+) -> List[Dict[str, Any]]:
+    """The individuals table's columns; Sample QC and UPD when the cohort ran them."""
+    columns: List[Dict[str, Any]] = [
+        {
+            "id": "FID",
+            "header": "Family ID",
+            "cellType": "link",
+            "href": f"/cohort/{cohort_name}/family/{{FID}}",
+            "sortable": True,
+            "minWidth": 250,
+            "filter": {"type": "text", "placeholder": "Filter..."},
+        },
+        {
+            "id": "Sample ID",
+            "header": "Sample ID",
+            "sortable": True,
+            "minWidth": 90,
+            "filter": {"type": "text", "placeholder": "Filter..."},
+        },
+        {
+            "id": "Sex",
+            "header": "Sex",
+            "sortable": True,
+            "filter": {
+                "type": "multiselect",
+                "options": sex_values,
+                "placeholder": "All",
+            },
+        },
+        {
+            "id": "Phenotype",
+            "header": "Phenotype",
+            "sortable": True,
+            "filter": {
+                "type": "multiselect",
+                "options": phenotype_values,
+                "placeholder": "All",
+            },
+        },
+        {
+            "id": "Father",
+            "header": "Father ID",
+            "cellType": "badge_list",
+            "badgesField": "_father_badges",
+            "sortable": True,
+            "minWidth": 90,
+            "filter": {"type": "checkbox", "label": "Has sequenced father"},
+        },
+        {
+            "id": "Mother",
+            "header": "Mother ID",
+            "cellType": "badge_list",
+            "badgesField": "_mother_badges",
+            "sortable": True,
+            "minWidth": 90,
+            "filter": {"type": "checkbox", "label": "Has sequenced mother"},
+        },
+        {
+            "id": "Diagnostic",
+            "header": "Diagnostic",
+            "sortable": True,
+            "cellType": "badge",
+            "colorField": "_diag_color",
+            "filter": {
+                "type": "multiselect",
+                "options": diag_options,
+                "placeholder": "All",
+            },
+        },
+    ]
+    if with_qc:
+        columns.append(
+            {
+                "id": "QC",
+                "header": "Sample QC",
+                "cellType": "badge_list",
+                "sortable": True,
+                "sortField": "_qc_rank",
+                "sorting": "numerical",
+                "filter": {
+                    "type": "multiselect",
+                    "options": [_QC_ANY]
+                    + [c.get("label", k) for k, c in CATEGORIES.items()]
+                    + [_QC_NONE, _QC_ACKED, _QC_UNCHECKED],
+                    "placeholder": "All",
+                },
+            }
+        )
+    if with_upd:
+        columns.append(
+            {
+                "id": "UPD",
+                "header": "UPD",
+                "cellType": "badge_list",
+                "sortable": True,
+                "sortField": "_upd_rank",
+                "sorting": "numerical",
+                "filter": {
+                    "type": "multiselect",
+                    "options": upd_filter_options(),
+                    "placeholder": "All",
+                },
+            }
+        )
+    return columns
 
 
 def _filters_from_link(link: PageLink) -> Dict[str, Any]:
@@ -340,581 +593,282 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         )
         diag_filter_options = diag_values_raw + ["NA"]
 
-        with ui.column().classes("w-full px-6 py-6"):
+        # Which analyses the cohort has: a tab without data is disabled, and
+        # Workflow is absent, not disabled, with no parameters file (there is
+        # no pipeline to describe).
+        has_data: Dict[str, bool] = {
+            "Individuals": True,
+            "Statistics": True,
+            "Ancestry": probe_cohort_ancestry_data(cohort),
+            "Polygenic Scores": probe_cohort_pgs_data(cohort),
+            "ROH": probe_cohort_roh_data(cohort),
+            "UPD": probe_cohort_upd_data(cohort),
+            "STR": probe_cohort_eh_data(cohort),
+            "Sample QC": probe_cohort_qc_data(cohort),
+            "Workflow": cohort.params_file is not None,
+        }
+
+        columns = _individual_columns(
+            cohort_name,
+            sex_values,
+            phenotype_values,
+            diag_filter_options,
+            with_qc=cohort_qc is not None,
+            with_upd=cohort_upd is not None,
+        )
+        n_total = len(all_individuals)
+        # Each individual's worst unacknowledged QC flag, for the tab's badge.
+        qc_worst = qc_worst_by_individual(qc_active, has_data["UPD"])
+        show_review = can_write()
+
+        linked_filters = _filters_from_link(link)
+        linked_slug = _linked_tab(link)
+        initial = next(
+            (
+                label
+                for label, slug, _icon, _tip in _TABS
+                if slug == linked_slug and has_data[label]
+            ),
+            "Individuals",
+        )
+        if "panel" in link.params or "view" in link.params:
+            # An older link: its tab is now ``tab``.
+            link.drop("panel", "view")
+            link.set("tab", _SLUGS[initial], default=_DEFAULT_TAB)
+            link.push()
+
+        # Shared filtered state for the tabs that follow the table filters
+        filtered_state: Dict[str, Any] = {"individuals": list(all_individuals)}
+        # Refresh callbacks of the tabs that follow the table filters. Only
+        # tabs that have actually been loaded register here, so a filter
+        # change never forces work for a tab never opened.
+        refreshers: List[Callable[[], None]] = []
+        state: Dict[str, Any] = {"filters": {}, "tab": initial, "str_flags": []}
+        dt_ref: Dict[str, Any] = {"dt": None}
+
+        ui.run_javascript(_HEADER_HEIGHT_JS)
+        ui.add_css(_TABS_CSS)
+
+        with ui.column().classes("w-full px-6 pt-4 pb-6 gap-0"):
             # Cohort header
-            with ui.row().classes("items-center gap-4 mb-6"):
+            with ui.row().classes("items-center gap-4 mb-3"):
                 ui.label(f"🧬 {cohort_name}").classes(
                     "text-3xl font-bold text-blue-900"
                 )
                 ui.badge(f"{cohort.num_families} families").props("color=blue")
                 ui.badge(f"{cohort.num_samples} samples").props("color=teal")
 
-            # Shared filtered state for the right-hand panels
-            filtered_state: Dict[str, Any] = {
-                "individuals": list(all_individuals),
-            }
+            def apply_filters(filters: Dict[str, Any], to_table: bool = False) -> None:
+                """Show the individuals ``filters`` leave, on every tab.
 
-            # Refresh callbacks of the panels that follow the table filters.
-            # Only tabs that have actually been loaded register here, so a
-            # filter change never forces work for a tab never opened.
-            refreshers: List[Callable[[], None]] = []
+                ``to_table`` when the change comes from the filter bar: the
+                table's filter row is set to match.
+                """
+                state["filters"] = dict(filters)
+                _filters_to_link(filters, link)
+                link.push()
+                filtered = _filter_individuals(all_individuals, filters)
+                filtered_state["individuals"] = filtered
+                dt = dt_ref["dt"]
+                if dt is not None:
+                    if to_table:
+                        dt.set_filters(filters)
+                    dt.update_data(filtered)
+                filter_bar.refresh()
+                update_pills()
+                # Re-render the tabs that follow the filters
+                for refresher in refreshers:
+                    refresher()
 
-            # Page-level tabs, full width. "General" is the individuals table
-            # and the panels that follow its filters; "Workflow" is everything
-            # about the pipeline run, which belongs to the cohort rather than to
-            # the current filter and needs more room than a 400px column.
-            has_params = cohort.params_file is not None
+            def on_filter(e: Dict[str, Any]) -> None:
+                apply_filters(e.get("filters") or {})
 
-            with ui.tabs().classes("w-full").mark("cohort-page-tabs") as page_tabs:
-                general_tab = ui.tab("General")
-                # Absent rather than disabled: with no parameters file there is
-                # no pipeline to describe.
-                workflow_tab = ui.tab("Workflow") if has_params else None
+            def make_clear(col: str) -> Callable[[Any], None]:
+                def handler(e: Any) -> None:
+                    if e.value:
+                        return
+                    filters = dict(state["filters"])
+                    empty = _FILTER_LINK[col][1]
+                    filters[col] = list(empty) if isinstance(empty, list) else empty
+                    apply_filters(filters, to_table=True)
 
-            # Reading the run record hashes two files and fetching the reference
-            # is a network call, so the tab waits until it is opened.
+                return handler
+
+            def show_tab(label: str) -> None:
+                tabs.set_value(label)
+
+            @ui.refreshable
+            def filter_bar() -> None:
+                """The count, a removable chip per filter, and a way to the filters."""
+                chips = _filter_chips(state["filters"], columns)
+                shown = len(filtered_state["individuals"])
+                with (
+                    ui.row()
+                    .classes(
+                        "w-full min-w-0 items-center gap-2 px-3 py-1"
+                        " bg-blue-50 border-b border-blue-100"
+                    )
+                    .mark("cohort-filter-bar")
+                ):
+                    ui.icon("filter_alt", size="18px").classes("text-blue-700")
+                    ui.label(_count_text(shown, n_total, bool(chips))).classes(
+                        "text-sm font-semibold text-blue-900 whitespace-nowrap"
+                    ).mark("cohort-count")
+                    for col, text in chips:
+                        ui.chip(
+                            text,
+                            removable=True,
+                            color="white",
+                            text_color="blue-10",
+                            on_value_change=make_clear(col),
+                        ).props("dense").classes("text-xs border border-blue-200").mark(
+                            "cohort-filter-chip"
+                        )
+                    if chips:
+                        ui.button(
+                            "Clear all", on_click=lambda: apply_filters({}, True)
+                        ).props("flat dense no-caps size=sm color=blue-8").mark(
+                            "cohort-clear-filters"
+                        )
+                    ui.space()
+                    if state["tab"] != "Individuals":
+                        ui.button(
+                            "Edit filters" if chips else "Filter individuals",
+                            icon="tune",
+                            on_click=lambda: show_tab("Individuals"),
+                        ).props("flat dense no-caps size=sm color=blue-8").mark(
+                            "cohort-edit-filters"
+                        )
+                    elif not chips:
+                        ui.label(
+                            "Filter with the boxes under the column headers:"
+                            " every tab but Workflow follows."
+                        ).classes("text-xs text-gray-500")
+
+            # The tab row and the filter bar stay in view under the page
+            # header, so a long tab never loses sight of its filter.
+            with (
+                ui.column()
+                .classes("w-full gap-0 sticky z-10 bg-white")
+                .style("top: var(--gv-header-height, 0px)")
+            ):
+                with (
+                    ui.tabs(value=initial)
+                    .props("inline-label no-caps align=left")
+                    .classes("w-full border-b border-gray-200 cohort-tabs")
+                    .mark("cohort-tabs") as tabs
+                ):
+                    tab_objects: Dict[str, Any] = {}
+                    for label, _slug, icon, tip in _TABS:
+                        if label == "Workflow" and not has_data["Workflow"]:
+                            continue
+                        tab = ui.tab(label, icon=icon)
+                        if tip:
+                            tab.tooltip(tip)
+                        if not has_data[label]:
+                            tab.props("disable")
+                        tab_objects[label] = tab
+
+                # Badges: the filter for everyone, as Sample QC and the run;
+                # UPD and STR count what only a curator settles.
+                pill_tabs = ["Individuals", "Sample QC", "Workflow"]
+                if show_review:
+                    pill_tabs += ["UPD", "STR"]
+                pills: Dict[str, TabPills] = {
+                    label: TabPills(tab_objects[label], f"{_SLUGS[label]}-tab-pills")
+                    for label in pill_tabs
+                    if label in tab_objects and has_data[label]
+                }
+
+                with (
+                    ui.element("div").classes("w-full").mark("cohort-filter-box")
+                ) as filter_bar_box:
+                    filter_bar()
+                filter_bar_box.set_visibility(initial != "Workflow")
+
+            def update_pills() -> None:
+                rows = filtered_state["individuals"]
+                keys = {(r["FID"], r["Sample ID"]) for r in rows}
+                n_filters = len(_filter_chips(state["filters"], columns))
+                pills["Individuals"].set(filter_pills(len(rows), n_total, n_filters))
+                if "Sample QC" in pills:
+                    pills["Sample QC"].set(
+                        qc_cohort_pills(qc_worst, keys, has_data["UPD"])
+                    )
+                if "UPD" in pills:
+                    pills["UPD"].set(
+                        upd_cohort_pills(
+                            (r.get("_upd_open") or [] for r in rows), len(keys)
+                        )
+                    )
+                if "STR" in pills:
+                    pills["STR"].set(str_cohort_pills(state["str_flags"], keys))
+
+            async def load_badges() -> None:
+                """The STR flags and the run record, read once off the loop."""
+                if "STR" in pills:
+                    try:
+                        state["str_flags"] = await asyncio.to_thread(
+                            str_cohort_open_flags, cohort, store.data_dir
+                        )
+                    except Exception:
+                        logger.warning("Failed to count STR flags", exc_info=True)
+                if "Workflow" in pills:
+                    try:
+                        run = await asyncio.to_thread(read_cohort_state, cohort.path)
+                        headline = await asyncio.to_thread(status_headline, cohort)
+                        pills["Workflow"].set(
+                            workflow_pills(run, headline.get("caption", ""))
+                        )
+                    except Exception:
+                        logger.warning("Failed to read the run record", exc_info=True)
+                update_pills()
+
+            # Each tab reads its files on first view, not on first paint.
+            openers: Dict[str, Callable[[], None]] = {}
+
+            def lazy_content(
+                label: str, render: Callable[..., None], missing: str, loading: str
+            ) -> None:
+                loaded = {"value": False}
+                available = has_data[label]
+
+                @ui.refreshable
+                def content() -> None:
+                    if not available:
+                        ui.label(missing).classes("text-gray-500 italic")
+                    elif loaded["value"]:
+                        render(store, cohort, filtered_state, refreshers)
+                    else:
+                        _loading(loading)
+
+                content()
+
+                def opener() -> None:
+                    if not available or loaded["value"]:
+                        return
+
+                    def load() -> None:
+                        loaded["value"] = True
+                        content.refresh()
+
+                    ui.timer(0.1, load, once=True)
+
+                openers[label] = opener
+
+            # Reading the run record hashes two files and fetching the
+            # reference is a network call, so the tab waits until it is opened.
             workflow_state = {"loaded": False}
 
-            with ui.tab_panels(page_tabs, value=general_tab).classes("w-full"):
-                with ui.tab_panel(general_tab).classes("w-full p-0"):
-                    # Side-by-side layout: table + statistics panel
-                    with ui.row().classes("w-full items-start gap-4"):
-                        # Left: pedigree table
-                        with ui.column():
-                            # Count label (updated by filter callback)
-                            count_label = ui.label(
-                                f"{len(all_individuals)} individuals"
-                            ).classes("text-lg font-semibold text-blue-700 mb-2")
+            @ui.refreshable
+            def workflow_content() -> None:
+                if not workflow_state["loaded"]:
+                    _loading("Loading workflow...")
+                    return
+                _render_workflow_tab(cohort)
 
-                            # Table holder for update_data access
-                            dt_ref: Dict[str, Any] = {"dt": None}
-                            linked_filters = _filters_from_link(link)
-
-                            def on_filter(e: Dict[str, Any]) -> None:
-                                filters = e.get("filters", {})
-                                _filters_to_link(filters, link)
-                                link.push()
-                                filtered = all_individuals
-
-                                # FID text filter
-                                fid_text = (filters.get("FID") or "").strip().lower()
-                                if fid_text:
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if fid_text in ind["FID"].lower()
-                                    ]
-
-                                # Sample ID text filter
-                                sample_text = (
-                                    (filters.get("Sample ID") or "").strip().lower()
-                                )
-                                if sample_text:
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if sample_text in ind["Sample ID"].lower()
-                                    ]
-
-                                # Sex filter (multiselect — list of selected values)
-                                sex_vals = filters.get("Sex") or []
-                                if sex_vals:
-                                    selected_sex = set(sex_vals)
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if ind["Sex"] in selected_sex
-                                    ]
-
-                                # Phenotype filter (multiselect)
-                                pheno_vals = filters.get("Phenotype") or []
-                                if pheno_vals:
-                                    selected = set(pheno_vals)
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if ind["Phenotype"] in selected
-                                    ]
-
-                                # Diagnostic filter (multiselect with NA support)
-                                diag_vals = filters.get("Diagnostic") or []
-                                if diag_vals:
-                                    selected_diag = set(diag_vals)
-                                    has_na = "NA" in selected_diag
-                                    actual_diag = selected_diag - {"NA"}
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if (ind["Diagnostic"] in actual_diag)
-                                        or (has_na and not ind["Diagnostic"])
-                                    ]
-
-                                # Sample QC filter (categories, any, none, unchecked)
-                                qc_vals = filters.get("QC") or []
-                                if qc_vals:
-                                    wanted_qc = set(qc_vals)
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if wanted_qc & set(ind.get("_qc_cats", []))
-                                        or (
-                                            _QC_ANY in wanted_qc
-                                            and ind.get("_qc_rank", -1) > 0
-                                        )
-                                    ]
-
-                                # UPD filter (confidences, review, any, none)
-                                upd_vals = filters.get("UPD") or []
-                                if upd_vals:
-                                    wanted_upd = set(upd_vals)
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if wanted_upd & set(ind.get("_upd_cats", []))
-                                        or (
-                                            UPD_ANY in wanted_upd
-                                            and ind.get("_upd_rank", -1) > 0
-                                        )
-                                    ]
-
-                                # Has father / mother checkboxes: a sequenced
-                                # one, so not a dummy
-                                if filters.get("Father"):
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if is_sequenced_parent(ind["Father"])
-                                    ]
-                                if filters.get("Mother"):
-                                    filtered = [
-                                        ind
-                                        for ind in filtered
-                                        if is_sequenced_parent(ind["Mother"])
-                                    ]
-
-                                # Update shared filtered state
-                                filtered_state["individuals"] = filtered
-
-                                # Update count label
-                                label = f"{len(filtered)} individuals"
-                                if len(filtered) < len(all_individuals):
-                                    label += f" (of {len(all_individuals)} total)"
-                                count_label.text = label
-
-                                if dt_ref["dt"]:
-                                    dt_ref["dt"].update_data(filtered)
-
-                                # Re-render the panels that follow the filters
-                                for refresher in refreshers:
-                                    refresher()
-
-                            dt = DataTable(
-                                columns=[
-                                    {
-                                        "id": "FID",
-                                        "header": "Family ID",
-                                        "cellType": "link",
-                                        "href": f"/cohort/{cohort_name}/family/{{FID}}",
-                                        "sortable": True,
-                                        "minWidth": 250,
-                                        "filter": {
-                                            "type": "text",
-                                            "placeholder": "Filter...",
-                                        },
-                                    },
-                                    {
-                                        "id": "Sample ID",
-                                        "header": "Sample ID",
-                                        "sortable": True,
-                                        "minWidth": 90,
-                                        "filter": {
-                                            "type": "text",
-                                            "placeholder": "Filter...",
-                                        },
-                                    },
-                                    {
-                                        "id": "Sex",
-                                        "header": "Sex",
-                                        "sortable": True,
-                                        "filter": {
-                                            "type": "multiselect",
-                                            "options": sex_values,
-                                            "placeholder": "All",
-                                        },
-                                    },
-                                    {
-                                        "id": "Phenotype",
-                                        "header": "Phenotype",
-                                        "sortable": True,
-                                        "filter": {
-                                            "type": "multiselect",
-                                            "options": phenotype_values,
-                                            "placeholder": "All",
-                                        },
-                                    },
-                                    {
-                                        "id": "Father",
-                                        "header": "Father ID",
-                                        "cellType": "badge_list",
-                                        "badgesField": "_father_badges",
-                                        "sortable": True,
-                                        "minWidth": 90,
-                                        "filter": {
-                                            "type": "checkbox",
-                                            "label": "Has sequenced father",
-                                        },
-                                    },
-                                    {
-                                        "id": "Mother",
-                                        "header": "Mother ID",
-                                        "cellType": "badge_list",
-                                        "badgesField": "_mother_badges",
-                                        "sortable": True,
-                                        "minWidth": 90,
-                                        "filter": {
-                                            "type": "checkbox",
-                                            "label": "Has sequenced mother",
-                                        },
-                                    },
-                                    {
-                                        "id": "Diagnostic",
-                                        "header": "Diagnostic",
-                                        "sortable": True,
-                                        "cellType": "badge",
-                                        "colorField": "_diag_color",
-                                        "filter": {
-                                            "type": "multiselect",
-                                            "options": diag_filter_options,
-                                            "placeholder": "All",
-                                        },
-                                    },
-                                ]
-                                + (
-                                    [
-                                        {
-                                            "id": "QC",
-                                            "header": "Sample QC",
-                                            "cellType": "badge_list",
-                                            "sortable": True,
-                                            "sortField": "_qc_rank",
-                                            "sorting": "numerical",
-                                            "filter": {
-                                                "type": "multiselect",
-                                                "options": [_QC_ANY]
-                                                + [
-                                                    c.get("label", k)
-                                                    for k, c in CATEGORIES.items()
-                                                ]
-                                                + [_QC_NONE, _QC_ACKED, _QC_UNCHECKED],
-                                                "placeholder": "All",
-                                            },
-                                        }
-                                    ]
-                                    if cohort_qc is not None
-                                    else []
-                                )
-                                + (
-                                    [
-                                        {
-                                            "id": "UPD",
-                                            "header": "UPD",
-                                            "cellType": "badge_list",
-                                            # Badges wrap: the panel beside
-                                            # the table needs the width.
-                                            "maxWidth": 110,
-                                            "sortable": True,
-                                            "sortField": "_upd_rank",
-                                            "sorting": "numerical",
-                                            "filter": {
-                                                "type": "multiselect",
-                                                "options": upd_filter_options(),
-                                                "placeholder": "All",
-                                            },
-                                        }
-                                    ]
-                                    if cohort_upd is not None
-                                    else []
-                                ),
-                                rows=all_individuals,
-                                row_key="Sample ID",
-                                pagination={"rowsPerPage": 20},
-                                on_filter=on_filter,
-                                initial_filters=linked_filters,
-                            )
-                            dt_ref["dt"] = dt
-                            # A shared link's filters apply before the panels
-                            # are built, so they open on the filtered individuals
-                            if linked_filters:
-                                on_filter({"filters": linked_filters})
-
-                        # Right: tabbed panel — Statistics, Ancestry, Polygenic
-                        # Scores, ROH, STR. Everything describing the pipeline run lives on the
-                        # page-level Workflow tab instead: it belongs to the cohort, not
-                        # to the current table filters, and needs the full width.
-                        has_ancestry = probe_cohort_ancestry_data(cohort)
-                        has_pgs = probe_cohort_pgs_data(cohort)
-                        has_roh = probe_cohort_roh_data(cohort)
-                        has_str = probe_cohort_eh_data(cohort)
-                        has_qc = probe_cohort_qc_data(cohort)
-                        has_upd = probe_cohort_upd_data(cohort)
-
-                        # Each tab reads its files on first view, not on first paint.
-                        tab_state: Dict[str, Dict[str, bool]] = {
-                            "Ancestry": {"loaded": False},
-                            "Polygenic Scores": {"loaded": False},
-                            "ROH": {"loaded": False},
-                            "UPD": {"loaded": False},
-                            "STR": {"loaded": False},
-                            "Sample QC": {"loaded": False},
-                        }
-
-                        # "min-width: 0" lets the flex item shrink below its content;
-                        # without it the tab row and plots push the table sideways.
-                        with (
-                            ui.column()
-                            .classes("flex-1 min-w-[400px]")
-                            .style("min-width: 0")
-                        ):
-                            with (
-                                ui.tabs()
-                                .classes("w-full")
-                                .mark("cohort-panel-tabs") as panel_tabs
-                            ):
-                                stats_tab = ui.tab("Statistics")
-                                ancestry_tab = ui.tab("Ancestry")
-                                pgs_tab = ui.tab("Polygenic Scores")
-                                roh_tab = ui.tab("ROH")
-                                upd_tab = ui.tab("UPD").tooltip("Uniparental disomy")
-                                str_tab = ui.tab("STR").tooltip("Short tandem repeats")
-                                qc_tab = ui.tab("Sample QC").tooltip(
-                                    "Relatedness, sex and contamination (somalier)"
-                                )
-                                if not has_ancestry:
-                                    ancestry_tab.props("disable")
-                                if not has_pgs:
-                                    pgs_tab.props("disable")
-                                if not has_roh:
-                                    roh_tab.props("disable")
-                                if not has_upd:
-                                    upd_tab.props("disable")
-                                if not has_str:
-                                    str_tab.props("disable")
-                                if not has_qc:
-                                    qc_tab.props("disable")
-
-                            # A shared link opens its panel tab, when it has data
-                            panel_has_data = {
-                                "Statistics": True,
-                                "Ancestry": has_ancestry,
-                                "Polygenic Scores": has_pgs,
-                                "ROH": has_roh,
-                                "UPD": has_upd,
-                                "STR": has_str,
-                                "Sample QC": has_qc,
-                            }
-                            panel_objects = {
-                                "Statistics": stats_tab,
-                                "Ancestry": ancestry_tab,
-                                "Polygenic Scores": pgs_tab,
-                                "ROH": roh_tab,
-                                "UPD": upd_tab,
-                                "STR": str_tab,
-                                "Sample QC": qc_tab,
-                            }
-                            linked_panel = next(
-                                (
-                                    label
-                                    for label, slug in _PANEL_SLUGS.items()
-                                    if slug == link.get("panel")
-                                    and panel_has_data[label]
-                                ),
-                                "Statistics",
-                            )
-
-                            with ui.tab_panels(
-                                panel_tabs, value=panel_objects[linked_panel]
-                            ).classes("w-full"):
-                                # Each renderer opens its own card, so the panels carry
-                                # no border of their own and the chrome is not doubled.
-                                with ui.tab_panel(stats_tab).classes("w-full p-0"):
-                                    render_stats_panel(store, cohort, filtered_state)
-
-                                with ui.tab_panel(ancestry_tab).classes("w-full p-0"):
-
-                                    @ui.refreshable
-                                    def ancestry_content() -> None:
-                                        if not has_ancestry:
-                                            ui.label(
-                                                "No cohort-level ancestry results"
-                                            ).classes("text-gray-500 italic")
-                                        elif tab_state["Ancestry"]["loaded"]:
-                                            render_cohort_ancestry_tab(
-                                                store,
-                                                cohort,
-                                                filtered_state,
-                                                refreshers,
-                                            )
-                                        else:
-                                            _loading("Loading ancestry...")
-
-                                    ancestry_content()
-
-                                with ui.tab_panel(pgs_tab).classes("w-full p-0"):
-
-                                    @ui.refreshable
-                                    def pgs_content() -> None:
-                                        if not has_pgs:
-                                            ui.label(
-                                                "No cohort-level polygenic score results"
-                                            ).classes("text-gray-500 italic")
-                                        elif tab_state["Polygenic Scores"]["loaded"]:
-                                            render_cohort_pgs_tab(
-                                                store,
-                                                cohort,
-                                                filtered_state,
-                                                refreshers,
-                                            )
-                                        else:
-                                            _loading("Loading polygenic scores...")
-
-                                    pgs_content()
-
-                                with ui.tab_panel(roh_tab).classes("w-full p-0"):
-
-                                    @ui.refreshable
-                                    def roh_content() -> None:
-                                        if not has_roh:
-                                            ui.label(
-                                                "No cohort-level ROH results"
-                                            ).classes("text-gray-500 italic")
-                                        elif tab_state["ROH"]["loaded"]:
-                                            render_cohort_roh_tab(
-                                                store,
-                                                cohort,
-                                                filtered_state,
-                                                refreshers,
-                                            )
-                                        else:
-                                            _loading("Loading runs of homozygosity...")
-
-                                    roh_content()
-
-                                with ui.tab_panel(upd_tab).classes("w-full p-0"):
-
-                                    @ui.refreshable
-                                    def upd_content() -> None:
-                                        if not has_upd:
-                                            ui.label(
-                                                "No cohort-level UPD results"
-                                            ).classes("text-gray-500 italic")
-                                        elif tab_state["UPD"]["loaded"]:
-                                            render_cohort_upd_tab(
-                                                store,
-                                                cohort,
-                                                filtered_state,
-                                                refreshers,
-                                            )
-                                        else:
-                                            _loading("Loading uniparental disomy...")
-
-                                    upd_content()
-
-                                with ui.tab_panel(str_tab).classes("w-full p-0"):
-
-                                    @ui.refreshable
-                                    def str_content() -> None:
-                                        if not has_str:
-                                            ui.label(
-                                                "No cohort-level STR results"
-                                            ).classes("text-gray-500 italic")
-                                        elif tab_state["STR"]["loaded"]:
-                                            render_cohort_str_tab(
-                                                store,
-                                                cohort,
-                                                filtered_state,
-                                                refreshers,
-                                            )
-                                        else:
-                                            _loading("Loading short tandem repeats...")
-
-                                    str_content()
-
-                                with ui.tab_panel(qc_tab).classes("w-full p-0"):
-
-                                    @ui.refreshable
-                                    def qc_content() -> None:
-                                        if not has_qc:
-                                            ui.label(
-                                                "No cohort-level sample QC results"
-                                            ).classes("text-gray-500 italic")
-                                        elif tab_state["Sample QC"]["loaded"]:
-                                            render_cohort_sample_qc_tab(
-                                                store,
-                                                cohort,
-                                                filtered_state,
-                                                refreshers,
-                                            )
-                                        else:
-                                            _loading("Loading sample QC...")
-
-                                    qc_content()
-
-                            # Keyed by the exact tab label, and parallel to tab_state:
-                            # on_panel_tab_change looks the label up in both, so a tab
-                            # in one and not the other is a KeyError or a dead tab.
-                            lazy_tabs = {
-                                "Ancestry": (has_ancestry, ancestry_content),
-                                "Polygenic Scores": (has_pgs, pgs_content),
-                                "ROH": (has_roh, roh_content),
-                                "UPD": (has_upd, upd_content),
-                                "STR": (has_str, str_content),
-                                "Sample QC": (has_qc, qc_content),
-                            }
-
-                            def open_panel(label: str) -> None:
-                                entry = lazy_tabs.get(label)
-                                if entry is None:
-                                    return
-                                available, content = entry
-                                state = tab_state[label]
-                                if not available or state["loaded"]:
-                                    return
-
-                                def load() -> None:
-                                    state["loaded"] = True
-                                    content.refresh()
-
-                                ui.timer(0.1, load, once=True)
-
-                            def on_panel_tab_change(e: Any) -> None:
-                                link.set(
-                                    "panel", _PANEL_SLUGS.get(e.args), default="stats"
-                                )
-                                link.push()
-                                open_panel(e.args)
-
-                            panel_tabs.on("update:model-value", on_panel_tab_change)
-                            open_panel(linked_panel)
-
-                if workflow_tab is not None:
-                    with ui.tab_panel(workflow_tab).classes("w-full p-0"):
-
-                        @ui.refreshable
-                        def workflow_content() -> None:
-                            if not workflow_state["loaded"]:
-                                _loading("Loading workflow...")
-                                return
-                            _render_workflow_tab(cohort)
-
-                        workflow_content()
-
-            def on_page_tab_change(e: Any) -> None:
-                link.set("view", "workflow" if e.args == "Workflow" else None)
-                link.push()
-                open_page_tab(e.args)
-
-            def open_page_tab(label: str) -> None:
-                if label != "Workflow" or workflow_state["loaded"]:
+            def open_workflow() -> None:
+                if workflow_state["loaded"]:
                     return
 
                 async def load() -> None:
@@ -929,10 +883,77 @@ def cohort_page(cohort_name: str, request: Request) -> None:
 
                 ui.timer(0.1, load, once=True)
 
-            page_tabs.on("update:model-value", on_page_tab_change)
-            if workflow_tab is not None and link.get("view") == "workflow":
-                page_tabs.set_value(workflow_tab)
-                open_page_tab("Workflow")
+            openers["Workflow"] = open_workflow
+
+            # Each renderer opens its own card, so the panels carry no border
+            # of their own and the chrome is not doubled.
+            panel_classes = "w-full px-0 pt-3 pb-0"
+            with ui.tab_panels(tabs, value=initial).classes("w-full"):
+                with ui.tab_panel(tab_objects["Individuals"]).classes(panel_classes):
+                    dt_ref["dt"] = DataTable(
+                        columns=columns,
+                        rows=all_individuals,
+                        row_key="Sample ID",
+                        pagination={"rowsPerPage": 20},
+                        on_filter=on_filter,
+                        initial_filters=linked_filters,
+                    )
+                # A shared link's filters apply before the tabs are built, so
+                # they open on the filtered individuals.
+                if linked_filters:
+                    apply_filters(linked_filters)
+
+                with ui.tab_panel(tab_objects["Statistics"]).classes(panel_classes):
+                    render_stats_panel(store, cohort, filtered_state)
+
+                for label, render, what, loading in (
+                    ("Ancestry", render_cohort_ancestry_tab, "ancestry", "ancestry"),
+                    (
+                        "Polygenic Scores",
+                        render_cohort_pgs_tab,
+                        "polygenic score",
+                        "polygenic scores",
+                    ),
+                    ("ROH", render_cohort_roh_tab, "ROH", "runs of homozygosity"),
+                    ("UPD", render_cohort_upd_tab, "UPD", "uniparental disomy"),
+                    ("STR", render_cohort_str_tab, "STR", "short tandem repeats"),
+                    (
+                        "Sample QC",
+                        render_cohort_sample_qc_tab,
+                        "sample QC",
+                        "sample QC",
+                    ),
+                ):
+                    with ui.tab_panel(tab_objects[label]).classes(panel_classes):
+                        lazy_content(
+                            label,
+                            render,
+                            f"No cohort-level {what} results",
+                            f"Loading {loading}...",
+                        )
+
+                if "Workflow" in tab_objects:
+                    with ui.tab_panel(tab_objects["Workflow"]).classes("w-full p-0"):
+                        workflow_content()
+
+            def on_tab_change(e: Any) -> None:
+                label = (
+                    e.value.props["name"] if isinstance(e.value, ui.tab) else e.value
+                )
+                state["tab"] = label
+                link.set("tab", _SLUGS.get(label), default=_DEFAULT_TAB)
+                link.push()
+                filter_bar_box.set_visibility(label != "Workflow")
+                filter_bar.refresh()
+                opener = openers.get(label)
+                if opener is not None:
+                    opener()
+
+            tabs.on_value_change(on_tab_change)
+            if initial in openers:
+                openers[initial]()
+            update_pills()
+            ui.timer(0.2, load_badges, once=True)
 
     except RuntimeError as e:
         ui.label(f"Error: {e}").classes("text-red-500")

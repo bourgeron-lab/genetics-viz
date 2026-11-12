@@ -40,21 +40,21 @@ async def _open_cohort(user: User, username: str, monkeypatch=None):
 async def test_cohort_tabs_download_what_they_show(user):
     await _open_cohort(user, "curator")
 
-    open_tab(user, "cohort-panel-tabs", "Ancestry")
+    open_tab(user, "cohort-tabs", "Ancestry")
     columns, rows = _rows(await _download(user, "download-ancestry"))
     assert len(rows) == 6
     assert {"region", "PC1", "PC20", "snp_coverage", "admix_EUR"} <= set(columns)
 
-    open_tab(user, "cohort-panel-tabs", "Polygenic Scores")
+    open_tab(user, "cohort-tabs", "Polygenic Scores")
     columns, rows = _rows(await _download(user, "download-pgs"))
     assert columns[:5] == ["FID", "IID", "sex", "phenotype", "region"]
     assert "height_test" in columns and len(rows) == 6
 
-    open_tab(user, "cohort-panel-tabs", "ROH")
+    open_tab(user, "cohort-tabs", "ROH")
     columns, rows = _rows(await _download(user, "download-roh"))
     assert len(rows) == 6 and "parents_kinship" in columns
 
-    open_tab(user, "cohort-panel-tabs", "STR")
+    open_tab(user, "cohort-tabs", "STR")
     await user.should_see("flagged genotypes", retries=30)
     columns, rows = _rows(await _download(user, "download-str"))
     assert {(r["IID"], r["locus"]) for r in rows} == {
@@ -63,7 +63,7 @@ async def test_cohort_tabs_download_what_they_show(user):
         ("S6", "ARX_2"),
     }
 
-    open_tab(user, "cohort-panel-tabs", "Sample QC")
+    open_tab(user, "cohort-tabs", "Sample QC")
     await user.should_see("5 of 6 shown individuals checked", retries=30)
     columns, rows = _rows(await _download(user, "download-sampleqc", "flags"))
     assert "evidence" in columns and "ack_status" in columns
@@ -84,12 +84,12 @@ async def test_cohort_downloads_follow_the_filter_and_the_role(user, monkeypatch
     with user.client:
         tables[0]["on_filter"]({"filters": {"FID": "AU"}})
 
-    open_tab(user, "cohort-panel-tabs", "ROH")
+    open_tab(user, "cohort-tabs", "ROH")
     columns, rows = _rows(await _download(user, "download-roh"))
     assert {r["IID"] for r in rows} == {"S5", "S6"}
     assert "parents_kinship" not in columns and "froh_category" not in columns
 
-    open_tab(user, "cohort-panel-tabs", "Sample QC")
+    open_tab(user, "cohort-tabs", "Sample QC")
     await user.should_see("2 of 2 shown individuals checked", retries=30)
     columns, rows = _rows(await _download(user, "download-sampleqc", "samples"))
     assert {r["IID"]: r["karyotype"] for r in rows} == {"S5": "Atypical", "S6": "XY"}
@@ -156,7 +156,7 @@ async def test_an_empty_export_downloads_nothing(user, monkeypatch):
     tables = await _open_cohort(user, "curator", monkeypatch)
     with user.client:
         tables[0]["on_filter"]({"filters": {"FID": "1002"}})
-    open_tab(user, "cohort-panel-tabs", "STR")
+    open_tab(user, "cohort-tabs", "STR")
     await user.should_see("No flagged genotype among the individuals shown", retries=30)
     user.find(marker="download-str").click()
     await user.should_see("Nothing to download", retries=30)

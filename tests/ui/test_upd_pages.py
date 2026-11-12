@@ -359,7 +359,7 @@ async def test_cohort_upd_panel_and_column(user, monkeypatch, data_dir):
     assert [b["label"] for b in by_sample["S3"]["UPD_badges"]] == ["chr2 · High"]
     assert by_sample["S4"]["_upd_cats"] == ["Not analysed"]
 
-    open_tab(user, "cohort-panel-tabs", "UPD")
+    open_tab(user, "cohort-tabs", "UPD")
     await user.should_see(marker="cohort-upd-events", retries=30)
     events = [t for t in tables if "confidence" in t["columns"]][-1]
     assert {(r["sample"], r["chrom"]) for r in events["rows"]} == {
@@ -374,7 +374,7 @@ async def test_cohort_upd_panel_and_column(user, monkeypatch, data_dir):
     # The panel follows the table: High keeps S3 only.
     with user.client:
         individuals["on_filter"]({"filters": {"UPD": ["High"]}})
-    await user.should_see("1 individuals (of 6 total)", retries=10)
+    await user.should_see("1 of 6 individuals", retries=10)
     for _ in range(100):
         events = [t for t in tables if "confidence" in t["columns"]][-1]
         if len(events["rows"]) == 1:
@@ -389,7 +389,7 @@ async def test_cohort_qc_flag_links_to_the_upd_tab(user, monkeypatch, data_dir):
     tables = capture_tables(monkeypatch)
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
-    open_tab(user, "cohort-panel-tabs", "Sample QC")
+    open_tab(user, "cohort-tabs", "Sample QC")
     for _ in range(200):
         flagged = [t for t in tables if "issues" in t["columns"]]
         if flagged:
