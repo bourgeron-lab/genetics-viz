@@ -41,6 +41,8 @@ diagnostic_details:
     maternal: "inherited from the mother"
     both: "inherited from both parents"
     either: "both parents carry it"
+  # Under an SV whose bounds come from the curators' validation, not the call.
+  curated_breakpoints: "Breakpoints curated on the reads"
   # A diagnostic saved before the details were recorded with it.
   missing: "Not recorded (saved before v0.28.0)."
   note: >-

@@ -60,6 +60,12 @@ def render_gene_badges(gene_str: str, gene_scorer: GeneScorer) -> None:
     ui.html(gene_badges_html(badges), sanitize=False)
 
 
+def _curated_tooltip(entry: Dict) -> str:
+    """Curated bounds, then each carrier's call as the caller made it."""
+    calls = "\n".join(f"{v} ({s})" for s, v in entry.get("_sample_variants", []))
+    return f"Curated: {entry.get('_shown_variant', '')}\nCalled:\n{calls}"
+
+
 def _kind_tag(kind: str) -> ui.label:
     return (
         ui.label(kind)
@@ -108,9 +114,14 @@ def render_family_diagnostics(
                 _kind_tag("UPD").tooltip(tooltip)
                 ui.label(text).classes("text-xs font-medium").tooltip(tooltip)
             else:
-                ui.label(variant).classes("text-xs font-mono")
-                if source == "sv" and variant:
-                    cytoband = parse_sv_cytoband(variant)
+                shown = entry.get("_shown_variant") or variant
+                label = ui.label(shown).classes("text-xs font-mono")
+                if entry.get("_curated"):
+                    label.classes("text-green-800 font-bold").tooltip(
+                        _curated_tooltip(entry)
+                    )
+                if source == "sv" and shown:
+                    cytoband = parse_sv_cytoband(shown)
                     if cytoband:
                         ui.label(cytoband).classes("text-xs text-purple-600 italic")
                 if gene_str:

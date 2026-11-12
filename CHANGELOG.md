@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **An icon on every family page tab, as on the cohort page**, on both family pages (`/cohort/<name>/family/<FID>` and `/family/<FID>`): the icon left of the label, labels in mixed case, tabs from the left of the row. Ancestry, Polygenic Scores, ROH, UPD, STR and Sample QC take the cohort page's icons; Wombat, SVs and General get their own. The row takes about 900 of the 1,185 px a 1,280 px window leaves, and the review badges stay at the top right of their label.
 
+### Fixed
+- **SV diagnostics are shown at their curated breakpoints**, in the family Diagnostics panel and the family report. Both used to show the caller's coordinates even after a curator validated the SV present with curated bounds, the coordinates the SV tables already show. A transmitted CNV is called with other breakpoints in each carrier, so its carriers stayed on separate lines. Carriers whose calls were curated to the same locus, with the same verdict, now share one line, with the genes of every call. The panel draws a curated locus in green, with each carrier's original call on hover. The report adds "Breakpoints curated on the reads" under it and still reads each carrier's validation under that carrier's own call.
+
 ## [0.35.0] - 2026-11-12
 
 ### Changed

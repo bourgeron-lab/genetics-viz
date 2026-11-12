@@ -1076,6 +1076,9 @@ def _diagnostics(
     verdicts: Dict[str, Dict[str, str]] = CONFIG.get("diagnostic_verdicts") or {}
     kept = [e for e in diagnostics if e.get("Diagnostic") in verdicts]
     validation_maps: Dict[str, Dict] = {}
+    curated_note = str(
+        (CONFIG.get("diagnostic_details") or {}).get("curated_breakpoints", "")
+    )
     rows = []
     for e in kept:
         source = e.get("_source", "")
@@ -1089,7 +1092,7 @@ def _diagnostics(
         elif source == "upd":
             finding = f"UPD {describe_upd(data_dir, family_id, e)[0]}"
         elif source == "sv":
-            finding = _sv_text(variant)
+            finding = _sv_text(e.get("_shown_variant") or variant)
         else:
             finding = variant
         if kind not in validation_maps:
@@ -1108,11 +1111,16 @@ def _diagnostics(
             except (KeyError, OSError):
                 validation_maps[kind] = {}
         validations = []
+        # Each sample's validations are filed under its own call's key: the
+        # calls of a curated SV differ from one carrier to the next.
+        own_keys = dict(e.get("_sample_variants") or [])
         for sample in (s.strip() for s in (e.get("Sample") or "").split(",")):
             if not sample:
                 continue
             row: Dict[str, Any] = {}
-            add_validation_status_to_row(row, validation_maps[kind], variant, sample)
+            add_validation_status_to_row(
+                row, validation_maps[kind], own_keys.get(sample, variant), sample
+            )
             status = row.get("Validation") or ""
             if status:
                 inheritance = row.get("ValidationInheritance") or ""
@@ -1148,7 +1156,13 @@ def _diagnostics(
                 # Under the finding: HGVS, then the consequences. An SV's
                 # GAIN/LOSS is already its DEL/DUP.
                 "_finding_note": "\n".join(
-                    t for t in (hgvs, impact if source == "snv" else "") if t
+                    t
+                    for t in (
+                        hgvs,
+                        impact if source == "snv" else "",
+                        curated_note if e.get("_curated") else "",
+                    )
+                    if t
                 ),
                 "details": details,
                 "genes": _genes(e.get("Gene", "")) if source != "str" else "",
