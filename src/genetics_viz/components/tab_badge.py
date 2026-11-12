@@ -1,18 +1,23 @@
-"""A count drawn on a tab: content that waits for a curator (``utils/review_counts.py``).
+"""Counts drawn on tabs (``utils/review_counts.py``).
 
-The count is computed off the event loop and drawn when it is in, so a page
-never waits on it; :meth:`TabBadge.update` recomputes it after a save. A count
-of 0 draws nothing.
+:class:`TabBadge` is the family page's: content that waits for a curator,
+computed off the event loop and drawn when it is in, so a page never waits on
+it; :meth:`TabBadge.update` recomputes it after a save. A count of 0 draws
+nothing.
+
+:class:`TabPills` is the cohort page's: small badges after the tab's label,
+drawn from whatever list of :class:`Pill` the page computed last.
 """
 
 import asyncio
 import logging
 from pathlib import Path
-from typing import Callable, Dict, Mapping, Optional
+from typing import Callable, Dict, List, Mapping, Optional
 
 from nicegui import ui
 
 from genetics_viz.utils.review_counts import (
+    Pill,
     ReviewCount,
     denovo_to_review,
     qc_family_to_review,
@@ -68,6 +73,45 @@ class TabBadge:
         """
         with self._tab:
             ui.timer(0.05, self.update, once=True)
+
+
+class TabPills:
+    """Badges after a ``ui.tab``'s label, each marked ``mark`` for the tests.
+
+    Not floating: a tab may carry two (high and medium), and the cohort tabs
+    have room for them in line.
+    """
+
+    def __init__(self, tab: ui.tab, mark: str) -> None:
+        self._mark = mark
+        self.pills: List[Pill] = []
+        with tab:
+
+            @ui.refreshable
+            def draw() -> None:
+                self._render()
+
+            draw()
+        self._draw = draw
+
+    def _render(self) -> None:
+        for pill in self.pills:
+            badge = ui.badge(pill.text, color=pill.color).classes(
+                "ml-1 text-[11px] leading-none"
+            )
+            if pill.icon:
+                badge.props("rounded").classes("px-[3px]")
+                with badge:
+                    ui.icon(pill.icon, size="12px")
+            if pill.tooltip:
+                badge.tooltip(pill.tooltip)
+            badge.mark(self._mark)
+
+    def set(self, pills: List[Pill]) -> None:
+        """Draw ``pills``, redrawing only when they changed."""
+        if pills != self.pills:
+            self.pills = list(pills)
+            self._draw.refresh()
 
 
 def family_review_badges(

@@ -28,7 +28,7 @@ Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS v
   - The `user` fixture points `Storage.path` at `tmp_path`. The reset otherwise deletes the real `.nicegui/` sessions.
   - It fails a test on any ERROR log, which is how NiceGUI reports an exception in a lazy tab.
 - **UI test gotchas:**
-  - **Tabs:** switch them with `ui_helpers.open_tab`, which sends `update:modelValue`. NiceGUI stores listeners under the camelCase name, and clicking a `ui.tab` does nothing in simulation. Tab bars carry `.mark("family-tabs")`, `"cohort-panel-tabs"` and `"cohort-page-tabs"` for this.
+  - **Tabs:** switch them with `ui_helpers.open_tab`, which sends `update:modelValue`. NiceGUI stores listeners under the camelCase name, and clicking a `ui.tab` does nothing in simulation. Tab bars carry `.mark("family-tabs")` and `"cohort-tabs"` for this.
   - **Table and chart contents** render in JS and are invisible to `should_see`. Assert on what the Python side passes: `ui_helpers.capture_tables` records `DataTable` rows, and `ui.echart(...).options` holds the chart data.
 - **CI:**
   - `ci.yml` runs on PRs and on main: ruff, pytest on 3.12/3.13 with the lock, and a `package` job that tests the built wheel installed without the lock.
@@ -62,7 +62,7 @@ src/genetics_viz/
     vedette_details.py            # SV dialog for a Vedette call: details card, own call, SVSource
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
-    tab_badge.py                  # A count on a tab, computed off-thread: the family page's review badges
+    tab_badge.py                  # Counts on tabs: the family page's review badges (TabBadge), the cohort page's (TabPills)
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
     diagnostic_dialog.py          # Diagnostic review dialog
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
@@ -109,11 +109,11 @@ src/genetics_viz/
         roh_tab.py                # Runs of homozygosity tab (per-family)
         upd_tab.py                # UPD tab (per-family): candidates from every source, genome overview, members
         str_tab.py                # STR tab (per-family): EH sub-tab + locus dialog
-        cohort_roh_tab.py         # Runs of homozygosity sub-tab + islands dialog (cohort-wide)
-        cohort_upd_tab.py         # UPD sub-tab (cohort-wide) + the individuals table's UPD column
-        cohort_str_tab.py         # STR sub-tab (cohort-wide): loci counts + flagged genotypes
+        cohort_roh_tab.py         # Runs of homozygosity tab + islands dialog (cohort-wide)
+        cohort_upd_tab.py         # UPD tab (cohort-wide) + the individuals table's UPD column
+        cohort_str_tab.py         # STR tab (cohort-wide): loci counts + flagged genotypes
         sample_qc_tab.py          # Sample QC tab (per-family): issues, kinship, sex, quality
-        cohort_sample_qc_tab.py   # Sample QC sub-tab (cohort-wide) + cross-family network dialog
+        cohort_sample_qc_tab.py   # Sample QC tab (cohort-wide) + cross-family network dialog
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
         status_panel.py           # Pipeline run status (Workflow tab + home card)
@@ -155,7 +155,7 @@ src/genetics_viz/
     upd.py                        # validations/upds.tsv (role-guarded), UPD key, evidence, candidates merged from every source
     upd_calls.py                  # upd step tables: discovery (newest label), reading, windows, wording, exports
     upd_plots.py                  # UPD chromosome view (ECharts), genome overview (SVG), cohort chart
-    review_counts.py              # What the family tabs' review badges count (QC, de novo, STR, UPD)
+    review_counts.py              # What the family and cohort tabs' badges count (QC, de novo, STR, UPD, filter, run)
     family_report.py              # Family report sections (pure, off-thread): pedigree … diagnostics, methods
     report_html.py                # Family report as one self-contained HTML document (Jinja2)
     report_svg.py                 # Static SVG plots for the report: PGS normal curves, PCA scatter
@@ -447,12 +447,14 @@ Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: 
 - `config/pipeline_steps.yaml` holds step labels, display order and status chip colours only. A step the pipeline reports but the file does not know is appended under its raw name.
 
 ### Cohort Page Tabs
-The page has two levels of tabs, and they are separate mechanisms.
-
-- **Page-level, full width**: `General` (the individuals table plus the right-hand panels that follow its filters) and `Workflow`. `Workflow` is *created only when the cohort has a params file* — absent, not disabled — and its own lazy loader is the only `async` one, because it warms the run-record and document caches off-thread before rendering.
-- **Right-hand panel, inside `General`**: `Statistics` / `Ancestry` / `Polygenic Scores` / `ROH` / `STR`, nested inside the General tab panel. Anything describing the pipeline run belongs on `Workflow` instead: it is a property of the cohort, not of the current filter, and does not fit a 400px column.
-- The right-hand panel also has `UPD` (between ROH and STR, as on the family page) and `Sample QC`.
-- Both levels use the same lazy pattern — a `{"loaded": False}` dict, a `@ui.refreshable` body with `_loading(...)`, and `ui.timer(0.1, load, once=True)` on tab change. The inner level keys `tab_state` and `lazy_tabs` by the exact tab label and `tab_state[e.args]` is an unguarded lookup, so a label must be added to both dicts or removed from both.
+One row of tabs, each with an icon (`_TABS` in `cohort.py`: label, `tab=` link value, icon, tooltip): `Individuals` (the table), `Statistics`, `Ancestry`, `Polygenic Scores`, `ROH`, `UPD`, `STR`, `Sample QC`, `Workflow`. Up to v0.34.0 the analyses sat in a column beside the table; once the table had nine columns (1,366 px) that column was 138 px wide in a 1,600 px window.
+- **The tab row and the filter bar are one sticky block** under the fixed page header. The header's height changes when its menus wrap, so `_HEADER_HEIGHT_JS` keeps `--gv-header-height` up to date (ResizeObserver) and the block's `top` reads it.
+- **Nine tabs with icons and badges fit 1,280 px only with `no-caps` labels and 12 px tab padding** (`_TABS_CSS`): about 1,140 px, against 1,300 px in Quasar's defaults.
+- **The filter bar** shows the count and one removable chip per filter (`_filter_chips`, worded from the column definitions). A chip's cross, or "Clear all", calls `apply_filters(..., to_table=True)`, which sets the table's filter row through `DataTable.set_filters` (no filter event follows, so the page applies them itself). The filters stay in the table header; "Edit filters" switches to Individuals. Workflow hides the bar: it is about the cohort, not the filter.
+- **Every tab but Individuals, Statistics and Workflow loads on first view** through `lazy_content(label, render, ...)`, which registers an opener in `openers`; `Workflow`'s opener is its own, `async` one, because it warms the run-record and document caches off-thread. Tabs without data are disabled; `Workflow` is *created only when the cohort has a params file* — absent, not disabled.
+- **The tab change is `tabs.on_value_change`**, so `tabs.set_value(label)` from Python (Edit filters) runs the same handler as a click. Tab values are labels (`ui.tab_panels(tabs, value=<label>)`), never `ui.tab` objects.
+- **Links**: `tab=<slug>`. Older links named the tab `panel=<slug>` (the right-hand panel) or `view=workflow`; `_linked_tab` still reads them and the page rewrites the address to `tab=`.
+- **Badges** (`TabPills`, counts in `utils/review_counts.py`) follow the filters, so they are rebuilt in memory by `update_pills` at each filter change; only the STR flags and the run record are read, once, off-thread (`load_badges`). Individuals: how many the filters leave. Sample QC: individuals by worst unacknowledged flag (`qc_worst_by_individual`, `UPD_CANDIDATE` left to UPD when the cohort has that tab), high and medium apart. UPD: High/Medium candidate chromosomes no curator validated present or absent (the rows' `_upd_open`, from `upd_column_fields`). STR: open flagged genotypes of the newest catalog, from the cohort `flags.tsv` (else the genotype table). Workflow: the last run's status icon and colour (`workflow_pills`; nothing without a record or for an unknown status). UPD and STR are for `can_write()` only. Colours are the Sample QC severities', as on the family page.
 - `render_status_panel(cohort, title=None)` suppresses the panel's own heading, because the Workflow tab's expansion header already carries the title, status chip and step summary.
 
 ### ghfc-ngs Documentation
@@ -497,7 +499,7 @@ The Wombat and WisecondorX Stats dialogs chart each selected member's count in t
 - Counts load off-thread and are cached on `(path, mtime, size)`. The comparison sits outside the dialog's refreshable section, so the SNV/Indel toggle does not recount.
 
 ### Tab Downloads (TSV exports)
-Every cohort right-hand tab but Statistics, and every family tab, has a `Download` button (`components/download_button.py`, marked `download-<tab>`; menu entries `download-<tab>-<key>`, zip `download-<tab>-zip`).
+Every cohort tab but Individuals, Statistics and Workflow, and every family tab, has a `Download` button (`components/download_button.py`, marked `download-<tab>`; menu entries `download-<tab>-<key>`, zip `download-<tab>-zip`).
 - **Scope is what is shown**: the cohort table's filtered individuals plus the tab's own selectors (PGS regions, ROH reference groups, bundle/tag, catalog), or the family's selected members. Columns are all of them, not just the plotted one.
 - **Built from explicit column lists, never by dumping row dicts.** Badge columns hold `""`, and the row dicts carry fields readers must not see. The builders sit next to their data (`ancestry_export`/`pgs_export`, `froh_export`/`kinship_export`/`segments_export`, `genotypes_export`, `sample_qc_export`) and serve both levels, so a family file and a cohort file of one kind have the same columns.
 - **Role-aware, as the tabs**: readers get `reader_label`, the neutral ROH grade, no evidence, no observed relationship, no `froh_category`/parents' kinship, an "Atypical" karyotype, declared pairs only, and an ack note only for `reader_note` categories.
@@ -508,7 +510,7 @@ Every cohort right-hand tab but Statistics, and every family tab, has a `Downloa
 ### Shareable Links (view state in the URL)
 The family pages (both), the cohort page and the Search page keep their view in the URL query, so the address bar is a link a curator can send (`components/page_link.py`).
 - **Read at build, written as it changes.** A page takes `request: Request`, builds `PageLink.from_request(request)` and opens with its values; every change calls `link.set(...)` then `link.push()` (`history.replaceState`: no reload, no history entry per click). Only non-default values are written, so a page opened bare is in its usual state.
-- **Keys:** family pages `tab`, `m` (members), the Wombat tab's shown config `wcfg` and its `wlcr`/`wgnomad`/`wmnv`/`wgs`/`wimp`/`wval`/`wsort`/`wpage`, the SV tab `svtab` and `svcalls`, the Vedette sub-tab `vpre` (preset, or `custom` with `vtype`/`vkind`/`vown`/`vsize`/`vfreq`/`vgq`/`vimp`/`vinh`), `vgs`/`vval` and `vnp` (non-PASS shown), the UPD tab's `updl` (label, when not the newest), `updc` (confidences) and `upd=<sample>:<chrom>` (the review open); cohort page `view=workflow`, `panel`, and the individuals table's column filters (`fid`, `sid`, `sex`, `pheno`, `diag`, `qc`, `upd`, `father`, `mother`); Search `q`, the whole form as compact JSON, written when Search runs and run on open.
+- **Keys:** family pages `tab`, `m` (members), the Wombat tab's shown config `wcfg` and its `wlcr`/`wgnomad`/`wmnv`/`wgs`/`wimp`/`wval`/`wsort`/`wpage`, the SV tab `svtab` and `svcalls`, the Vedette sub-tab `vpre` (preset, or `custom` with `vtype`/`vkind`/`vown`/`vsize`/`vfreq`/`vgq`/`vimp`/`vinh`), `vgs`/`vval` and `vnp` (non-PASS shown), the UPD tab's `updl` (label, when not the newest), `updc` (confidences) and `upd=<sample>:<chrom>` (the review open); cohort page `tab` (older links: `panel`, `view=workflow`), and the individuals table's column filters (`fid`, `sid`, `sex`, `pheno`, `diag`, `qc`, `upd`, `father`, `mother`); Search `q`, the whole form as compact JSON, written when Search runs and run on open.
 - Lists are comma-joined, `-` is an emptied list (not the same as absent). Consequences shorten to impact levels (`wimp=HIGH`). Search names sources by display name, never by directory: a link carries no server path.
 - Only the shown Wombat config is in the link; the others keep their state while hidden. A linked value the page cannot honour (a tab without data, an unknown config or member) falls back to the default.
 - **The query is in the server's access log**, as the path already is. The fragment would not be, but Python could only read it after the page was built, through a JavaScript round trip.
