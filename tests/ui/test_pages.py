@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import datagen
+import pytest
 from nicegui import ui
 from nicegui.testing.user_interaction import UserInteraction
 from ui_helpers import capture_tables, login, open_tab, roh_threshold_labels
@@ -65,10 +66,32 @@ async def test_family_page_and_its_tabs(user):
     open_tab(user, "family-tabs", "Polygenic Scores")
     await user.should_see("2 polygenic scores", retries=30)
     open_tab(user, "family-tabs", "ROH")
-    await user.should_see("Runs of homozygosity", retries=30)
+    # Not the title: the ROH tab's tooltip says it too.
     await user.should_see("Compared with the reference", retries=30)
     charts = user.find(ui.echart).elements
     assert any("reference" in str(c.options.get("title", {})).lower() for c in charts)
+
+
+@pytest.mark.parametrize("path", ["/cohort/DEMO/family/1001", "/family/1001"])
+async def test_family_tabs_carry_an_icon_each(user, path):
+    """Both family pages draw the tab row of the cohort page: icon, then label."""
+    await login(user, "reader")
+    await user.open(path)
+    await user.should_see("Family: 1001", retries=10)
+    [bar] = user.find(marker="family-tabs").elements
+    assert "inline-label" in bar.props and "no-caps" in bar.props
+    icons = {
+        tab.props["name"]: tab.props.get("icon")
+        for tab in bar.descendants()
+        if isinstance(tab, ui.tab)
+    }
+    assert list(icons) == [
+        "Wombat", "SVs", "Ancestry", "Polygenic Scores", "ROH", "UPD", "STR",
+        "Sample QC",
+    ]  # fmt: skip
+    assert all(icons.values()), icons
+    if path.startswith("/cohort/"):
+        assert _tab(user, "General").props.get("icon")
 
 
 async def test_wombat_sub_tab_builds_its_table_when_opened(user, monkeypatch):

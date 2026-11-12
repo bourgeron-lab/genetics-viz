@@ -74,7 +74,8 @@ async def test_family_page_marks_dummies_and_never_looks_them_up(user, monkeypat
 
     # ROH: the twins are full sibs through their dummy parents.
     open_tab(user, "family-tabs", "ROH")
-    await user.should_see("Runs of homozygosity", retries=30)
+    # Not the title: the ROH tab's tooltip says it too.
+    await user.should_see("Pairwise kinship checked against the pedigree.", retries=30)
     kinship = [r for t in tables for r in t["rows"] if r.get("pair") == "S7 – S8"]
     assert kinship and kinship[0]["declared"] == "Full sibs"
 
