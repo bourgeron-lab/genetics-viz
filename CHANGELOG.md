@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **An icon on every family page tab, as on the cohort page**, on both family pages (`/cohort/<name>/family/<FID>` and `/family/<FID>`): the icon left of the label, labels in mixed case, tabs from the left of the row. Ancestry, Polygenic Scores, ROH, UPD, STR and Sample QC take the cohort page's icons; Wombat, SVs and General get their own. The row takes about 900 of the 1,185 px a 1,280 px window leaves, and the review badges stay at the top right of their label.
+
 ## [0.34.0] - 2026-11-10
 
 ### Added

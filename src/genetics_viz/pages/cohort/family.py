@@ -9,6 +9,13 @@ from nicegui import ui
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
+from genetics_viz.components.family_tabs import (
+    GENERAL_ICON,
+    TAB_LABELS,
+    TAB_SLUGS,
+    TABS_PROPS,
+    family_tab_bar,
+)
 from genetics_viz.components.tab_badge import family_review_badges
 from genetics_viz.components.page_link import PageLink, link_members
 from genetics_viz.components.notes_loader import (
@@ -226,8 +233,8 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
 
                 # ---- Right column: tabbed info panel ----
                 with ui.column().classes("flex-1").style("gap: 0.5rem; min-width: 0"):
-                    with ui.tabs().classes("w-full") as info_tabs:
-                        general_tab = ui.tab("General")
+                    with ui.tabs().props(TABS_PROPS).classes("w-full") as info_tabs:
+                        general_tab = ui.tab("General", icon=GENERAL_ICON)
 
                     with ui.tab_panels(info_tabs, value=general_tab).classes("w-full"):
                         with ui.tab_panel(general_tab).classes(
@@ -393,53 +400,32 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             # before that (a link, the Sample QC tab) waits in "pending".
             upd_review: Dict[str, Any] = {"open": None, "pending": None}
 
-            # Analysis tabs section
-            with ui.tabs().classes("w-full").mark("family-tabs") as tabs:
-                wombat_tab = ui.tab("Wombat")
-                svs_tab = ui.tab("SVs")
-                ancestry_tab = ui.tab("Ancestry")
-                pgs_tab = ui.tab("Polygenic Scores")
-                roh_tab = ui.tab("ROH")
-                upd_tab = ui.tab("UPD").tooltip("Uniparental disomy")
-                str_tab = ui.tab("STR").tooltip("Short tandem repeats")
-                qc_tab = ui.tab("Sample QC").tooltip(
-                    "Relatedness, sex and contamination checks (somalier)"
-                )
-                if not has_wombat:
-                    wombat_tab.props("disable")
-                if not has_svs:
-                    svs_tab.props("disable")
-                if not has_ancestry:
-                    ancestry_tab.props("disable")
-                if not has_pgs:
-                    pgs_tab.props("disable")
-                if not has_roh:
-                    roh_tab.props("disable")
-                if not has_upd:
-                    upd_tab.props("disable")
-                if not has_str:
-                    str_tab.props("disable")
-                if not has_qc:
-                    qc_tab.props("disable")
+            tab_has_data = {
+                "wombat": has_wombat,
+                "svs": has_svs,
+                "ancestry": has_ancestry,
+                "pgs": has_pgs,
+                "roh": has_roh,
+                "upd": has_upd,
+                "str": has_str,
+                "qc": has_qc,
+            }
+
+            # Analysis tabs section: a tab without data is disabled
+            tabs, tab_by_slug = family_tab_bar(tab_has_data)
+            wombat_tab = tab_by_slug["wombat"]
+            svs_tab = tab_by_slug["svs"]
+            ancestry_tab = tab_by_slug["ancestry"]
+            pgs_tab = tab_by_slug["pgs"]
+            roh_tab = tab_by_slug["roh"]
+            upd_tab = tab_by_slug["upd"]
+            str_tab = tab_by_slug["str"]
+            qc_tab = tab_by_slug["qc"]
 
             # Counts of what waits for a curator, drawn on the tabs once in
             review_badges.update(
                 family_review_badges(
-                    store.data_dir,
-                    family_id,
-                    {
-                        "qc": qc_tab,
-                        "wombat": wombat_tab,
-                        "str": str_tab,
-                        "upd": upd_tab,
-                    },
-                    {
-                        "qc": has_qc,
-                        "wombat": has_wombat,
-                        "str": has_str,
-                        "upd": has_upd,
-                    },
-                    can_write(),
+                    store.data_dir, family_id, tab_by_slug, tab_has_data, can_write()
                 )
             )
 
@@ -465,31 +451,12 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             first_tab_name = default_tab_name
 
             # A shared link opens its tab, when the family has its data
-            tab_has_data = {
-                "wombat": has_wombat,
-                "svs": has_svs,
-                "ancestry": has_ancestry,
-                "pgs": has_pgs,
-                "roh": has_roh,
-                "upd": has_upd,
-                "str": has_str,
-                "qc": has_qc,
-            }
             if tab_has_data.get(link.get("tab") or ""):
                 default_tab_name = link.get("tab")
             if default_tab_name == "upd":
                 upd_review["pending"] = parse_upd_link(link.get("upd"))
 
-            default_tab = {
-                "wombat": wombat_tab,
-                "svs": svs_tab,
-                "ancestry": ancestry_tab,
-                "pgs": pgs_tab,
-                "roh": roh_tab,
-                "upd": upd_tab,
-                "str": str_tab,
-                "qc": qc_tab,
-            }[default_tab_name]
+            default_tab = tab_by_slug[default_tab_name]
 
             with ui.tab_panels(tabs, value=default_tab).classes("w-full"):
                 # Wombat tab panel
@@ -768,16 +735,6 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 "STR": (has_str, str_state, str_content),
                 "Sample QC": (has_qc, qc_state, qc_content),
             }
-            tab_names = {
-                "wombat": "Wombat",
-                "svs": "SVs",
-                "ancestry": "Ancestry",
-                "pgs": "Polygenic Scores",
-                "roh": "ROH",
-                "upd": "UPD",
-                "str": "STR",
-                "qc": "Sample QC",
-            }
 
             def make_loader(state, content):
                 def load():
@@ -788,16 +745,14 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
 
             # Load the default tab data asynchronously
             default_available, default_state, default_content = lazy_tabs[
-                tab_names[default_tab_name]
+                TAB_LABELS[default_tab_name]
             ]
             if default_available:
                 ui.timer(0.1, make_loader(default_state, default_content), once=True)
 
             # Lazy load tabs when clicked
-            tab_slugs = {label: slug for slug, label in tab_names.items()}
-
             def link_tab(label: str) -> None:
-                link.set("tab", tab_slugs.get(label), default=first_tab_name)
+                link.set("tab", TAB_SLUGS.get(label), default=first_tab_name)
                 link.push()
 
             def on_tab_change(e):
