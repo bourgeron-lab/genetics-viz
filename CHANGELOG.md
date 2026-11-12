@@ -8,11 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **An icon on every family page tab, as on the cohort page**, on both family pages (`/cohort/<name>/family/<FID>` and `/family/<FID>`): the icon left of the label, labels in mixed case, tabs from the left of the row. Ancestry, Polygenic Scores, ROH, UPD, STR and Sample QC take the cohort page's icons; Wombat, SVs and General get their own. The row takes about 900 of the 1,185 px a 1,280 px window leaves, and the review badges stay at the top right of their label.
+
+## [0.35.0] - 2026-11-12
+
+### Changed
 - **The cohort page has one row of tabs, each with an icon**: Individuals, Statistics, Ancestry, Polygenic Scores, ROH, UPD, STR, Sample QC and Workflow. The analyses used to sit in a column beside the individuals table: once the table had nine columns (1,366 px wide), that column was 138 px wide in a 1,600 px window. The table and every analysis now get the full width, and the tab row stays in view under the page header while a long tab scrolls. It fits a 1,280 px window.
 - **A filter bar under the tabs** shows how many individuals the filters leave ("N of M individuals") and one chip per filter set in the table. A chip's cross clears that filter (in the table too), "Clear all" clears them all, and "Edit filters" goes back to the table. Every tab but Workflow follows the filters, as the side panels did; Workflow hides the bar.
 - **Cohort links name the tab `tab=`** (`stats`, `ancestry`, `pgs`, `roh`, `upd`, `str`, `qc`, `workflow`). Older links with `panel=` or `view=workflow` still open their tab, and the address is rewritten.
 - The individuals table's UPD column no longer wraps its badges: it has the room.
-- **An icon on every family page tab, as on the cohort page**, on both family pages (`/cohort/<name>/family/<FID>` and `/family/<FID>`): the icon left of the label, labels in mixed case, tabs from the left of the row. Ancestry, Polygenic Scores, ROH, UPD, STR and Sample QC take the cohort page's icons; Wombat, SVs and General get their own. The row takes about 900 of the 1,185 px a 1,280 px window leaves, and the review badges stay at the top right of their label.
 
 ### Added
 - **Badges on the cohort tabs**, counted over the individuals the filters leave and updated with them:
