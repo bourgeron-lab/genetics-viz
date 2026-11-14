@@ -5,6 +5,19 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The cohort Sample QC tables were read from the wrong step once a cohort ran the ghfc-ngs `genomeqc` step.** That step writes `<cohort>.gqc_v1.{samples,flags}.tsv` in the same `qc/` directory as `sampleqc`, under the same names. Being newer, `gqc_v1` was taken as the Sample QC label. On CANDY_mpx_ghent (the first cohort to run it, 2026-11-14) the result was no flags and no pairs. Every view reading the cohort Sample QC tables lost them:
+  - the cohort Sample QC tab and the individuals table's Sample QC column;
+  - the cross-family part of the family Sample QC tab;
+  - the family report.
+
+  This hid the chr15 `UPD_CANDIDATE` of 88171200009 / C0XYEAK. A label now counts only when its `inputs.tsv` names the `sampleqc` step, or names no step.
+
+### Changed
+- The Workflow tab names the `genomeqc`, `upd` and `denovo` steps (they showed under their raw names).
+
 ## [0.37.0] - 2026-11-14
 
 ### Added

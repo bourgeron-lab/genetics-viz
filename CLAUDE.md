@@ -193,7 +193,7 @@ src/genetics_viz/
     vep.py                        # VEP consequence utilities (from YAML)
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
     sharding.py                   # Two-level sharded directory path resolution
-    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels, append_tsv_row(s), rewrite_tsv_rows, set_ignore
+    tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels (step), inputs_step, append_tsv_row(s), rewrite_tsv_rows, set_ignore
     wombat.py                     # aggregate_by_variant (Wombat tab, search); family result files, DENOVO_CONFIG
     gene_index.py                 # Cross-cohort gene index: cohort tables -> local Parquet, lookups
     gene_rows.py                  # Gene/variant page rows: carriers, curation joined, /goto links
@@ -309,6 +309,7 @@ Config files (YAML) are loaded once at module level.
 ### Sample QC (somalier)
 - The ghfc-ngs `sampleqc` step writes `<family>/qc/<FID>.<label>.{samples,pairs,flags,inputs}.tsv` and `cohorts/<NAME>/qc/<NAME>.<label>.{samples,pairs,flags,inputs}.tsv` plus `.html` (somalier's relate report, linked from the cohort tab). `<label>` is `sampleqc_label` (`somalier_hg38`): the STR naming, so discovery is `tsv.find_labels(dir, prefix, "samples")`. The contract is `modules/sampleqc/scripts/sampleqc_classify` in ghfc-ngs.
 - **Read through `read_qc_table`.** `.` is null; IDs are forced to strings. A stub run writes cut-down headers, so missing columns are added as nulls.
+- **`genomeqc` shares the `qc/` directories and the file names** (`<prefix>.gqc_v1.{samples,flags,inputs}.tsv`). `find_qc_labels` passes `step="sampleqc"` to `tsv.find_labels`, which drops a label whose `inputs.tsv` names another `#step` (one with no snapshot is kept). Without it the newer `gqc_v1` was read as Sample QC: no flags, no pairs. `datagen.add_genomeqc_tables` (opt-in) writes the step's tables in the real format, newer than sampleqc's.
 - **The family files never hold cross-family findings.** The cohort tables are the family ones plus the cross-family pairs *observed related* (unrelated cross-family pairs are not written) and their `level: cohort` flags (`CRYPTIC_RELATED`, `DUPLICATE_OR_MZ`, `SAMPLE_SWAP_CANDIDATE`). The family tab reads the cohort tables off-thread for them; `family_flags_with_cohort` adds only the `cohort`-level rows, since the cohort file repeats the family flags.
 - **A cohort pair flag's `family_id` is `"FA,FB"`**: `sample_a` is in FA, `sample_b` in FB. Key samples by `FlagRow.keys` (`(family_id, sample)`), never by sample alone.
 - **The pipeline classifies everything** (relationships, karyotypes, flags, severities); the app only words and draws them from `config/sample_qc.yaml`. `KARYOTYPE_<k>` is matched by prefix; an unknown code is shown raw. The plot lines mirror the `sampleqc_classify` constants (CHARR: medium from `charr_warn` 0.02, high from `charr_high` 0.05), and the KING cut-offs come from `roh.yaml`'s `kinship_degrees`.

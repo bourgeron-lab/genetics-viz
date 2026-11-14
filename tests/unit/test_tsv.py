@@ -9,6 +9,8 @@ import pytest
 from genetics_viz.utils.tsv import (
     append_tsv_row,
     append_tsv_rows,
+    find_labels,
+    inputs_step,
     read_tsv_or_none,
     rewrite_tsv_rows,
     set_ignore,
@@ -174,3 +176,30 @@ def test_a_header_that_is_not_a_prefix_is_left_alone(tmp_path):
     path.write_text("a\tb\tc\n")
     append_tsv_row(path, ["a", "b"], ["1", "2"])
     assert path.read_text().splitlines()[0] == "a\tb\tc"
+
+
+def test_inputs_step_reads_the_snapshot_header(tmp_path):
+    path = tmp_path / "F.x.inputs.tsv"
+    path.write_text("#inputs\tv1\n#step\tgenomeqc\n#label\tx\nsample\tS1\n")
+    assert inputs_step(path) == "genomeqc"
+    path.write_text("#inputs\tv1\n#label\tx\nsample\t#step\n")
+    assert inputs_step(path) is None
+    assert inputs_step(tmp_path / "missing.tsv") is None
+
+
+def test_find_labels_by_step(tmp_path):
+    # sampleqc and genomeqc both write <prefix>.<label>.samples.tsv in qc/.
+    for label, step in (("somalier_hg38", "sampleqc"), ("gqc_v1", "genomeqc")):
+        (tmp_path / f"C.{label}.samples.tsv").write_text("sample\n")
+        (tmp_path / f"C.{label}.inputs.tsv").write_text(f"#inputs\tv1\n#step\t{step}\n")
+    # An older run with no snapshot is kept.
+    (tmp_path / "C.old.samples.tsv").write_text("sample\n")
+    assert set(find_labels(tmp_path, "C", "samples")) == {
+        "somalier_hg38", "gqc_v1", "old",
+    }  # fmt: skip
+    assert set(find_labels(tmp_path, "C", "samples", step="sampleqc")) == {
+        "somalier_hg38", "old",
+    }  # fmt: skip
+    assert set(find_labels(tmp_path, "C", "samples", step="genomeqc")) == {
+        "gqc_v1", "old",
+    }  # fmt: skip

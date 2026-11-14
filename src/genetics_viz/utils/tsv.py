@@ -193,13 +193,40 @@ def read_tsv_or_none(
         return None
 
 
-def find_labels(directory: Path, prefix: str, kind: str) -> List[str]:
+def inputs_step(path: Path) -> Optional[str]:
+    """The ``#step`` of a pipeline ``inputs.tsv`` snapshot, ``None`` if unknown.
+
+    The snapshot opens with ``#``-prefixed key/value lines (``#inputs v1``,
+    ``#step sampleqc``, ``#label …``). Only those lines are read.
+    """
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                if not line.startswith("#"):
+                    break
+                key, _, value = line.rstrip("\n").partition("\t")
+                if key == "#step":
+                    return value.strip() or None
+    except OSError:
+        return None
+    return None
+
+
+def find_labels(
+    directory: Path, prefix: str, kind: str, step: Optional[str] = None
+) -> List[str]:
     """Labels of the ``<prefix>.<label>.<kind>.tsv`` files in ``directory``.
 
     Newest first, then by name. The label is the whole middle of the name: a
     lazy capture would cut a dotted label short. Used where the pipeline names
     a step's files by a free label (an STR catalog, a sample QC sites file)
     rather than by a bundle version and filter tag.
+
+    ``step`` keeps only the labels written by that pipeline step. Two steps
+    can share a directory and a kind: ``sampleqc`` and ``genomeqc`` both write
+    ``qc/<prefix>.<label>.{samples,flags}.tsv``. A label whose
+    ``<prefix>.<label>.inputs.tsv`` names another ``#step`` is left out; one
+    with no snapshot, or no ``#step`` in it, is kept.
     """
     if not directory.is_dir():
         return []
@@ -213,4 +240,10 @@ def find_labels(directory: Path, prefix: str, kind: str) -> List[str]:
     except OSError:
         logger.warning("Cannot list %s", directory, exc_info=True)
         return []
+    if step is not None:
+        found = [
+            (mtime, label)
+            for mtime, label in found
+            if inputs_step(directory / f"{prefix}.{label}.inputs.tsv") in (None, step)
+        ]
     return [label for _, label in sorted(found, key=lambda t: (-t[0], t[1]))]
