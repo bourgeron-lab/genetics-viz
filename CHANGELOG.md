@@ -5,10 +5,10 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.38.0] - 2026-11-14
 
 ### Added
-- **The ghfc-ngs `genomeqc` step is shown in the Sample QC tabs** (label `gqc_v1`; CANDY_mpx_ghent is the only cohort with its tables so far). The step says what kind of DNA and library each sample is. A genome from an EBV-transformed cell line has the person's genotypes, so every somalier check passes, while its clonal somatic mutations read as de novo calls.
+- **The ghfc-ngs `genomeqc` step is shown in the Sample QC tabs** (label `gqc_v1`; run on CANDY_mpx_ghent, CANDY_mpx, PMS and dataset_paper_20251010 so far: 31 cell-line samples in dataset_paper_20251010, 2 in CANDY_mpx, none in the others). The step says what kind of DNA and library each sample is. A genome from an EBV-transformed cell line has the person's genotypes, so every somalier check passes, while its clonal somatic mutations read as de novo calls.
   - **Its flags join the Sample QC flags**: the family header badge and member icons, the tab's review badge, the Issues table, the cohort's Sample QC column, pills and flagged individuals, the home card's figure and the family report. Curators acknowledge them the same way. There are 11 flags:
     - `CELL_LINE`, `EBV_TRACE`;
     - low depth, duplicates, mismatches, indels in the reads, short inserts;
