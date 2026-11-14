@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.37.1] - 2026-11-14
 
 ### Fixed
 - **The cohort Sample QC tables were read from the wrong step once a cohort ran the ghfc-ngs `genomeqc` step.** That step writes `<cohort>.gqc_v1.{samples,flags}.tsv` in the same `qc/` directory as `sampleqc`, under the same names. Being newer, `gqc_v1` was taken as the Sample QC label. On CANDY_mpx_ghent (the first cohort to run it, 2026-11-14) the result was no flags and no pairs. Every view reading the cohort Sample QC tables lost them:
