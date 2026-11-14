@@ -73,25 +73,28 @@ async def test_family_page_and_its_tabs(user):
 
 
 @pytest.mark.parametrize("path", ["/cohort/DEMO/family/1001", "/family/1001"])
-async def test_family_tabs_carry_an_icon_each(user, path):
-    """Both family pages draw the tab row of the cohort page: icon, then label."""
+async def test_family_tabs_are_grouped_without_icons(user, path):
+    """Both family pages draw the cohort page's groups, in the same order."""
     await login(user, "reader")
     await user.open(path)
     await user.should_see("Family: 1001", retries=10)
     [bar] = user.find(marker="family-tabs").elements
-    assert "inline-label" in bar.props and "no-caps" in bar.props
-    icons = {
-        tab.props["name"]: tab.props.get("icon")
-        for tab in bar.descendants()
-        if isinstance(tab, ui.tab)
-    }
-    assert list(icons) == [
-        "SNVs/Indels", "SVs", "Ancestry", "Polygenic Scores", "ROH", "UPD", "STR",
-        "Sample QC",
+    assert "no-caps" in bar.props
+    tabs = [t for t in bar.descendants() if isinstance(t, ui.tab)]
+    assert [t.props["name"] for t in tabs] == [
+        "Sample QC", "SNVs/Indels", "SVs", "STR", "UPD", "Ancestry", "ROH",
+        "Polygenic Scores",
     ]  # fmt: skip
-    assert all(icons.values()), icons
-    if path.startswith("/cohort/"):
-        assert _tab(user, "General").props.get("icon")
+    captions = [
+        c.text
+        for c in bar.descendants()
+        if isinstance(c, ui.label) and "text-[11px]" in c.classes
+    ]
+    assert captions == ["Checks", "Variants", "Background"]
+    assert not any(t.props.get("icon") for t in user.find(ui.tab).elements)
+    # The page still opens on SNVs/Indels, not on the first tab.
+    shown = bar.value.props["name"] if isinstance(bar.value, ui.tab) else bar.value
+    assert shown == "SNVs/Indels"
 
 
 async def test_wombat_sub_tab_builds_its_table_when_opened(user, monkeypatch):
@@ -651,34 +654,3 @@ async def test_wombat_stats_read_a_headerless_cohort_file(user, data_dir):
     )
     (line,) = non_founders["series"][0]["markLine"]["data"]
     assert line["label"]["formatter"] == "S3: 2"
-
-
-async def test_cohort_statistics_plot_a_headerless_cohort_wombat_table(user, data_dir):
-    """The Statistics panel borrows family 1001's header for DEMO's "strict" table."""
-    datagen.write_tsv(
-        data_dir / "params" / "genesets" / "strict_genes.tsv",
-        ["gene"],
-        [("SHANK3",), ("KIAA1109",)],
-    )
-    await login(user, "reader")
-    await user.open("/cohort/DEMO")
-    await user.should_see("6 samples", retries=10)
-    open_tab(user, "cohort-tabs", "Statistics")
-    config = user.find(kind=ui.select, content="Wombat config").elements.pop()
-    # The older ".annotated." name is listed under its config, not "annotated.strict"
-    assert list(config.options) == ["default", "strict"]
-    genesets = user.find(kind=ui.select, content="Genesets").elements.pop()
-    with user.client:
-        config.set_value("strict")
-        genesets.set_value(["strict_genes"])
-    user.find(kind=ui.button, content="Plot").click()
-    await user.should_see(kind=ui.plotly, retries=30)
-    await user.should_not_see("Cannot plot")
-    (fig,) = [p.figure for p in user.find(ui.plotly).elements]
-    assert fig.layout.title.text == "% carriers per geneset"
-    # S3, one of the two affected samples, carries both of the table's variants
-    assert {t.name: list(t.x) for t in fig.data} == {
-        "-9.0": [0.0],
-        "1": [0.0],
-        "2": [50.0],
-    }

@@ -1,43 +1,61 @@
-"""The family pages' tab bar: an icon on every tab, as on the cohort page.
+"""The family pages' tab bar: the cohort page's groups, in the same order.
 
 Both family pages draw it (``pages/cohort/family.py`` and
-``standalone_family.py``). A tab the cohort page also has takes its icon.
+``standalone_family.py``). The order is the curator's: check the family is what
+the pedigree says, then its variants, then its genetic background.
 """
 
 from typing import Dict, List, Mapping, Optional, Tuple
 
 from nicegui import ui
 
-#: Icon left of the label, mixed-case labels, tabs from the left: the cohort
-#: page's tab row. Eight tabs take about 870 px of the 1,185 px a 1,280 px
-#: window leaves, so Quasar's 16 px tab padding stays (the cohort page cuts it
-#: to 12 for nine tabs). The review badges float in that padding.
-TABS_PROPS = "inline-label no-caps align=left"
+from genetics_viz.components.tab_groups import GROUPED_TABS_PROPS, tab_group
 
-#: The analysis tabs, in order: link value (``tab=``), label, icon, tooltip.
-FAMILY_TABS: List[Tuple[str, str, str, str]] = [
+#: The family tab rows' props (the analysis tabs and the General tab).
+TABS_PROPS = GROUPED_TABS_PROPS
+
+#: The analysis tabs by group, in order: link value (``tab=``), label, tooltip.
+FAMILY_TAB_GROUPS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
     (
-        "snvs",
-        "SNVs/Indels",
-        "grain",
-        "Small variants: de novo candidates, then the Wombat tables",
+        "Checks",
+        [
+            (
+                "qc",
+                "Sample QC",
+                "Relatedness, sex and contamination (somalier); DNA source and library",
+            ),
+        ],
     ),
-    ("svs", "SVs", "call_split", ""),
-    ("ancestry", "Ancestry", "public", ""),
-    ("pgs", "Polygenic Scores", "functions", ""),
-    ("roh", "ROH", "linear_scale", "Runs of homozygosity"),
-    ("upd", "UPD", "content_copy", "Uniparental disomy"),
-    ("str", "STR", "repeat", "Short tandem repeats"),
     (
-        "qc",
-        "Sample QC",
-        "fact_check",
-        "Relatedness, sex and contamination (somalier); DNA source and library",
+        "Variants",
+        [
+            (
+                "snvs",
+                "SNVs/Indels",
+                "Small variants: de novo candidates, then the Wombat tables",
+            ),
+            ("svs", "SVs", "Structural variants: WisecondorX and Vedette calls"),
+            ("str", "STR", "Short tandem repeats"),
+            ("upd", "UPD", "Uniparental disomy"),
+        ],
+    ),
+    (
+        "Background",
+        [
+            ("ancestry", "Ancestry", ""),
+            ("roh", "ROH", "Runs of homozygosity"),
+            ("pgs", "Polygenic Scores", ""),
+        ],
     ),
 ]
 
+#: The analysis tabs, in order: link value, label, tooltip.
+FAMILY_TABS: List[Tuple[str, str, str]] = [
+    tab for _caption, tabs in FAMILY_TAB_GROUPS for tab in tabs
+]
+
 #: A tab's label by link value; the ``update:model-value`` event reports labels.
-TAB_LABELS: Dict[str, str] = {slug: label for slug, label, _icon, _tip in FAMILY_TABS}
+TAB_LABELS: Dict[str, str] = {slug: label for slug, label, _tip in FAMILY_TABS}
 #: A tab's link value by label.
 TAB_SLUGS: Dict[str, str] = {label: slug for slug, label in TAB_LABELS.items()}
 
@@ -51,10 +69,6 @@ def canonical_tab(value: Optional[str]) -> str:
     return TAB_ALIASES.get(value, value)
 
 
-#: The cohort family page's General tab (notes and diagnostics).
-GENERAL_ICON = "info"
-
-
 def family_tab_bar(available: Mapping[str, bool]) -> Tuple[ui.tabs, Dict[str, ui.tab]]:
     """The analysis tab bar, marked ``family-tabs``, and its tabs by link value.
 
@@ -62,11 +76,13 @@ def family_tab_bar(available: Mapping[str, bool]) -> Tuple[ui.tabs, Dict[str, ui
     """
     with ui.tabs().props(TABS_PROPS).classes("w-full").mark("family-tabs") as bar:
         tabs: Dict[str, ui.tab] = {}
-        for slug, label, icon, tip in FAMILY_TABS:
-            tab = ui.tab(label, icon=icon)
-            if tip:
-                tab.tooltip(tip)
-            if not available.get(slug, True):
-                tab.props("disable")
-            tabs[slug] = tab
+        for index, (caption, group) in enumerate(FAMILY_TAB_GROUPS):
+            with tab_group(caption, first=index == 0):
+                for slug, label, tip in group:
+                    tab = ui.tab(label)
+                    if tip:
+                        tab.tooltip(tip)
+                    if not available.get(slug, True):
+                        tab.props("disable")
+                    tabs[slug] = tab
     return bar, tabs

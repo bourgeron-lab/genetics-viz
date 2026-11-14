@@ -5,6 +5,21 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The cohort and family tabs are grouped, without icons.** A small caption over each group says what its tabs are for; the icons for ROH, UPD, STR or Polygenic Scores said nothing. Same groups, same order on both pages:
+  - Browse (cohort page only): Individuals;
+  - Checks: Sample QC, then De novo on the cohort page;
+  - Variants: SNVs/Indels and SVs (family pages), STR, UPD;
+  - Background: Ancestry, ROH, Polygenic Scores.
+
+  The family pages put Sample QC first, the order a family is checked in, but still open on SNVs/Indels. The General tab lost its icon too. The family review badges now sit in line after their label, as the cohort page's do: floating, they covered the end of the shorter tabs' labels.
+- **Workflow is a button on the cohort's title line**, with the run's status icon, not a tab: it is about the pipeline run, not the cohort. `tab=workflow` links still open it.
+
+### Removed
+- **The cohort Statistics tab** (carriers per geneset). `tab=stats` links open the individuals.
+
 ## [0.38.0] - 2026-11-14
 
 ### Added
