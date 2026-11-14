@@ -70,6 +70,7 @@ from genetics_viz.utils.review_counts import (
     upd_cohort_pills,
     workflow_pills,
 )
+from genetics_viz.utils.genome_qc import cohort_flags as genome_flags
 from genetics_viz.utils.sample_qc import (
     CATEGORIES,
     category_badges,
@@ -168,7 +169,12 @@ _TABS: List[Tuple[str, str, str, str]] = [
         "De novo SNVs and indels: per-child QC, flags, literature (denovo step)",
     ),
     ("STR", "str", "repeat", "Short tandem repeats"),
-    ("Sample QC", "qc", "fact_check", "Relatedness, sex and contamination (somalier)"),
+    (
+        "Sample QC",
+        "qc",
+        "fact_check",
+        "Relatedness, sex and contamination (somalier); DNA source and library",
+    ),
     ("Workflow", "workflow", "account_tree", "Pipeline run status and parameters"),
 ]
 _SLUGS = {label: slug for label, slug, _icon, _tip in _TABS}
@@ -506,8 +512,11 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         # Flags a curator acknowledged leave the badges and "Any issue"; they
         # get one grey badge, which the filter's "Acknowledged" option finds.
         qc_acks = load_acks(store.data_dir)
+        # The genome QC flags (cohort level only) count with them.
         qc_active, qc_acked = (
-            split_acknowledged(cohort_qc.flags, qc_acks) if cohort_qc else ([], [])
+            split_acknowledged(list(cohort_qc.flags) + genome_flags(cohort), qc_acks)
+            if cohort_qc
+            else ([], [])
         )
         qc_by_key = flags_by_key(qc_active)
         qc_acked_by_key = flags_by_key(qc_acked)

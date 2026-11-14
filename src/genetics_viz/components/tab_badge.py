@@ -133,7 +133,7 @@ def family_review_badges(
     counts: Dict[str, tuple] = {
         "qc": (
             "qc-tab-count",
-            lambda: qc_family_to_review(data_dir, family_id, has_upd),
+            lambda: qc_family_to_review(data_dir, family_id, has_upd, cohort),
         ),
     }
     if show_review:

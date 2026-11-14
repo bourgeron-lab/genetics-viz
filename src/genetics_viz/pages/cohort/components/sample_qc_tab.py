@@ -8,7 +8,12 @@ Four blocks, each a table beside the plot that reads it:
    KING / IBS0 plane, then every pair;
 3. sex and karyotype: X/Y copy numbers and chrX heterozygosity, over the
    rest of the cohort;
-4. sample quality: depth, sites, contamination and Mendelian errors.
+4. sample quality: depth, sites, contamination and Mendelian errors;
+5. DNA and library (the ``genomeqc`` step): cell line, read length and PCR
+   class, alignment and variant-call metrics, over the cohort by class.
+
+The ``genomeqc`` flags exist at cohort level only; they join the Issues with
+the others (``genome_qc.family_flags``), acknowledged the same way.
 
 The family's own files are a few KB and read at once. The cohort's add the
 cross-family flags and the plots' background; they are read off-thread, so
@@ -33,6 +38,16 @@ from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.upd_dialog import show_upd_dialog
 from genetics_viz.utils.auth import can_write, get_current_user
+from genetics_viz.utils.data import get_static_prefix
+from genetics_viz.utils.genome_qc import (
+    family_flags,
+    get_sample_gqc_dir,
+    load_cohort_gqc,
+    load_family_gqc,
+    probe_family_gqc,
+    sample_stats_path,
+)
+from genetics_viz.utils.sharding import get_sample_url
 from genetics_viz.utils.export import export_filename, people_from_family, rows_to_tsv
 from genetics_viz.utils.roh import to_float
 from genetics_viz.utils.sample_qc import (
@@ -88,8 +103,12 @@ from genetics_viz.utils.upd import (
 )
 from genetics_viz.utils.sample_qc_export import (
     flags_export,
+    genome_export,
     pairs_export,
     samples_export,
+)
+from genetics_viz.pages.cohort.components.genome_qc_section import (
+    render_family_genome_qc,
 )
 from genetics_viz.utils.sample_qc_plots import (
     PairSeverities,
@@ -276,7 +295,9 @@ def _render_issues(
                     ],
                     "samples": " – ".join(f.samples),
                     "other_family": other or "",
-                    "evidence": f.evidence,
+                    # Not sent to readers: the hidden column's data still
+                    # reaches the browser.
+                    "evidence": f.evidence if show_detail else "",
                     "review": ack.label if ack else "",
                     "review_badges": (
                         [
@@ -809,6 +830,7 @@ def _download_menu(
             for f in family_flags_with_cohort(
                 state["qc"], state["cohort_qc"], family_id
             )
+            + state["genome_flags"]
             if any(s in shown for s in f.samples)
         ]
 
@@ -856,19 +878,47 @@ def _download_menu(
         )
         return rows_to_tsv(rows, columns)
 
+    def build_genome() -> str:
+        gqc = state["gqc"]
+        if gqc is None:
+            return ""
+        people = {
+            (p["FID"], p["IID"]): p
+            for p in people_from_family(store, cohort_name, family_id, members())
+        }
+        rows, columns = genome_export(
+            gqc.sample_rows(), people, flags(), load_acks(store.data_dir), show_detail
+        )
+        return rows_to_tsv(rows, columns)
+
     def filename(table: Optional[str], ext: str = "tsv") -> Callable[[], str]:
         return lambda: export_filename(
             family_id, "sampleqc", table, tag=state["qc"].label, ext=ext
         )
 
-    download_button(
-        [
-            Download("flags", "Flags", filename("flags"), build_flags),
+    downloads = [
+        Download("flags", "Flags", filename("flags"), build_flags),
+        Download(
+            "samples", "Sex and sample quality", filename("samples"), build_samples
+        ),
+        Download("pairs", "Pairs (relatedness)", filename("pairs"), build_pairs),
+    ]
+    if state["gqc_loading"] or state["gqc"] is not None:
+        downloads.append(
             Download(
-                "samples", "Sex and sample quality", filename("samples"), build_samples
-            ),
-            Download("pairs", "Pairs (relatedness)", filename("pairs"), build_pairs),
-        ],
+                "genome",
+                "DNA and library (genome QC)",
+                lambda: export_filename(
+                    family_id,
+                    "genomeqc",
+                    "samples",
+                    tag=state["gqc"].label if state["gqc"] else None,
+                ),
+                build_genome,
+            )
+        )
+    download_button(
+        downloads,
         mark="download-sampleqc",
         zip_filename=filename(None, "zip"),
     )
@@ -915,12 +965,53 @@ def render_sample_qc_tab(
     show_detail = can_write()
     cohort = store.cohorts.get(cohort_name) if cohort_name else None
     has_cohort = cohort is not None and probe_cohort_qc_data(cohort)
+    has_genome = probe_family_gqc(store.data_dir, family_id, cohort)
     state: Dict[str, Any] = {
         "qc": family_qc,
         "cohort_qc": None,
         "cohort_loading": has_cohort,
         "show_acked": True,
+        # genomeqc: its flags (cohort flags table, a few KB) now, for the
+        # Issues; its metrics off-thread, for the DNA and library section.
+        "genome_flags": family_flags(cohort, family_id),
+        "gqc": None,
+        "gqc_reference": [],
+        "gqc_loading": has_genome,
+        "stats_links": {},
     }
+    static_prefix = get_static_prefix() if show_detail else ""
+
+    def read_genome_qc() -> Tuple[Any, List[Dict[str, Any]], Dict[str, str]]:
+        cohort_gqc = load_cohort_gqc(cohort) if cohort is not None else None
+        gqc = load_family_gqc(store.data_dir, family_id, cohort)
+        links: Dict[str, str] = {}
+        if show_detail and gqc is not None:
+            for row in gqc.sample_rows():
+                sid = row.get("sample") or ""
+                path = (
+                    sample_stats_path(store.data_dir, sid, gqc.label) if sid else None
+                )
+                if path is not None:
+                    rel = path.relative_to(get_sample_gqc_dir(store.data_dir, sid))
+                    links[sid] = (
+                        f"{static_prefix}/{get_sample_url(store.data_dir, sid)}"
+                        f"/qc/genomeqc/{rel.as_posix()}"
+                    )
+        reference = cohort_gqc.sample_rows() if cohort_gqc is not None else []
+        return gqc, reference, links
+
+    async def load_genome() -> None:
+        try:
+            gqc, reference, links = await asyncio.to_thread(read_genome_qc)
+        except Exception:
+            logger.warning("Failed to read genome QC of %s", family_id, exc_info=True)
+            gqc, reference, links = None, [], {}
+        state.update(
+            gqc=gqc, gqc_reference=reference, stats_links=links, gqc_loading=False
+        )
+        if gqc is not None and gqc.flagged:
+            state["genome_flags"] = gqc.flags
+        render_content.refresh()
 
     async def load_cohort() -> None:
         label = state["qc"].label
@@ -1036,6 +1127,7 @@ def render_sample_qc_tab(
         flags = [
             f
             for f in family_flags_with_cohort(qc, cohort_qc, family_id)
+            + state["genome_flags"]
             if any(s in member_set for s in f.samples)
         ]
         hidden_acked = 0
@@ -1150,21 +1242,41 @@ def render_sample_qc_tab(
             sample_rows, by_sample, acks, cohort_rows, member_set, show_detail
         )
 
+        if has_genome:
+            _section(
+                "DNA and library",
+                "What kind of DNA and library each member is: cell line, read"
+                " length and PCR, alignment and variant calls (genomeqc).",
+            )
+            render_family_genome_qc(
+                state["gqc"],
+                state["gqc_reference"],
+                members,
+                acks,
+                show_detail,
+                state["stats_links"],
+                state["gqc_loading"],
+            )
+
     render_content()
     data_table_refreshers.append(render_content.refresh)
     if upd_listeners is not None:
         upd_listeners.append(render_content.refresh)
     if has_cohort:
         ui.timer(0.05, load_cohort, once=True)
+    if has_genome:
+        ui.timer(0.05, load_genome, once=True)
 
 
 def family_qc_summary(
-    store: Any, family_id: str
+    store: Any, family_id: str, cohort: Any = None
 ) -> Tuple[Optional[QcData], List[FlagRow], List[FlagRow]]:
     """The family's QC tables, then its flags still counting and those acknowledged.
 
-    For the page header and the member icons. The family files are a few KB;
-    cohort-level flags are left to the tab. Call it again after a review.
+    For the page header and the member icons. The family files are a few KB,
+    and so is the cohort's genome QC flags table, whose flags are added
+    (``genome_qc.family_flags``); the other cohort-level flags are left to
+    the tab. Call it again after a review.
     """
     try:
         qc = load_family_qc(store.data_dir, family_id)
@@ -1173,5 +1285,8 @@ def family_qc_summary(
         return None, [], []
     if qc is None:
         return None, [], []
-    active, acked = split_acknowledged(qc.flags, load_acks(store.data_dir))
+    flags = sorted(
+        list(qc.flags) + family_flags(cohort, family_id), key=lambda f: -f.rank
+    )
+    active, acked = split_acknowledged(flags, load_acks(store.data_dir))
     return qc, active, acked

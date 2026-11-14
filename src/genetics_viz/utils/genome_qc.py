@@ -136,6 +136,10 @@ class MetricInfo:
     lines: List[float]
     plot: bool
     explain: str
+    #: The flags the pipeline raises on this column.
+    flags: List[str] = field(default_factory=list)
+    #: Hidden from readers (the EBV columns).
+    curator_only: bool = False
 
     def fmt(self, value: Any) -> str:
         """The value as shown: ``—`` when missing."""
@@ -168,15 +172,24 @@ def metric_info(key: str) -> MetricInfo:
         lines=[THRESHOLDS[k] for k in cfg.get("lines", []) if k in THRESHOLDS],
         plot=bool(cfg.get("plot", cfg.get("format", "float") != "text")),
         explain=cfg.get("explain", ""),
+        flags=list(cfg.get("flags", [])),
+        curator_only=bool(cfg.get("curator_only", False)),
     )
 
 
-def metrics(group: Optional[str] = None) -> List[MetricInfo]:
-    """Every configured metric in file order, or one group's."""
+def metrics(group: Optional[str] = None, curator: bool = True) -> List[MetricInfo]:
+    """Every configured metric in file order, or one group's.
+
+    ``curator`` false leaves out the curator-only ones (the EBV columns).
+    """
     return [
-        metric_info(k)
-        for k, cfg in METRICS.items()
-        if group is None or cfg.get("group") == group
+        info
+        for info in (
+            metric_info(k)
+            for k, cfg in METRICS.items()
+            if group is None or cfg.get("group") == group
+        )
+        if curator or not info.curator_only
     ]
 
 
@@ -433,6 +446,39 @@ def load_cohort_gqc(cohort: Any, label: Optional[str] = None) -> Optional[Genome
         samples=samples,
         flags=flag_rows(flags),
     )
+
+
+def cohort_flags(cohort: Any, label: Optional[str] = None) -> List[FlagRow]:
+    """The cohort's genome QC flags (the flags table only, a few KB).
+
+    For the views that add them to the Sample QC flags: family header and
+    member icons, review badges, Issues, the cohort column and pills, the
+    home figure, the report. Blocking I/O, cached on the file's stat; ``[]``
+    without a cohort or its tables, or when they cannot be read.
+    """
+    if cohort is None:
+        return []
+    try:
+        directory = get_cohort_gqc_dir(cohort)
+        labels = find_cohort_gqc_labels(directory, cohort.name)
+        if not labels:
+            return []
+        chosen = label if label in labels else labels[0]
+        return flag_rows(
+            _read_cached(
+                gqc_path(directory, cohort.name, chosen, "flags"), FLAG_COLUMNS
+            )
+        )
+    except Exception:
+        logger.warning(
+            "Failed to read the genome QC flags of %s", cohort.name, exc_info=True
+        )
+        return []
+
+
+def family_flags(cohort: Any, family_id: str) -> List[FlagRow]:
+    """:func:`cohort_flags` of one family."""
+    return [f for f in cohort_flags(cohort) if f.family_id == family_id]
 
 
 def _family_from_cohort(cohort_gqc: GenomeQc, family_id: str) -> GenomeQc:

@@ -6,7 +6,9 @@ Three tables, each worded for the user's role as the tabs are:
   columns (status, note, user, date). Acknowledged flags are always listed.
 - ``samples``: sex, karyotype and quality metrics per sample, with the flags
   still counting and, apart, the acknowledged ones.
-- ``pairs``: every pair tested, against the pedigree, with the pair's flags.
+- ``pairs``: every pair tested, against the pedigree, with the pair's flags;
+- ``genome``: the ``genomeqc`` metrics per sample (class, DNA source,
+  alignment, variant calls), with its flags. Readers get no EBV column.
 
 Readers get ``reader_label``, no evidence, an "Atypical" karyotype, no
 observed relationship, only the pedigree-declared pairs, and an
@@ -16,6 +18,8 @@ acknowledgement's note only for the categories marked ``reader_note``.
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .export import PERSON_COLUMNS
+from .genome_qc import COHORT_COLUMNS as GENOME_COLUMNS
+from .genome_qc import GENOME_LEVEL, metric_info
 from .sample_qc import (
     FlagRow,
     flag_title,
@@ -126,6 +130,47 @@ def samples_export(
                     if active
                     else ""
                 ),
+                "flags": counting,
+                "acknowledged_flags": reviewed,
+            }
+        )
+    return rows, columns
+
+
+#: The genome QC samples table's columns written as they are.
+_GENOME_METRICS = [
+    c for c in GENOME_COLUMNS if c not in ("sample", "family_id", "flags")
+]
+
+
+def genome_export(
+    sample_rows: Iterable[Dict[str, Any]],
+    people: Dict[Key, Dict[str, Any]],
+    flags: Iterable[FlagRow],
+    acks: Acks,
+    show_detail: bool,
+) -> Table:
+    """One row per measured person: the genome QC metrics, then its flags.
+
+    ``flags`` may hold the Sample QC ones: only the genome QC flags are
+    written. Readers get no curator-only column (the EBV counts).
+    """
+    metrics = [
+        c for c in _GENOME_METRICS if show_detail or not metric_info(c).curator_only
+    ]
+    columns = [*PERSON_COLUMNS, *metrics, "flags", "acknowledged_flags"]
+    by_key = flags_by_key(f for f in flags if f.level == GENOME_LEVEL)
+    rows = []
+    for r in sample_rows:
+        key = (r.get("family_id") or "", r.get("sample") or "")
+        who = people.get(key)
+        if who is None:
+            continue
+        counting, reviewed = _flag_texts(by_key.get(key, []), acks, show_detail)
+        rows.append(
+            {
+                **who,
+                **{m: r.get(m) for m in metrics},
                 "flags": counting,
                 "acknowledged_flags": reviewed,
             }
