@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, Optional
 
 from nicegui import ui
 
+from genetics_viz.components.cell_line_note import render_cell_line_note
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
 from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
@@ -259,6 +260,7 @@ def show_upd_dialog(
         ui.label(f"Uniparental disomy — {sample}, chr{chrom}").classes(
             "text-lg font-semibold text-blue-700"
         )
+        render_cell_line_note(family_id, [sample], "upd")
 
         ui.label("Evidence").classes("text-base font-semibold text-blue-700 mt-2")
         _render_events(evidence)

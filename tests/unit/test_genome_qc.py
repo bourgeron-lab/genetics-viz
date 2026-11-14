@@ -139,3 +139,16 @@ def test_family_without_sample_tables(data_dir):
     fam = gqc.load_family_gqc(data_dir, "1001")
     assert fam.row_for("S3")["chr20_depth"] is None
     assert fam.row_for("S3")["n_indel"] == 587299
+
+
+def test_cell_lines_and_caveats(data_dir):
+    datagen.add_genomeqc_tables(data_dir)
+    demo = Cohort(data_dir)
+    assert set(gqc.cell_lines([demo], "1001")) == {"S3"}
+    assert gqc.cell_lines([demo], "AU-X-1") == {}
+    assert gqc.cell_lines([], "1001") == {}
+    text = gqc.caveat_text("upd", ["S3"])
+    assert text.startswith("S3: DNA from a cell line.") and "isodisomy" in text
+    assert "IGH" in gqc.caveat_text("cnv", ["S3", "S3"])
+    assert gqc.caveat_text("upd", []) == ""
+    assert gqc.caveat_text("unknown", ["S3"]) == ""

@@ -320,3 +320,20 @@ def test_long_cells_wrap_in_the_report(store, data_dir):
     section = _report(store).section("diagnostics")
     assert section.rows[0]["impact"] == "stop gained"
     assert "overflow-wrap: anywhere" in render_report_html(_report(store))
+
+
+def test_cell_line_caveats_and_methods(store, data_dir):
+    # Without a genome QC: no caveat, no genome QC methods.
+    report = _report(store)
+    assert not any("cell line" in f for s in report.sections for f in s.footnotes)
+    assert "DNA source and library" not in dict(report.methods)
+    datagen.add_genomeqc_tables(data_dir)
+    datagen.add_report_case(data_dir)
+    report = _report(store)
+    for key, word in (("aneuploidy", "IGH"), ("diagnostics", "de novo")):
+        first = report.section(key).footnotes[0]
+        assert first.startswith("S3: DNA from a cell line.") and word in first
+    assert "gqc_v1" in dict(report.methods)["DNA source and library"]
+    # AU-X-1 has no cell line; the standalone report (no cohort) none either.
+    for other in (_report(store, "AU-X-1"), _report(store, cohort=False)):
+        assert not any("cell line" in f for s in other.sections for f in s.footnotes)

@@ -209,3 +209,21 @@ metrics:
     label: "Indels in repeats"
     format: percent
     digits: 1
+
+# The standing caveat on a CELL_LINE sample's results, by where it is shown
+# (components/cell_line_note.py, the family report). {samples}: the cell-line
+# members concerned. Worded for every role: "DNA from a cell line" is the
+# flag's reader label too.
+caveats:
+  upd: >-
+    {samples}: DNA from a cell line. Culture can cause copy-neutral loss of
+    heterozygosity, which reads as an isodisomy: confirm a UPD on primary DNA
+    (blood or saliva) before reporting it.
+  cnv: >-
+    {samples}: DNA from a cell line. Culture can cause gains and losses, often
+    mosaic, and the B cell's rearrangements delete DNA at IGH, IGK and IGL:
+    confirm a CNV on primary DNA (blood or saliva) before reporting it.
+  diagnostic: >-
+    {samples}: DNA from a cell line. Its inherited variants are sound; a de
+    novo variant, a UPD or a CNV found in it needs confirmation on primary DNA
+    (blood or saliva).

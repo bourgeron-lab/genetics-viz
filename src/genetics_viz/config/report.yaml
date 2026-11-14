@@ -98,7 +98,7 @@ none:
   upd: "No uniparental disomy candidate was found."
   diagnostics: "No pathogenic or uncertain finding has been recorded by the curators."
 
-methods_source: "ghfc-ngs 9b821d8 (2026-11-10)"
+methods_source: "ghfc-ngs 9b821d8 (2026-11-10); genome QC fdd774f (2026-11-14)"
 
 # Methods paragraphs, printed for the sections that have data. Placeholders in
 # braces are filled from the family's own files; unknown ones print "n/a".
@@ -136,6 +136,19 @@ methods:
       Contamination is estimated with CHARR (Lu et al. 2023; warning from
       0.02, high from 0.05). Mendelian errors are counted at GQ 20 and DP 10 or
       more.
+  genome_qc:
+    title: "DNA source and library"
+    text: >-
+      Each genome's DNA and library were checked with samtools and bcftools
+      1.24 ({gqc_label}). Reads of mapping quality 20 or more on the
+      Epstein-Barr virus genome, the mitochondrial genome and chromosome 20
+      give EBV and mtDNA copies per cell: one EBV genome per cell or more marks
+      DNA from an EBV-transformed lymphoblastoid cell line, whose inherited
+      genotypes are sound but whose de novo variants, isodisomies and
+      copy-number changes may come from the culture. Alignment metrics of
+      chromosome 20 and each member's variant calls (GQ 20 and DP 10 or more)
+      are compared with genomes of the same read length and library (5 scaled
+      MADs, 20 genomes or more).
   ancestry:
     title: "Genetic ancestry"
     text: >-

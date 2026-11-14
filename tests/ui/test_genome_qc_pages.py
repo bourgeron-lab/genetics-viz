@@ -154,3 +154,23 @@ async def test_cohort_tab(user, monkeypatch, data_dir):
     reader = csv.DictReader(io.StringIO(content.decode()), delimiter="\t")
     assert "ebv_copies_per_cell" in reader.fieldnames
     assert {r["IID"] for r in reader} == {"S1", "S2", "S3", "S5", "S6"}
+
+
+async def test_svs_tab_notes_the_cell_line(user, data_dir):
+    datagen.add_genomeqc_tables(data_dir)
+    await login(user, "curator")
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Family: 1001", retries=10)
+    open_tab(user, "family-tabs", "SVs")
+    await user.should_see(marker="cell-line-note-cnv", retries=30)
+    await user.should_see("S3: DNA from a cell line.")
+
+
+async def test_no_note_without_a_cell_line(user):
+    # No genome QC tables: no note.
+    await login(user, "curator")
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Family: 1001", retries=10)
+    open_tab(user, "family-tabs", "SVs")
+    await user.should_see(marker="svs-subtabs", retries=30)
+    await user.should_not_see(marker="cell-line-note-cnv")
