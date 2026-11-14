@@ -1215,6 +1215,14 @@ def _methods(
     cohort: Any,
 ) -> List[Tuple[str, str]]:
     available = {s.key for s in sections if s.available}
+    gqc_labels: List[str] = []
+    if cohort is not None:
+        try:
+            gqc_labels = genome_qc.find_cohort_gqc_labels(
+                genome_qc.get_cohort_gqc_dir(cohort), cohort.name
+            )
+        except OSError:
+            gqc_labels = []
     diagnostics = next((s for s in sections if s.key == "diagnostics"), None)
     kinds = {r["kind"] for r in diagnostics.rows} if diagnostics else set()
     params: Dict[str, Any] = {}
@@ -1237,6 +1245,7 @@ def _methods(
         wcx_args=params.get("wisecondorx_predict_args", "default settings"),
         aneuploidy_pct=f"{float(CONFIG.get('aneuploidy_min_fraction', 0.75)) * 100:.0f}",
         upd_label=_upd_label(data_dir, family_id),
+        gqc_label=gqc_labels[0] if gqc_labels else "n/a",
     )
     wanted = ["sequencing"]
     if "aneuploidy" in available:
@@ -1244,6 +1253,8 @@ def _methods(
     for key in ("sample_qc", "ancestry", "roh"):
         if key in available:
             wanted.append(key)
+        if key == "sample_qc" and gqc_labels:
+            wanted.append("genome_qc")
     if "upd" in available:
         wanted.append("upd")
     if "pgs" in available:
@@ -1262,6 +1273,35 @@ def _methods(
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+#: Section key -> the cell-line caveat it carries (``caveats`` in genome_qc.yaml).
+CELL_LINE_CAVEATS = {"aneuploidy": "cnv", "upd": "upd", "diagnostics": "diagnostic"}
+
+
+def _cell_line_caveats(
+    sections: Sequence[Section], cohort: Any, family_id: str, members: List[str]
+) -> None:
+    """A footnote on the sections whose results a cell line can make up.
+
+    A member whose DNA comes from a cell line (genome QC ``CELL_LINE``,
+    acknowledged or not): its CNVs, isodisomies and de novo variants may come
+    from the culture. The Sample QC section already lists the flag.
+    """
+    if cohort is None:
+        return
+    try:
+        flagged = genome_qc.cell_lines([cohort], family_id)
+    except Exception:
+        logger.warning("Failed to read the genome QC of %s", family_id, exc_info=True)
+        return
+    samples = [m for m in members if m in flagged]
+    if not samples:
+        return
+    for section in sections:
+        context = CELL_LINE_CAVEATS.get(section.key)
+        if context and section.available:
+            section.footnotes.insert(0, genome_qc.caveat_text(context, samples))
 
 
 def build_family_report(
@@ -1318,6 +1358,7 @@ def build_family_report(
         _upd(data_dir, family_id, members, froh, family_qc, diagnostics),
         _diagnostics(data_dir, family_id, diagnostics),
     ]
+    _cell_line_caveats(sections, cohort, family_id, member_ids)
     return FamilyReport(
         family_id=family_id,
         cohort_name=cohort.name if cohort is not None else "",

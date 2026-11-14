@@ -399,3 +399,18 @@ async def test_cohort_qc_flag_links_to_the_upd_tab(user, monkeypatch, data_dir):
     assert s3["_href"] == "/cohort/DEMO/family/1001?tab=upd&upd=S3%3A2"
     s1 = next(r for r in flagged[-1]["rows"] if r["sample"] != "S3")
     assert s1["_href"] is None
+
+
+async def test_cell_line_caveat_on_the_upd_tab_and_dialog(user, monkeypatch, data_dir):
+    # S3 has a chr2 UPD and its DNA is from a cell line (genome QC).
+    datagen.add_upd_calls(data_dir)
+    datagen.add_genomeqc_tables(data_dir)
+    tables = await _open_upd_tab(user, monkeypatch)
+    await user.should_see(marker="cell-line-note-upd")
+    await user.should_see("S3: DNA from a cell line.")
+    s3 = next(r for r in _candidates(tables)["rows"] if r["sample"] == "S3")
+    with user.client:
+        _candidates(tables)["on_row_action"]({"action": "review_upd", "row": s3})
+    await user.should_see("Uniparental disomy — S3, chr2", retries=10)
+    notes = user.find(marker="cell-line-note-upd").elements
+    assert len(notes) == 2  # the tab's and the dialog's

@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from nicegui import ui
 
+from genetics_viz.components.cell_line_note import render_cell_line_note
 from genetics_viz.components.sv_cn_panel import CopyNumberPanel
 from genetics_viz.components.sv_details import (
     build_sv_suggestions,
@@ -168,6 +169,7 @@ def show_sv_dialog(
                 ui.button(icon="close", on_click=lambda: dialog.close()).props(
                     "flat round"
                 )
+            render_cell_line_note(family_id, [sample], "cnv")
 
             # Get family members (use overrides if provided, else query cohort)
             if family_members_override is not None:

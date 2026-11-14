@@ -21,6 +21,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.components.cell_line_note import (
+    family_cell_lines,
+    render_cell_line_note,
+)
 from genetics_viz.components.diagnostic_loader import (
     add_diagnostic_status_to_row,
     load_diagnostic_map,
@@ -339,6 +343,10 @@ def render_upd_tab(
     """
     data_dir = store.data_dir
     show_detail = can_write()
+    # Cell-line members (genome QC): their isodisomies may come from culture.
+    cell_line_flags = family_cell_lines(
+        family_id, store.cohorts.get(cohort_name) if cohort_name else None
+    )
     linked_label = link.get("updl") if link is not None else None
     calls = load_family_upd(data_dir, family_id, linked_label)
     linked_conf = link.get_list("updc") if link is not None else None
@@ -511,6 +519,7 @@ def render_upd_tab(
         if not member_ids:
             ui.label("No members selected").classes("text-gray-500 italic")
             return
+        render_cell_line_note(family_id, member_ids, "upd", known=cell_line_flags)
         hints = state["hints"]
         candidates = upd_candidates(
             current.events if current is not None else [],

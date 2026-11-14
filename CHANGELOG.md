@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The cohort De novo tab** leaves cell-line children out of the comparison with the literature, and says so. Their bars in the rate chart are purple. The rate axis is set on the other children: on dataset_paper_20251010, C0011HW (AU-RD-DED-057) at 651 per Gb had flattened 653 children with a median near 28. The QC range lines are drawn only when the children shown share one class. The children's table and export gain the class, the QC flags, the germline share, the paternal p and the spectrum cosine.
   - On CANDY_mpx_ghent (all `rl150`, no flag): C0XYE9X (88171200006) has 93% paternal of 27 phased strict SNVs, p = 0.098, cosine 0.98.
 
+- **A cell line's results carry a caveat wherever they are reviewed.** For a member whose DNA is from a cell line (genome QC `CELL_LINE`, acknowledged or not) a short red note appears:
+  - on the UPD tab and in the UPD review: culture can cause copy-neutral loss of heterozygosity, which reads as an isodisomy;
+  - on the SVs tab (following the member selection) and in the SV dialog: culture can cause gains and losses, and the B cell's rearrangements delete DNA at IGH, IGK and IGL;
+  - in the diagnostic dialog, from every page: a de novo variant, a UPD or a CNV found in it needs confirmation on primary DNA.
+
+  The dialogs open from pages without a cohort (Search, validation), so the note looks up every cohort holding the family. The wording is in `genome_qc.yaml` (`caveats`).
+- **The family report** adds the caveat as the first footnote of the aneuploidy, UPD and diagnostics sections, and a "DNA source and library" paragraph to the Methods. Checked on dataset_paper_20251010 / AU-RD-DED-057, whose child C0011HW is a cell line.
+
 ### Fixed
 - **The family Issues table sent each flag's evidence to readers' browsers.** The Evidence column was hidden for them, but its text (e.g. "S1 is not the father of S3") was still in the table's data. It is now left out of readers' rows.
 

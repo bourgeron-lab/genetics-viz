@@ -1,6 +1,7 @@
 """Diagnostic review dialog for recording variant diagnostic conclusions."""
 
 import csv
+from genetics_viz.components.cell_line_note import render_cell_line_note
 from genetics_viz.utils.auth import can_write, get_current_user
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,9 @@ def show_diagnostic_dialog(
                 ui.button(icon="close", on_click=lambda: dialog.close()).props(
                     "flat round"
                 )
+
+            # A cell line's de novo calls, UPDs and CNVs may come from culture.
+            render_cell_line_note(family_id, [sample], "diagnostic")
 
             # ---- Variant summary ----
             with ui.card().classes("w-full bg-gray-50"):

@@ -53,6 +53,7 @@ src/genetics_viz/
     header.py                     # Page header: menus, data dir dropdown, gene lookup, Help, user menu
     validation_loader.py          # Validation TSV loading and badge logic
     variant_dialog.py             # IGV variant inspection dialog
+    cell_line_note.py             # The caveat on a cell-line sample's UPD, CNV, de novo and diagnostic reviews
     sv_dialog.py                  # SV inspection dialog: orchestrates the panels below (SVViewState)
     sv_details.py                 # SV dialog: details card, suggested curated coordinates
     sv_igv_views.py               # SV dialog: igv.js views (bedgraph, VAF, read level), SVViewState
@@ -357,6 +358,11 @@ Config files (YAML) are loaded once at module level.
   - **The table passes floats as read**: rounding EBV to its digits made 0.0005 read 0.
   - **The samtools stats links are curator-only and sit outside the table**: a `link` cell opens in the same tab. The data route does not follow a symlink out of the data directory, so a scratch directory of symlinks gives 404 there.
   - **`render_cell_line_badge`** (family header) and **`render_cell_line_callout`** show `CELL_LINE` whether or not it is acknowledged.
+- **A cell line's results carry a caveat** (`components/cell_line_note.py`, wording in `genome_qc.yaml` `caveats`: `upd`, `cnv`, `diagnostic`; the de novo banner has its own):
+  - UPD tab and dialog, SVs tab (a refreshable that follows the selection) and SV dialog, diagnostic dialog;
+  - the family report: the first footnote of the aneuploidy, UPD and diagnostics sections (`CELL_LINE_CAVEATS`), and the `genome_qc` Methods paragraph when the cohort has the tables.
+
+  `genome_qc.cell_lines(cohorts, fid)` reads the flags tables. A dialog opened without a cohort (Search, validation pages) uses `family_cohorts`: every cohort of the data store holding the family.
 - Test data: `datagen.add_genomeqc_tables(data_dir, cohort="DEMO")` (opt-in): S3 (1001) `CELL_LINE`, S5 `EBV_TRACE`, S6 a 100 bp genome under 20x (`LOW_DEPTH`), S1 a PCR library (`rl150_pcr`); `cohort=None` writes the sample and family tables only.
 
 ### Uniparental Disomy (UPD)

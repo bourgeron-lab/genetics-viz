@@ -33,7 +33,7 @@ acknowledged as Sample QC flags).
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 import polars as pl
 import yaml
@@ -102,14 +102,18 @@ THRESHOLDS: Dict[str, float] = {}
 SEQ_CLASSES: Dict[str, Dict[str, str]] = {}
 GROUPS: Dict[str, str] = {}
 METRICS: Dict[str, Dict[str, Any]] = {}
+CAVEATS: Dict[str, str] = {}
 
 
 def _apply_config(config: Dict[str, Any]) -> None:
-    global THRESHOLDS, SEQ_CLASSES, GROUPS, METRICS
+    global THRESHOLDS, SEQ_CLASSES, GROUPS, METRICS, CAVEATS
     THRESHOLDS = {k: float(v) for k, v in config.get("thresholds", {}).items()}
     SEQ_CLASSES = config.get("seq_classes", {})
     GROUPS = config.get("groups", {})
     METRICS = config.get("metrics", {})
+    CAVEATS = {
+        k: " ".join(str(v).split()) for k, v in config.get("caveats", {}).items()
+    }
 
 
 _apply_config(_load_config())
@@ -479,6 +483,30 @@ def cohort_flags(cohort: Any, label: Optional[str] = None) -> List[FlagRow]:
 def family_flags(cohort: Any, family_id: str) -> List[FlagRow]:
     """:func:`cohort_flags` of one family."""
     return [f for f in cohort_flags(cohort) if f.family_id == family_id]
+
+
+def cell_lines(cohorts: Iterable[Any], family_id: str) -> Dict[str, FlagRow]:
+    """Sample -> ``CELL_LINE`` flag of the family's members, over ``cohorts``.
+
+    A family may sit in several cohorts; any of their genome QC tables
+    counts. Acknowledged or not: the caveat stays. Blocking I/O (the flags
+    tables, a few KB each, cached).
+    """
+    out: Dict[str, FlagRow] = {}
+    for cohort in cohorts:
+        for f in family_flags(cohort, family_id):
+            if f.code == CELL_LINE:
+                out.setdefault(f.sample_a, f)
+    return out
+
+
+def caveat_text(context: str, samples: Iterable[str]) -> str:
+    """The caveat on cell-line ``samples``' results in ``context``; ``""`` without."""
+    names = sorted(set(samples))
+    template = CAVEATS.get(context, "")
+    if not names or not template:
+        return ""
+    return template.format(samples=", ".join(names))
 
 
 def _family_from_cohort(cohort_gqc: GenomeQc, family_id: str) -> GenomeQc:

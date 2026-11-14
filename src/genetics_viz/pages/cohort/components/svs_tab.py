@@ -5,6 +5,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.components.cell_line_note import (
+    family_cell_lines,
+    render_cell_line_note,
+)
 from genetics_viz.utils.validation_status import row_status
 from genetics_viz.components.diagnostic_dialog import show_diagnostic_dialog
 from genetics_viz.utils.diagnostic_snapshot import wisecondorx_snapshot
@@ -108,6 +112,22 @@ def render_svs_tab(
         wcx_count = 0 if df is None else len(df)
 
     has_vedette = probe_vedette(store.data_dir, family_id)
+
+    # Cell-line members (genome QC): their CNVs may come from culture. The
+    # note follows the member selection.
+    cell_line_flags = family_cell_lines(
+        family_id, store.cohorts.get(cohort_name) if cohort_name else None
+    )
+    if cell_line_flags:
+
+        @ui.refreshable
+        def cell_line_note() -> None:
+            render_cell_line_note(
+                family_id, selected_members["value"], "cnv", known=cell_line_flags
+            )
+
+        cell_line_note()
+        data_table_refreshers.append(cell_line_note.refresh)
 
     # Create subtabs for different SV callers
     with ui.tabs().classes("w-full").mark("svs-subtabs") as svs_subtabs:
