@@ -41,6 +41,17 @@ categories:
     label: "Sample quality"
     color: "#546e7a"
     reader_note: true
+  # The ghfc-ngs `genomeqc` step (utils/genome_qc.py): what kind of DNA and
+  # library a sample is. Its flags are judged within the sample's seq_class
+  # (read length x PCR), at cohort level only. No reader note on dna_source:
+  # a note such as "EBV carrier" would say more than "Atypical DNA signal".
+  dna_source:
+    label: "DNA source"
+    color: "#880e4f"
+  sequencing:
+    label: "Sequencing and calling"
+    color: "#37474f"
+    reader_note: true
 
 severities:
   # Highest rank first.
@@ -217,6 +228,92 @@ flags:
       Parent-offspring from the CRAMs, but many opposite homozygotes in the
       family VCF: a mix-up between the alignment and the calling, or a sample
       contaminated in one of them.
+
+  # --- genomeqc (modules/genomeqc/scripts/genomeqc_tables in ghfc-ngs) ---
+  # Severity `low` (EBV_TRACE) is shown as Info.
+  CELL_LINE:
+    category: dna_source
+    label: "DNA from a cell line"
+    reader_label: "DNA from a cell line"
+    explain: >-
+      One EBV genome per cell or more (blood carries almost none), or a
+      dna_source of cell_line in the sample information table: DNA from an
+      EBV-transformed lymphoblastoid cell line. Its inherited genotypes are
+      sound. Its de novo calls, UPD isodisomies and CNVs may come from the
+      culture and need confirmation on primary DNA (blood or saliva).
+  EBV_TRACE:
+    category: dna_source
+    label: "EBV trace"
+    reader_label: "Atypical DNA signal"
+    explain: >-
+      0.01 to 1 EBV genome per cell: EBV DNA in blood or saliva, or a trace of
+      cell-line DNA. Look at the de novo profile when the sample is a child.
+  LOW_DEPTH:
+    category: sequencing
+    label: "Low depth"
+    reader_label: "Low depth"
+    explain: >-
+      chr20 depth under 20, or 5 scaled MADs under the samples of its read
+      length and library class: fewer variants called, weaker evidence.
+  HIGH_DUPLICATES:
+    category: sequencing
+    label: "High duplicate rate"
+    reader_label: "Low data quality"
+    explain: >-
+      Duplicate share 5 scaled MADs above its class: a library of low
+      complexity, with less independent support per site.
+  HIGH_ERROR_RATE:
+    category: sequencing
+    label: "High mismatch rate"
+    reader_label: "Low data quality"
+    explain: >-
+      Mismatch rate of the aligned reads 5 scaled MADs above its class: a
+      poor run or damaged DNA, raising false heterozygous calls.
+  READ_INDEL_EXCESS:
+    category: sequencing
+    label: "Indels in the reads"
+    reader_label: "Low data quality"
+    explain: >-
+      Indels in the reads' alignments 5 scaled MADs above its class:
+      polymerase slippage of a PCR library, or damaged DNA. Indel calls in
+      homopolymers and tandem repeats are less reliable.
+  SHORT_INSERT:
+    category: sequencing
+    label: "Short inserts"
+    reader_label: "Low data quality"
+    explain: >-
+      Median insert size 5 scaled MADs under its class: fragmented DNA. Fewer
+      read pairs span repeats and structural variants.
+  TITV_OUTLIER:
+    category: sequencing
+    label: "Low Ti/Tv"
+    reader_label: "Atypical variant calls"
+    explain: >-
+      Transition/transversion ratio of the SNVs 5 scaled MADs under its
+      class: an excess of false SNV calls.
+  HET_HOM_LOW:
+    category: sequencing
+    label: "Few heterozygous calls"
+    reader_label: "Atypical variant calls"
+    explain: >-
+      Heterozygous/homozygous ratio 5 scaled MADs under its class:
+      heterozygous calls lost to low GQ, as in three 100 bp genomes of one
+      family, or inbreeding (compare with the ROH tab).
+  LOW_VAF_HET_EXCESS:
+    category: sequencing
+    label: "Low-fraction heterozygotes"
+    reader_label: "Atypical variant calls"
+    explain: >-
+      Share of heterozygous SNVs under 0.3 of the reads 5 scaled MADs above
+      its class: contamination or mosaicism. Compare with the CHARR of Sample
+      QC.
+  INDEL_COUNT_OUTLIER:
+    category: sequencing
+    label: "Atypical indel count"
+    reader_label: "Atypical variant calls"
+    explain: >-
+      Indel count 5 scaled MADs away from its class, either side: a library
+      or calling problem, or a cell line.
 
 # KARYOTYPE_<k> (KARYOTYPE_XXY, KARYOTYPE_X0, ...) is matched by prefix.
 karyotype_flag:

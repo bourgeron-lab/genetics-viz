@@ -88,6 +88,10 @@ def test_sample_qc_vocabulary_covers_the_pipeline():
         "MENDELIAN_INCONSISTENT", "CRYPTIC_RELATED", "SAMPLE_SWAP_CANDIDATE",
         "RELATED_BEYOND_PEDIGREE", "CONSANGUINITY", "MZ_TWIN_CANDIDATE",
         "UPD_CANDIDATE", "RELATEDNESS_UNRELIABLE",
+        # genomeqc_tables' flag codes
+        "CELL_LINE", "EBV_TRACE", "LOW_DEPTH", "HIGH_DUPLICATES",
+        "HIGH_ERROR_RATE", "READ_INDEL_EXCESS", "SHORT_INSERT", "TITV_OUTLIER",
+        "HET_HOM_LOW", "LOW_VAF_HET_EXCESS", "INDEL_COUNT_OUTLIER",
     }  # fmt: skip
     assert {"charr_warn", "charr_high"} <= set(cfg["thresholds"])
     categories = set(cfg["categories"])
@@ -120,7 +124,7 @@ def test_sample_qc_acknowledgement_wording():
     # wording hides a relationship or an aneuploidy a note would name.
     categories = load("sample_qc.yaml")["categories"]
     assert {k for k, c in categories.items() if c.get("reader_note")} == {
-        "sex", "mendelian", "sample_quality",
+        "sex", "mendelian", "sample_quality", "sequencing",
     }  # fmt: skip
 
 

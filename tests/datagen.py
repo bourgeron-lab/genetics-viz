@@ -38,7 +38,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from genetics_viz.utils.sharding import compute_shard_prefix
 
@@ -1295,75 +1295,113 @@ GQC_VARIANT_COLUMNS = [
 ]  # fmt: skip
 
 #: sample -> (EBV reads, EBV copies per cell, flags)
+GQC_SAMPLE_TABLE_COLUMNS = GQC_SAMPLE_COLUMNS[:1] + GQC_SAMPLE_COLUMNS[5:21]
+
+#: sample -> (read length, library, chr20 depth, EBV reads, EBV copies per
+#: cell, flags). S3 (1001's child) is a cell line, S5 (AU-X-1) has an EBV
+#: trace, S1 is a PCR library and S6 a 100 bp genome under 20x on chr20.
 GQC_SAMPLES = {
-    "S1": (6, 0.0003, []),
-    "S2": (9, 0.0005, []),
-    "S3": (3146109, 152.3, [("CELL_LINE", "high",
-           "152.3 EBV genomes per cell (3146109 reads): DNA from an"
-           " EBV-transformed cell line")]),
-    "S5": (970, 0.048, [("EBV_TRACE", "low",
-           "0.048 EBV genomes per cell (970 reads): EBV in blood or saliva, or a"
-           " trace of cell-line DNA")]),
-    "S6": (4, 0.0002, []),
+    "S1": (151, "pcr", 35.6, 6, 0.0003, []),
+    "S2": (151, ".", 33.0, 9, 0.0005, []),
+    "S3": (151, ".", 34.4, 3146109, 152.3, [
+        ("CELL_LINE", "high",
+         "152.3 EBV genomes per cell (3146109 reads): DNA from an EBV-transformed"
+         " cell line; de novo, UPD and CNV calls need primary DNA")]),
+    "S5": (151, ".", 32.6, 970, 0.048, [
+        ("EBV_TRACE", "low",
+         "0.048 EBV genomes per cell (970 reads): EBV in blood or saliva, or a"
+         " trace of cell-line DNA")]),
+    "S6": (100, ".", 18.2, 4, 0.0002, [
+        ("LOW_DEPTH", "medium", "chr20 depth 18.2, under 20")]),
 }  # fmt: skip
 
 
+def _gqc_class(read_length: int, library: str) -> str:
+    base = "rl100" if read_length < 125 else "rl150"
+    return base + "_pcr" if library == "pcr" else base
+
+
+def _gqc_sample_row(sid: str) -> List:
+    """The sample table's row (``genomeqc_tables sample``)."""
+    length, _lib, depth, ebv_reads, ebv_cn, _ = GQC_SAMPLES[sid]
+    return [sid, length, f"{length:.4f}", 15067610, f"{depth:.4f}", ebv_reads,
+            f"{ebv_cn:.4f}", 369346, "189.2014", "0.1202", "0.0859", "0.9770",
+            "0.0083", "38.1000", "429.0000", "65.0000", "0.2714"]  # fmt: skip
+
+
 def _gqc_variants(fid: str, sid: str) -> List:
-    return [fid, sid, 3521843, 2129404, 1392439, "1.5293", "2.0686", 405,
+    private = 405 if sid in ("S3", "S6") else 482603
+    return [fid, sid, 3521843, 2129404, 1392439, "1.5293", "2.0686", private,
             "0.0090", 587299, "0.9408", "0.5469", "0.0184", "0.6654"]  # fmt: skip
 
 
-def add_genomeqc_tables(data: Path, cohort: str = "DEMO") -> None:
+def _gqc_inputs(path: Path, level: str, name: str) -> Path:
+    path.write_text(
+        f"#inputs\tv1\n#step\tgenomeqc\n#label\t{GQC_LABEL}\n#{level}\t{name}\n"
+    )
+    return path
+
+
+def add_genomeqc_tables(data: Path, cohort: Optional[str] = "DEMO") -> None:
     """The ``genomeqc`` step's tables, written after the sample QC ones.
 
-    The step writes ``<prefix>.gqc_v1.{samples,flags,inputs}.tsv`` in the
-    cohort's ``qc/`` directory, beside ``sampleqc``'s, and
-    ``<FID>.gqc_v1.{variants,inputs}.tsv`` in the family's; its flags exist at
-    cohort level only. S3 (1001) is a cell line, S5 (AU-X-1) has an EBV trace.
-    Opt-in until the app reads them.
+    Per sample ``<ID>.gqc_v1.{tsv,stats.txt}`` in ``qc/genomeqc/``; per family
+    ``<FID>.gqc_v1.{variants,inputs}.tsv`` in ``qc/``; per cohort
+    ``<NAME>.gqc_v1.{samples,flags,inputs}.tsv`` in ``qc/``, beside
+    ``sampleqc``'s tables and under the same names. Flags exist at cohort
+    level only (``cohort=None`` writes no cohort tables). See
+    ``GQC_SAMPLES``. Opt-in: the CELL_LINE and LOW_DEPTH flags would change
+    Sample QC counts.
     """
-    demo = data / "cohorts" / cohort
-    qc = demo / "qc"
-    later = (qc / f"{cohort}.{QC_LABEL}.samples.tsv").stat().st_mtime + 1
+    later = (
+        family_dir(data, "1001") / "qc" / f"1001.{QC_LABEL}.samples.tsv"
+    ).stat().st_mtime + 1
+    written: List[Path] = []
     samples, flags = [], []
     for fid in QC_FAMILIES:
         sids = [r[1] for r in DEMO_PEDIGREE if r[0] == fid and r[1] in GQC_SAMPLES]
         fam_qc = family_dir(data, fid) / "qc"
-        variants = [_gqc_variants(fid, sid) for sid in sids]
-        paths = [
+        written.append(
             write_tsv(
                 fam_qc / f"{fid}.{GQC_LABEL}.variants.tsv",
                 GQC_VARIANT_COLUMNS,
-                variants,
-            ),
-            fam_qc / f"{fid}.{GQC_LABEL}.inputs.tsv",
-        ]
-        paths[1].write_text(
-            f"#inputs\tv1\n#step\tgenomeqc\n#label\t{GQC_LABEL}\n#family\t{fid}\n"
+                [_gqc_variants(fid, sid) for sid in sids],
+            )
+        )
+        written.append(
+            _gqc_inputs(fam_qc / f"{fid}.{GQC_LABEL}.inputs.tsv", "family", fid)
         )
         for sid in sids:
-            ebv_reads, ebv_cn, sample_flags = GQC_SAMPLES[sid]
+            sample_qc_dir = sample_dir(data, sid) / "qc" / "genomeqc"
+            written.append(
+                write_tsv(
+                    sample_qc_dir / f"{sid}.{GQC_LABEL}.tsv",
+                    GQC_SAMPLE_TABLE_COLUMNS,
+                    [_gqc_sample_row(sid)],
+                )
+            )
+            stats = sample_qc_dir / f"{sid}.{GQC_LABEL}.stats.txt"
+            stats.write_text("# This file was produced by samtools stats.\n")
+            written.append(stats)
+            length, library, *_rest, sample_flags = GQC_SAMPLES[sid]
+            cls = _gqc_class(length, library)
             codes = ",".join(code for code, _, _ in sample_flags) or "."
+            row = _gqc_sample_row(sid)
             samples.append(
-                [sid, fid, "rl150", ".", ".", 151, "151.0000", 15067610,
-                 "35.5811", ebv_reads, f"{ebv_cn:.4f}", 369346, "189.2014",
-                 "0.1202", "0.0859", "0.9770", "0.0083", "38.1000", "429.0000",
-                 "65.0000", "0.2714", *_gqc_variants(fid, sid)[2:], codes]
+                [sid, fid, cls, library, ".", *row[1:], *_gqc_variants(fid, sid)[2:],
+                 codes]
             )  # fmt: skip
-            flags += [[sid, fid, "rl150", c, sev, ev] for c, sev, ev in sample_flags]
-        for p in paths:
-            os.utime(p, (later, later))
-    paths = [
-        write_tsv(
-            qc / f"{cohort}.{GQC_LABEL}.samples.tsv", GQC_SAMPLE_COLUMNS, samples
-        ),
-        write_tsv(qc / f"{cohort}.{GQC_LABEL}.flags.tsv", GQC_FLAG_COLUMNS, flags),
-        qc / f"{cohort}.{GQC_LABEL}.inputs.tsv",
-    ]
-    paths[2].write_text(
-        f"#inputs\tv1\n#step\tgenomeqc\n#label\t{GQC_LABEL}\n#cohort\t{cohort}\n"
-    )
-    for p in paths:
+            flags += [[sid, fid, cls, c, sev, ev] for c, sev, ev in sample_flags]
+    if cohort is not None:
+        qc = data / "cohorts" / cohort / "qc"
+        written += [
+            write_tsv(
+                qc / f"{cohort}.{GQC_LABEL}.samples.tsv", GQC_SAMPLE_COLUMNS, samples
+            ),
+            write_tsv(qc / f"{cohort}.{GQC_LABEL}.flags.tsv", GQC_FLAG_COLUMNS, flags),
+            _gqc_inputs(qc / f"{cohort}.{GQC_LABEL}.inputs.tsv", "cohort", cohort),
+        ]
+    for p in written:
         os.utime(p, (later, later))
 
 
