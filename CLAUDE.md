@@ -78,7 +78,8 @@ src/genetics_viz/
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
     denovo.yaml                   # denovo step: flag wording/colours/tooltips, strict, origin, QC verdicts, literature references
     upd.yaml                      # upd step: confidence/origin/mode wording, member statuses (role), window colours
-    sample_qc.yaml                # Sample QC flag wording (curator/reader), categories, plot lines
+    sample_qc.yaml                # Sample QC flag wording (curator/reader), categories, plot lines; also genomeqc's flags
+    genome_qc.yaml                # genomeqc step: metric names/formats, seq_class wording, mirrored thresholds
     str.yaml                      # STR class/status colours, support codes, REViewer filename
     report.yaml                   # Family report: wording, PGS traits, aneuploidy cut-off, methods
     clinvar_colors.yaml           # ClinVar significance term -> color
@@ -148,6 +149,7 @@ src/genetics_viz/
     str_plots.py                  # ECharts builders for the STR views
     str_validation.py             # validations/strs.tsv writer (role-guarded) and reader
     sample_qc.py                  # sampleqc (somalier) discovery, reading, flag wording, shaping
+    genome_qc.py                  # genomeqc step: discovery (by #step), reading, flags as FlagRows, metric wording
     sample_qc_acks.py             # validations/sampleqc.tsv acknowledgements (role-guarded) + UPD-derived ones (Acks)
     sample_qc_export.py           # Sample QC exports: flags (with acks), samples, pairs; role-worded
     export.py                     # TSV/zip helpers, export filenames, person columns (FID, IID, sex, phenotype)
@@ -326,6 +328,20 @@ Config files (YAML) are loaded once at module level.
   - The family Issues table lists them greyed and last, with the review and note ("Show acknowledged" hides them). The cohort panel leaves them out unless "Include acknowledged" is on.
   - A review redraws the header badge and member icons through `render_sample_qc_tab(on_acks_changed=...)`. The dialog hangs from an anchor outside the refreshable section, as the STR locus dialog does.
   - **Readers see the status, and the note only for categories with `reader_note: true`** in `sample_qc.yaml` (sex, mendelian, sample quality). Elsewhere a note such as "known cousins" would name what `reader_label` hides.
+
+### Genome QC (ghfc-ngs `genomeqc`)
+- **What kind of DNA and library each sample is**, which `sampleqc` cannot say: a genome from an EBV-transformed cell line has the person's genotypes (every relatedness, sex and Mendelian check passes) but its clonal somatic mutations read as de novo calls, and culture can add CNVs and isodisomies. The contract is `modules/genomeqc/scripts/genomeqc_tables` in ghfc-ngs; the vault notes are `ghfc-ngs/Genome QC step.md` and `Cell-line and legacy genomes.md`.
+- **Files** (label `genomeqc_label`, `gqc_v1`):
+  - sample: `samples/…/<ID>/qc/genomeqc/<ID>.<label>.{tsv,stats.txt}` (EBV and mtDNA copies per cell, read length, chr20 depth and alignment metrics; `stats.txt` is samtools' own, curators only);
+  - family: `families/…/qc/<FID>.<label>.{variants,inputs}.tsv` (per member SNV/indel profile). **No flags**;
+  - cohort: `cohorts/<NAME>/qc/<NAME>.<label>.{samples,flags,inputs}.tsv`: everything, plus `seq_class`, `library`, `dna_source`, `flags`; one flag row per flag (`sample, family_id, seq_class, flag, severity, evidence`).
+- **Same `qc/` directories and file names as `sampleqc`.** Each side keeps only its own labels by the `#step` of `inputs.tsv`: Sample QC leniently (`find_labels(step="sampleqc")`: no snapshot is kept), genome QC strictly (`_step_labels`: the step always writes one).
+- **Flags exist at cohort level only**: outliers are judged within a `seq_class` (`rl100`/`rl150`, `_pcr` from the sample information table only), 20 samples at least. A family page reads the cohort tables (`load_family_gqc(…, cohort)`, rows whose `family_id` is the family); without them it joins the family's variants table to its members' sample tables, same columns, no class nor flag (`GenomeQc.flagged` false).
+- **One row and one `family_id` per sample**, even for a sample in two families.
+- **The flags are Sample QC `FlagRow`s** (`genome_qc.flag_rows`): level `genome`, `sample_b` empty, the pipeline's `low` severity (`EBV_TRACE`) as `info`. Their wording is in `sample_qc.yaml` (categories `dna_source` and `sequencing`), so `flag_info`, `ack_key` and the acknowledgements work unchanged. `genome_qc.yaml` holds the metrics (label, format, test side, log scale, threshold lines) and the `seq_class` wording; its thresholds mirror `genomeqc_tables` for the plots and never flag.
+- **`CELL_LINE` is a caveat on the de novo, UPD and CNV results, not only an issue to review** (`GenomeQc.cell_lines()`). Readers see "DNA from a cell line"; `EBV_TRACE` is "Atypical DNA signal" for them (EBV in the person is health information), and `dna_source` notes are curator-only.
+- Not shown yet: the reader is in place (PR 1 of the plan in the genetics-viz Roadmap), the Sample QC section, de novo and caveats follow.
+- Test data: `datagen.add_genomeqc_tables(data_dir, cohort="DEMO")` (opt-in): S3 (1001) `CELL_LINE`, S5 `EBV_TRACE`, S6 a 100 bp genome under 20x (`LOW_DEPTH`), S1 a PCR library (`rl150_pcr`); `cohort=None` writes the sample and family tables only.
 
 ### Uniparental Disomy (UPD)
 - **Three steps point at a UPD and share no identifier**:

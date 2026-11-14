@@ -1,0 +1,196 @@
+# Genome QC (ghfc-ngs `genomeqc` step): metric names, seq_class wording and
+# the pipeline's thresholds, for utils/genome_qc.py.
+#
+# The pipeline measures, classes (seq_class) and flags every sample
+# (modules/genomeqc/scripts/genomeqc_tables); the app only words and draws.
+# The flags' wording is in sample_qc.yaml (categories dna_source and
+# sequencing), because they are shown, acknowledged and counted with the
+# Sample QC flags.
+
+# genomeqc_tables' constants, mirrored for the plot lines. Not used to flag.
+thresholds:
+  ebv_cell_line: 1.0     # EBV_CELL_LINE: EBV genomes per cell
+  ebv_trace: 0.01        # EBV_TRACE
+  min_depth: 20.0        # MIN_DEPTH: chr20 depth
+  mad_k: 5.0             # MAD_K: scaled MADs from the class median
+  min_class: 20          # MIN_CLASS: no class test below this many samples
+  short_reads: 125       # SHORT_READS: rl100 under, rl150 at or above
+
+# seq_class = read length class, with `_pcr` for a PCR library (from the
+# sample information table only: the data do not tell it).
+seq_classes:
+  rl100:
+    label: "100 bp"
+    explain: "Reads under 125 bp, PCR-free (the older IP* genomes)."
+    color: "#6d4c41"
+  rl150:
+    label: "150 bp"
+    explain: "Reads of 150 or 151 bp, PCR-free."
+    color: "#1565c0"
+  rl100_pcr:
+    label: "100 bp, PCR"
+    explain: "Reads under 125 bp, PCR library."
+    color: "#a1887f"
+  rl150_pcr:
+    label: "150 bp, PCR"
+    explain: "Reads of 150 or 151 bp, PCR library (IP00FO0-IP00FP5)."
+    color: "#64b5f6"
+  unknown:
+    label: "Unknown"
+    explain: "No read length measured (no CRAM)."
+    color: "#9e9e9e"
+
+groups:
+  dna_source: "DNA source"
+  alignment: "Alignment (chr20)"
+  variants: "Variant calls (family BCF)"
+
+# Column -> how it is shown. `format`: int, float (with `digits`) or percent.
+# `side`: the direction genomeqc_tables tests within the class (CLASS_TESTS),
+# for the plots. `log`: drawn on a log scale. `lines`: fixed thresholds.
+# `plot: false`: not comparable across samples.
+metrics:
+  ebv_copies_per_cell:
+    group: dna_source
+    label: "EBV genomes per cell"
+    format: float
+    digits: 3
+    log: true
+    lines: [ebv_trace, ebv_cell_line]
+    explain: >-
+      2 x the chrEBV reads per base over the chr20 reads per base. Blood under
+      0.002; EBV-transformed cell lines 10-150.
+  ebv_reads:
+    group: dna_source
+    label: "chrEBV reads"
+    format: int
+    plot: false
+  mt_copies_per_cell:
+    group: dna_source
+    label: "mtDNA copies per cell"
+    format: float
+    digits: 0
+    explain: >-
+      Higher in cultured cells (cell lines) than in blood; a covariate, not a
+      flag.
+  library:
+    group: dna_source
+    label: "Library"
+    format: text
+    plot: false
+  dna_source:
+    group: dna_source
+    label: "DNA source (declared)"
+    format: text
+    plot: false
+  read_length:
+    group: alignment
+    label: "Read length"
+    format: int
+    plot: false
+  chr20_depth:
+    group: alignment
+    label: "chr20 depth"
+    format: float
+    digits: 1
+    side: low
+    lines: [min_depth]
+  duplicate_share:
+    group: alignment
+    label: "Duplicates"
+    format: percent
+    digits: 1
+    side: high
+    explain: "151 bp genomes run 10-15% on chr20, as samblaster marks them."
+  mapq0_share:
+    group: alignment
+    label: "MAPQ 0 reads"
+    format: percent
+    digits: 1
+  properly_paired_share:
+    group: alignment
+    label: "Properly paired"
+    format: percent
+    digits: 1
+  error_rate:
+    group: alignment
+    label: "Mismatch rate"
+    format: percent
+    digits: 2
+    side: high
+  mean_base_quality:
+    group: alignment
+    label: "Mean base quality"
+    format: float
+    digits: 1
+  insert_median:
+    group: alignment
+    label: "Median insert (bp)"
+    format: int
+    side: low
+  insert_mad:
+    group: alignment
+    label: "Insert MAD (bp)"
+    format: int
+  read_indels_per_kb:
+    group: alignment
+    label: "Indels in reads per kb"
+    format: float
+    digits: 3
+    side: high
+    explain: "Raised by polymerase slippage in PCR libraries."
+  n_snv:
+    group: variants
+    label: "SNVs"
+    format: int
+  het_hom_ratio:
+    group: variants
+    label: "Het/hom"
+    format: float
+    digits: 2
+    side: low
+  ti_tv:
+    group: variants
+    label: "Ti/Tv"
+    format: float
+    digits: 3
+    side: low
+  private_snvs:
+    group: variants
+    label: "Private SNVs"
+    format: int
+    plot: false
+    explain: >-
+      SNVs no other member of the family carries. Depends on the family: a
+      trio child has hundreds, its parents hundreds of thousands.
+  low_vaf_het_share:
+    group: variants
+    label: "Hets under 0.3 VAF"
+    format: percent
+    digits: 2
+    side: high
+  n_indel:
+    group: variants
+    label: "Indels"
+    format: int
+    side: both
+  ins_del_ratio:
+    group: variants
+    label: "Ins/del"
+    format: float
+    digits: 2
+  indel_1bp_share:
+    group: variants
+    label: "1 bp indels"
+    format: percent
+    digits: 1
+  ins_over_10bp_share:
+    group: variants
+    label: "Insertions > 10 bp"
+    format: percent
+    digits: 2
+  indel_tr_share:
+    group: variants
+    label: "Indels in repeats"
+    format: percent
+    digits: 1

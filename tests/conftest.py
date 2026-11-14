@@ -23,6 +23,7 @@ from genetics_viz.utils import (
     denovo,
     gene_index,
     gene_scoring,
+    genome_qc,
     genetrek,
     ghfc_ngs_docs,
     login_throttle,
@@ -57,6 +58,7 @@ def _reset_globals() -> None:
     cnv_coverage.clear_cnv_cache()
     sample_counts.clear_sample_count_cache()
     sample_qc.clear_qc_cache()
+    genome_qc.clear_gqc_cache()
     sample_qc_acks.clear_ack_cache()
     report_summaries.clear_summary_cache()
     cohort_state.clear_state_cache()
