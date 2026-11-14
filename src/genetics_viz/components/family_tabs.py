@@ -32,7 +32,7 @@ FAMILY_TABS: List[Tuple[str, str, str, str]] = [
         "qc",
         "Sample QC",
         "fact_check",
-        "Relatedness, sex and contamination checks (somalier)",
+        "Relatedness, sex and contamination (somalier); DNA source and library",
     ),
 ]
 

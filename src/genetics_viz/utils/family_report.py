@@ -43,6 +43,7 @@ from genetics_viz.components.validation_loader import (
     merge_validation_maps,
 )
 
+from . import genome_qc
 from . import roh as roh_utils
 from . import sample_qc as qc_utils
 from . import upd as upd_utils
@@ -454,7 +455,9 @@ def _sample_qc(
             logger.warning(
                 "Failed to read the cohort QC of %s", cohort.name, exc_info=True
             )
-    flags = qc_utils.family_flags_with_cohort(family_qc, cohort_qc, family_id)
+    flags = qc_utils.family_flags_with_cohort(
+        family_qc, cohort_qc, family_id
+    ) + genome_qc.family_flags(cohort, family_id)
     acks = load_acks(data_dir)
     active, acked = split_acknowledged(flags, acks)
     rows = []

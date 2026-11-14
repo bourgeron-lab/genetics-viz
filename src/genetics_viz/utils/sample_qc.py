@@ -798,12 +798,15 @@ def worst_by_individual(flags: Iterable[FlagRow]) -> Dict[str, int]:
 
 
 def cohort_headline(
-    cohort: Any, acknowledged: Container["FlagRow"] = ()
+    cohort: Any,
+    acknowledged: Container["FlagRow"] = (),
+    extra: Iterable["FlagRow"] = (),
 ) -> Optional[Dict[str, int]]:
     """Individuals by worst severity, for the home card; ``None`` when QC has not run.
 
-    Flags in ``acknowledged`` (a ``sample_qc_acks.Acks``) do not count.
-    Blocking I/O - call it through ``asyncio.to_thread``.
+    Flags in ``acknowledged`` (a ``sample_qc_acks.Acks``) do not count;
+    ``extra`` (the genome QC flags) count with the cohort's. Blocking I/O -
+    call it through ``asyncio.to_thread``.
     """
     try:
         qc = load_cohort_qc(cohort)
@@ -812,7 +815,9 @@ def cohort_headline(
         return None
     if qc is None:
         return None
-    return worst_by_individual(f for f in qc.flags if f not in acknowledged)
+    return worst_by_individual(
+        f for f in list(qc.flags) + list(extra) if f not in acknowledged
+    )
 
 
 #: Categories a sex / karyotype plot marks as flagged.

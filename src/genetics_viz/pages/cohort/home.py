@@ -23,6 +23,7 @@ from genetics_viz.utils.data_availability import (
 )
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.pedigree import load_family_pedigree
+from genetics_viz.utils.genome_qc import cohort_flags
 from genetics_viz.utils.sample_qc import cohort_headline, severity_info
 from genetics_viz.utils.sample_qc_acks import load_acks
 from genetics_viz.utils.pedigree_labels import (
@@ -128,7 +129,7 @@ def _gather_qc_headlines(
     acknowledged = load_acks(data_dir)
     out = {}
     for cohort in cohorts:
-        counts = cohort_headline(cohort, acknowledged)
+        counts = cohort_headline(cohort, acknowledged, cohort_flags(cohort))
         if counts is not None:
             out[cohort.name] = counts
     return out

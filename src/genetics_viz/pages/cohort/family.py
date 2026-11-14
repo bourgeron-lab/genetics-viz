@@ -30,6 +30,9 @@ from genetics_viz.pages.cohort.components.ancestry_tab import (
     probe_ancestry_data,
     render_ancestry_tab,
 )
+from genetics_viz.pages.cohort.components.genome_qc_section import (
+    render_cell_line_badge,
+)
 from genetics_viz.pages.cohort.components.member_selector import (
     render_member_selector,
     sequenced_ids,
@@ -133,7 +136,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             # header badge and the member icons; cross-family ones need the
             # cohort's tables and are left to the tab. Flags a curator
             # acknowledged do not count; a review redraws both.
-            qc = {"summary": family_qc_summary(store, family_id)}
+            qc = {"summary": family_qc_summary(store, family_id, cohort)}
             # Filled in once the analysis tabs exist: the badge opens one.
             open_qc_tab: Dict[str, Any] = {"fn": None}
             open_snvs_tab: Dict[str, Any] = {"fn": None}
@@ -160,7 +163,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     summary = severity_summary(counts)
                     worst = "high" if counts.get("high") else "medium"
                     color = severity_info(worst)["color"] if summary else "#2e7d32"
-                    tip = "Sample QC (somalier): open the Sample QC tab"
+                    tip = "Sample QC (somalier, genome QC): open the Sample QC tab"
                     if acked:
                         tip += f". {len(acked)} acknowledged flag(s) not counted."
                     ui.badge(
@@ -169,6 +172,10 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                         "click",
                         lambda: open_qc_tab["fn"] and open_qc_tab["fn"](),
                     ).tooltip(tip)
+                    render_cell_line_badge(
+                        active + acked,
+                        lambda: open_qc_tab["fn"] and open_qc_tab["fn"](),
+                    )
 
                 qc_badge()
                 render_denovo_qc_badge(
@@ -236,7 +243,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 review_badges: Dict[str, Any] = {}
 
                 def on_acks_changed() -> None:
-                    qc["summary"] = family_qc_summary(store, family_id)
+                    qc["summary"] = family_qc_summary(store, family_id, cohort)
                     _, active, acked = qc["summary"]
                     qc_badge.refresh()
                     update_qc_icons(flags_by_sample(active), flags_by_sample(acked))

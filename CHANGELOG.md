@@ -5,6 +5,27 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **The ghfc-ngs `genomeqc` step is shown in the Sample QC tabs** (label `gqc_v1`; CANDY_mpx_ghent is the only cohort with its tables so far). The step says what kind of DNA and library each sample is. A genome from an EBV-transformed cell line has the person's genotypes, so every somalier check passes, while its clonal somatic mutations read as de novo calls.
+  - **Its flags join the Sample QC flags**: the family header badge and member icons, the tab's review badge, the Issues table, the cohort's Sample QC column, pills and flagged individuals, the home card's figure and the family report. Curators acknowledge them the same way. There are 11 flags:
+    - `CELL_LINE`, `EBV_TRACE`;
+    - low depth, duplicates, mismatches, indels in the reads, short inserts;
+    - Ti/Tv, het/hom, low-fraction heterozygotes, indel count.
+
+    The class outliers are judged within the sample's read length and library class (`seq_class`). On CANDY_mpx_ghent this adds `HET_HOM_LOW` on 88171200003 / C0XYED4, `LOW_VAF_HET_EXCESS` on 88171200009 / C0XYED8, and `EBV_TRACE` (shown as Info) on C0XYED6, C0XYED8 and C0XYED9.
+  - **A "DNA and library" section** on both tabs:
+    - the metrics table (class, EBV and mtDNA copies per cell, chr20 depth, duplicates, mismatches, insert size, indels in the reads, het/hom, Ti/Tv, low-fraction hets, indels);
+    - a chart per metric with one row per class, drawing the class median and its 5-MAD fence;
+    - a Download of the metrics;
+    - for curators, links to each sample's samtools stats.
+  - **A cell line stays visible after review.** The family header gets a "Cell line: <sample>" badge, and the section opens with a warning: the inherited genotypes are sound; de novo calls, UPD isodisomies and CNVs need confirmation on primary DNA. Acknowledging the flag takes it out of the counts, not this warning.
+  - **Readers** get no EBV column or chart. `CELL_LINE` reads "DNA from a cell line", `EBV_TRACE` "Atypical DNA signal".
+
+### Fixed
+- **The family Issues table sent each flag's evidence to readers' browsers.** The Evidence column was hidden for them, but its text (e.g. "S1 is not the father of S3") was still in the table's data. It is now left out of readers' rows.
+
 ## [0.37.1] - 2026-11-14
 
 ### Fixed

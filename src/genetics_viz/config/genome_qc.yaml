@@ -48,9 +48,14 @@ groups:
 # Column -> how it is shown. `format`: int, float (with `digits`) or percent.
 # `side`: the direction genomeqc_tables tests within the class (CLASS_TESTS),
 # for the plots. `log`: drawn on a log scale. `lines`: fixed thresholds.
-# `plot: false`: not comparable across samples.
+# `plot: false`: not comparable across samples. `flags`: the flags the
+# pipeline raises on the column (a flagged sample is drawn red).
+# `curator_only`: hidden from readers (EBV in the person is health
+# information; the CELL_LINE flag says what they need).
 metrics:
   ebv_copies_per_cell:
+    curator_only: true
+    flags: [CELL_LINE, EBV_TRACE]
     group: dna_source
     label: "EBV genomes per cell"
     format: float
@@ -61,6 +66,7 @@ metrics:
       2 x the chrEBV reads per base over the chr20 reads per base. Blood under
       0.002; EBV-transformed cell lines 10-150.
   ebv_reads:
+    curator_only: true
     group: dna_source
     label: "chrEBV reads"
     format: int
@@ -89,6 +95,7 @@ metrics:
     format: int
     plot: false
   chr20_depth:
+    flags: [LOW_DEPTH]
     group: alignment
     label: "chr20 depth"
     format: float
@@ -96,6 +103,7 @@ metrics:
     side: low
     lines: [min_depth]
   duplicate_share:
+    flags: [HIGH_DUPLICATES]
     group: alignment
     label: "Duplicates"
     format: percent
@@ -113,6 +121,7 @@ metrics:
     format: percent
     digits: 1
   error_rate:
+    flags: [HIGH_ERROR_RATE]
     group: alignment
     label: "Mismatch rate"
     format: percent
@@ -124,6 +133,7 @@ metrics:
     format: float
     digits: 1
   insert_median:
+    flags: [SHORT_INSERT]
     group: alignment
     label: "Median insert (bp)"
     format: int
@@ -133,6 +143,7 @@ metrics:
     label: "Insert MAD (bp)"
     format: int
   read_indels_per_kb:
+    flags: [READ_INDEL_EXCESS]
     group: alignment
     label: "Indels in reads per kb"
     format: float
@@ -144,12 +155,14 @@ metrics:
     label: "SNVs"
     format: int
   het_hom_ratio:
+    flags: [HET_HOM_LOW]
     group: variants
     label: "Het/hom"
     format: float
     digits: 2
     side: low
   ti_tv:
+    flags: [TITV_OUTLIER]
     group: variants
     label: "Ti/Tv"
     format: float
@@ -164,12 +177,14 @@ metrics:
       SNVs no other member of the family carries. Depends on the family: a
       trio child has hundreds, its parents hundreds of thousands.
   low_vaf_het_share:
+    flags: [LOW_VAF_HET_EXCESS]
     group: variants
     label: "Hets under 0.3 VAF"
     format: percent
     digits: 2
     side: high
   n_indel:
+    flags: [INDEL_COUNT_OUTLIER]
     group: variants
     label: "Indels"
     format: int

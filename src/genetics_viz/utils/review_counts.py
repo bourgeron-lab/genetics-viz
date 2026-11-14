@@ -37,7 +37,7 @@ from genetics_viz.components.validation_loader import (
     load_validation_map,
 )
 
-from . import cohort_state, denovo, upd
+from . import cohort_state, denovo, genome_qc, upd
 from .sample_qc import (
     FlagRow,
     count_by_severity,
@@ -245,8 +245,13 @@ def upd_to_review(data_dir: Path, family_id: str) -> ReviewCount:
     )
 
 
-def qc_family_to_review(data_dir: Path, family_id: str, upd_tab: bool) -> ReviewCount:
-    """:func:`qc_to_review` of the family's own QC files, acknowledgements applied."""
+def qc_family_to_review(
+    data_dir: Path, family_id: str, upd_tab: bool, cohort: Any = None
+) -> ReviewCount:
+    """:func:`qc_to_review` of the family's own QC files, acknowledgements applied.
+
+    With its genome QC flags (cohort level only), as the header badge.
+    """
     try:
         qc = load_family_qc(data_dir, family_id)
     except Exception:
@@ -254,7 +259,8 @@ def qc_family_to_review(data_dir: Path, family_id: str, upd_tab: bool) -> Review
         return ReviewCount()
     if qc is None:
         return ReviewCount()
-    active, _ = split_acknowledged(qc.flags, load_acks(data_dir))
+    flags = list(qc.flags) + genome_qc.family_flags(cohort, family_id)
+    active, _ = split_acknowledged(flags, load_acks(data_dir))
     return qc_to_review(active, upd_tab)
 
 

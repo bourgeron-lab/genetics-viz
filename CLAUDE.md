@@ -117,7 +117,8 @@ src/genetics_viz/
         cohort_upd_tab.py         # UPD tab (cohort-wide) + the individuals table's UPD column
         cohort_str_tab.py         # STR tab (cohort-wide): loci counts + flagged genotypes
         cohort_denovo_tab.py      # De novo tab (cohort-wide): literature, rate/shares charts, children, flags, curation check
-        sample_qc_tab.py          # Sample QC tab (per-family): issues, kinship, sex, quality
+        sample_qc_tab.py          # Sample QC tab (per-family): issues, kinship, sex, quality, DNA and library
+    genome_qc_section.py      # Sample QC tabs' DNA and library section (genomeqc), cell-line badge and callout
         cohort_sample_qc_tab.py   # Sample QC tab (cohort-wide) + cross-family network dialog
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
@@ -150,6 +151,7 @@ src/genetics_viz/
     str_validation.py             # validations/strs.tsv writer (role-guarded) and reader
     sample_qc.py                  # sampleqc (somalier) discovery, reading, flag wording, shaping
     genome_qc.py                  # genomeqc step: discovery (by #step), reading, flags as FlagRows, metric wording
+    genome_qc_plots.py            # ECharts builder for the genome QC metrics, one row per seq_class
     sample_qc_acks.py             # validations/sampleqc.tsv acknowledgements (role-guarded) + UPD-derived ones (Acks)
     sample_qc_export.py           # Sample QC exports: flags (with acks), samples, pairs; role-worded
     export.py                     # TSV/zip helpers, export filenames, person columns (FID, IID, sex, phenotype)
@@ -340,7 +342,21 @@ Config files (YAML) are loaded once at module level.
 - **One row and one `family_id` per sample**, even for a sample in two families.
 - **The flags are Sample QC `FlagRow`s** (`genome_qc.flag_rows`): level `genome`, `sample_b` empty, the pipeline's `low` severity (`EBV_TRACE`) as `info`. Their wording is in `sample_qc.yaml` (categories `dna_source` and `sequencing`), so `flag_info`, `ack_key` and the acknowledgements work unchanged. `genome_qc.yaml` holds the metrics (label, format, test side, log scale, threshold lines) and the `seq_class` wording; its thresholds mirror `genomeqc_tables` for the plots and never flag.
 - **`CELL_LINE` is a caveat on the de novo, UPD and CNV results, not only an issue to review** (`GenomeQc.cell_lines()`). Readers see "DNA from a cell line"; `EBV_TRACE` is "Atypical DNA signal" for them (EBV in the person is health information), and `dna_source` notes are curator-only.
-- Not shown yet: the reader is in place (PR 1 of the plan in the genetics-viz Roadmap), the Sample QC section, de novo and caveats follow.
+- **Shown in the Sample QC tabs** (`pages/cohort/components/genome_qc_section.py`, charts in `utils/genome_qc_plots.py`):
+  - **The flags are added to each Sample QC flag list where it is used**, not inside `load_*_qc`, whose tables are per sites label:
+    - `family_qc_summary(store, fid, cohort)` (header, icons);
+    - `qc_family_to_review(…, cohort)`;
+    - the family tab's `state["genome_flags"]` (Issues, downloads);
+    - the cohort column and pills (`cohort.py`);
+    - the cohort tab's `_all_flags`;
+    - `cohort_headline(…, extra=)` (home);
+    - `family_report`.
+
+    `genome_qc.cohort_flags` reads the flags table only (a few KB, cached), so the header reads it on the event loop, as the de novo QC table.
+  - **The "DNA and library" section** loads off-thread (`load_family_gqc`, plus the cohort's rows as the background) and draws one chart per metric, one row per `seq_class`. Each class gets its median and 5-MAD fence (`class_fences`, the pipeline's rule, drawn only) and the fixed lines. EBV is on a log axis from 1e-4 that always reaches 1.
+  - **The table passes floats as read**: rounding EBV to its digits made 0.0005 read 0.
+  - **The samtools stats links are curator-only and sit outside the table**: a `link` cell opens in the same tab. The data route does not follow a symlink out of the data directory, so a scratch directory of symlinks gives 404 there.
+  - **`render_cell_line_badge`** (family header) and **`render_cell_line_callout`** show `CELL_LINE` whether or not it is acknowledged.
 - Test data: `datagen.add_genomeqc_tables(data_dir, cohort="DEMO")` (opt-in): S3 (1001) `CELL_LINE`, S5 `EBV_TRACE`, S6 a 100 bp genome under 20x (`LOW_DEPTH`), S1 a PCR library (`rl150_pcr`); `cohort=None` writes the sample and family tables only.
 
 ### Uniparental Disomy (UPD)

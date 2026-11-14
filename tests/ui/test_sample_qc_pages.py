@@ -67,6 +67,8 @@ async def test_reader_gets_neutral_wording_and_declared_pairs_only(user, monkeyp
     tables = await open_family_qc(user, monkeypatch, "reader")
     issues = _issues(tables)
     assert "evidence" not in issues["columns"]
+    # Nor in the rows: hidden columns' data still reaches the browser.
+    assert all(not r["evidence"] for r in issues["rows"])
     assert "Pedigree relationship inconsistent" in {r["flag"] for r in issues["rows"]}
     assert all(
         "S1 is not" not in b["tooltip"]
@@ -175,7 +177,8 @@ async def test_cohort_qc_panel_follows_the_filters(user, monkeypatch):
 
 async def test_cohort_qc_panel_ignores_genomeqc_tables(user, monkeypatch, data_dir):
     # The genomeqc step's tables sit beside sampleqc's, newer: the panel must
-    # keep reading the somalier ones (flags, cross-family pairs).
+    # keep reading the somalier ones (flags, cross-family pairs), and adds the
+    # genome QC flags (S6's LOW_DEPTH; S3 and S5 were flagged already).
     datagen.add_genomeqc_tables(data_dir)
     await login(user, "curator")
     tables = capture_tables(monkeypatch)
@@ -185,7 +188,7 @@ async def test_cohort_qc_panel_ignores_genomeqc_tables(user, monkeypatch, data_d
     await user.should_see("5 of 6 shown individuals checked", retries=30)
     await user.should_see("2 related pair(s) across families", retries=10)
     flagged = [t for t in tables if "issues" in t["columns"]][-1]
-    assert {r["sample"] for r in flagged["rows"]} == {"S1", "S3", "S5"}
+    assert {r["sample"] for r in flagged["rows"]} == {"S1", "S3", "S5", "S6"}
 
 
 async def test_cohort_table_qc_column_filters(user, monkeypatch):

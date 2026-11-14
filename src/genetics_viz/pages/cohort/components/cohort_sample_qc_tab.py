@@ -28,6 +28,15 @@ from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.data import get_static_prefix
+from genetics_viz.utils.genome_qc import (
+    GenomeQc,
+    find_cohort_gqc_labels,
+    get_cohort_gqc_dir,
+    load_cohort_gqc,
+)
+from genetics_viz.pages.cohort.components.genome_qc_section import (
+    render_cohort_genome_qc,
+)
 from genetics_viz.utils.export import (
     export_filename,
     people_from_individuals,
@@ -68,6 +77,7 @@ from genetics_viz.utils.sample_qc_acks import (
 from genetics_viz.utils.sample_qc_export import (
     flags_export,
     pairs_export,
+    genome_export,
     samples_export,
 )
 from genetics_viz.utils.upd import child_of, chrom_from_evidence, is_upd_flag
@@ -454,6 +464,15 @@ def _render_plots(
         ).classes("text-xs text-gray-500")
 
 
+def _all_flags(state: Dict[str, Any]) -> List[FlagRow]:
+    """The sample QC flags of the shown label, then the genome QC ones."""
+    qc: Optional[QcData] = state["qc"]
+    gqc: Optional[GenomeQc] = state.get("gqc")
+    return (list(qc.flags) if qc is not None else []) + (
+        list(gqc.flags) if gqc is not None else []
+    )
+
+
 # ---------------------------------------------------------------------------
 # Downloads
 # ---------------------------------------------------------------------------
@@ -476,7 +495,7 @@ def _download_menu(
         if qc is None:
             return []
         shown = keys()
-        return [f for f in qc.flags if any(k in shown for k in f.keys)]
+        return [f for f in _all_flags(state) if any(k in shown for k in f.keys)]
 
     def build_flags() -> str:
         rows, columns = flags_export(flags(), load_acks(store.data_dir), show_detail)
@@ -512,19 +531,44 @@ def _download_menu(
         )
         return rows_to_tsv(rows, columns)
 
+    def build_genome() -> str:
+        gqc: Optional[GenomeQc] = state["gqc"]
+        if gqc is None:
+            return ""
+        people = {
+            (p["FID"], p["IID"]): p
+            for p in people_from_individuals(filtered_state.get("individuals", []))
+        }
+        rows, columns = genome_export(
+            gqc.sample_rows(), people, flags(), load_acks(store.data_dir), show_detail
+        )
+        return rows_to_tsv(rows, columns)
+
     def filename(table: Optional[str], ext: str = "tsv") -> Callable[[], str]:
         return lambda: export_filename(
             cohort.name, "sampleqc", table, tag=state["label"], ext=ext
         )
 
-    download_button(
-        [
-            Download("flags", "Flags", filename("flags"), build_flags),
+    downloads = [
+        Download("flags", "Flags", filename("flags"), build_flags),
+        Download(
+            "samples", "Sex and sample quality", filename("samples"), build_samples
+        ),
+        Download("pairs", "Pairs (relatedness)", filename("pairs"), build_pairs),
+    ]
+    if state["has_genome"]:
+        downloads.append(
             Download(
-                "samples", "Sex and sample quality", filename("samples"), build_samples
-            ),
-            Download("pairs", "Pairs (relatedness)", filename("pairs"), build_pairs),
-        ],
+                "genome",
+                "DNA and library (genome QC)",
+                lambda: export_filename(
+                    cohort.name, "genomeqc", "samples", tag=state["gqc_label"]
+                ),
+                build_genome,
+            )
+        )
+    download_button(
+        downloads,
         mark="download-sampleqc",
         zip_filename=filename(None, "zip"),
     )
@@ -558,24 +602,35 @@ def render_cohort_sample_qc_tab(
         return
 
     show_detail = can_write()
+    gqc_labels = find_cohort_gqc_labels(get_cohort_gqc_dir(cohort), cohort.name)
     state: Dict[str, Any] = {
         "label": labels[0],
         "qc": None,
         "loading": True,
         "include_acked": False,
+        # The genomeqc tables: its own label, independent of the sites one.
+        "has_genome": bool(gqc_labels),
+        "gqc_label": gqc_labels[0] if gqc_labels else "",
+        "gqc": None,
     }
+
+    def read() -> Tuple[Optional[QcData], Optional[GenomeQc]]:
+        qc = load_cohort_qc(cohort, state["label"])
+        gqc = load_cohort_gqc(cohort) if state["has_genome"] else None
+        return qc, gqc
 
     async def load() -> None:
         state["loading"] = True
         label = state["label"]
         try:
-            qc = await asyncio.to_thread(load_cohort_qc, cohort, label)
+            qc, gqc = await asyncio.to_thread(read)
         except Exception:
             logger.warning("Failed to read cohort QC of %s", cohort.name, exc_info=True)
-            qc = None
+            qc, gqc = None, None
         if label != state["label"]:
             return  # the label changed while reading
         state["qc"] = qc
+        state["gqc"] = gqc
         state["loading"] = False
         render_body.refresh()
 
@@ -645,8 +700,9 @@ def render_cohort_sample_qc_tab(
                 ((r.get("family_id") or ""), (r.get("sample") or "")) for r in rows
             }
             acks = load_acks(store.data_dir)
-            active, acked = split_acknowledged(qc.flags, acks)
-            by_key = flags_by_key(qc.flags if state["include_acked"] else active)
+            all_flags = _all_flags(state)
+            active, acked = split_acknowledged(all_flags, acks)
+            by_key = flags_by_key(all_flags if state["include_acked"] else active)
             acked_shown = sum(1 for f in acked if any(k in checked for k in f.keys))
             all_pairs = pair_rows(qc.pairs)
             pairs = [
@@ -702,6 +758,12 @@ def render_cohort_sample_qc_tab(
                 ).props("flat dense no-caps color=primary")
 
             _render_plots(rows, by_key, pairs, show_detail, severities)
+
+            if state["has_genome"]:
+                _subtitle("DNA and library")
+                render_cohort_genome_qc(
+                    state["gqc"], keys, acks, show_detail, loading=False
+                )
 
         render_body()
         refreshers.append(render_body.refresh)
