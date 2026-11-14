@@ -12,7 +12,7 @@ drawn from whatever list of :class:`Pill` the page computed last.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from nicegui import ui
 
@@ -120,10 +120,11 @@ def family_review_badges(
     tabs: Mapping[str, ui.tab],
     available: Mapping[str, bool],
     show_review: bool,
+    cohort: Any = None,
 ) -> Dict[str, TabBadge]:
     """The family page's badges, counted off-thread once the page is drawn.
 
-    ``tabs`` and ``available`` are keyed by tab slug (``qc``, ``wombat``,
+    ``tabs`` and ``available`` are keyed by tab slug (``qc``, ``snvs``,
     ``str``, ``upd``). Sample QC is for everyone, as the header QC badge;
     the others count what only a curator settles, so only ``show_review``
     (``can_write()``, resolved on the event loop) gets them.
@@ -137,7 +138,10 @@ def family_review_badges(
     }
     if show_review:
         counts.update(
-            wombat=("wombat-tab-count", lambda: denovo_to_review(data_dir, family_id)),
+            snvs=(
+                "snvs-tab-count",
+                lambda: denovo_to_review(data_dir, family_id, cohort),
+            ),
             str=("str-tab-count", lambda: str_to_review(data_dir, family_id)),
             upd=("upd-tab-count", lambda: upd_to_review(data_dir, family_id)),
         )

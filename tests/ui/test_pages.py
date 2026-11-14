@@ -86,7 +86,7 @@ async def test_family_tabs_carry_an_icon_each(user, path):
         if isinstance(tab, ui.tab)
     }
     assert list(icons) == [
-        "Wombat", "SVs", "Ancestry", "Polygenic Scores", "ROH", "UPD", "STR",
+        "SNVs/Indels", "SVs", "Ancestry", "Polygenic Scores", "ROH", "UPD", "STR",
         "Sample QC",
     ]  # fmt: skip
     assert all(icons.values()), icons

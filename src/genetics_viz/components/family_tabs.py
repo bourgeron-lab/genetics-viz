@@ -4,7 +4,7 @@ Both family pages draw it (``pages/cohort/family.py`` and
 ``standalone_family.py``). A tab the cohort page also has takes its icon.
 """
 
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 from nicegui import ui
 
@@ -16,7 +16,12 @@ TABS_PROPS = "inline-label no-caps align=left"
 
 #: The analysis tabs, in order: link value (``tab=``), label, icon, tooltip.
 FAMILY_TABS: List[Tuple[str, str, str, str]] = [
-    ("wombat", "Wombat", "grain", ""),
+    (
+        "snvs",
+        "SNVs/Indels",
+        "grain",
+        "Small variants: de novo candidates, then the Wombat tables",
+    ),
     ("svs", "SVs", "call_split", ""),
     ("ancestry", "Ancestry", "public", ""),
     ("pgs", "Polygenic Scores", "functions", ""),
@@ -35,6 +40,16 @@ FAMILY_TABS: List[Tuple[str, str, str, str]] = [
 TAB_LABELS: Dict[str, str] = {slug: label for slug, label, _icon, _tip in FAMILY_TABS}
 #: A tab's link value by label.
 TAB_SLUGS: Dict[str, str] = {label: slug for slug, label in TAB_LABELS.items()}
+
+#: Link values of tabs since renamed: ``tab=wombat`` opens SNVs/Indels.
+TAB_ALIASES: Dict[str, str] = {"wombat": "snvs"}
+
+
+def canonical_tab(value: Optional[str]) -> str:
+    """A linked tab's current link value (an older name is mapped)."""
+    value = value or ""
+    return TAB_ALIASES.get(value, value)
+
 
 #: The cohort family page's General tab (notes and diagnostics).
 GENERAL_ICON = "info"

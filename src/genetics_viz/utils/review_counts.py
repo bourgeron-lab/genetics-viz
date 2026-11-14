@@ -7,9 +7,11 @@ number on the tab (``components/tab_badge.py``).
 
 - **Sample QC**: unacknowledged high and medium flags of the family's own QC
   files. ``UPD_CANDIDATE`` flags are left to the UPD tab when there is one.
-- **Wombat**: de novo calls (configs matching ``de_?novo``), one per variant
-  and carrier, after the default exclusions (LCR, gnomAD-filtered, likely
-  MNV), of HIGH or MODERATE impact, with no validation in ``snvs.tsv``. When
+- **SNVs/Indels**: de novo calls, one per variant and carrier, of HIGH or
+  MODERATE impact, with no validation in ``snvs.tsv``. With the ``denovo``
+  step's tables, the candidates of its Wombat config that are strict (or not
+  assessed by the step); without them, every config matching ``de_?novo``
+  after the default exclusions (LCR, gnomAD-filtered, likely MNV). When
   Sample QC holds the de novo table back (a wrong relationship), the table is
   not read: the badge says why instead of counting.
 - **STR**: genotypes of the newest catalog the pipeline flags (severity high
@@ -35,7 +37,7 @@ from genetics_viz.components.validation_loader import (
     load_validation_map,
 )
 
-from . import cohort_state, upd
+from . import cohort_state, denovo, upd
 from .sample_qc import (
     FlagRow,
     count_by_severity,
@@ -125,16 +127,26 @@ def _impact(row: Dict) -> str:
     return next((i for i in DENOVO_IMPACTS if i in impacts), "")
 
 
-def denovo_to_review(data_dir: Path, family_id: str) -> ReviewCount:
-    """The family's de novo calls of HIGH or MODERATE impact never validated."""
+def denovo_to_review(data_dir: Path, family_id: str, cohort: Any = None) -> ReviewCount:
+    """The family's de novo calls of HIGH or MODERATE impact never validated.
+
+    With the denovo step's tables, only its strict candidates (and those it
+    has not assessed) count; ``cohort`` lends its table, which knows
+    ``RECURRENT``.
+    """
     wombat_dir = get_family_path(data_dir, family_id) / "wombat"
     if not wombat_dir.is_dir():
         return ReviewCount()
-    files = [
-        wf
-        for wf in find_wombat_files(wombat_dir, family_id)
-        if DENOVO_CONFIG.search(wf["wombat_config"])
-    ]
+    all_files = find_wombat_files(wombat_dir, family_id)
+    evidence = denovo.load_family_denovo(data_dir, family_id, cohort)
+    source = denovo.denovo_source(all_files, evidence) if evidence else None
+    files = (
+        [source]
+        if source is not None
+        else [wf for wf in all_files if DENOVO_CONFIG.search(wf["wombat_config"])]
+    )
+    if evidence is not None and source is None:
+        evidence = None
     if not files:
         return ReviewCount()
     if gates_denovo(unexplained_denovo_risk(data_dir, family_id)):
@@ -150,8 +162,16 @@ def denovo_to_review(data_dir: Path, family_id: str) -> ReviewCount:
         df = load_config_frame(wf["file_path"])
         if df is None:
             continue
-        for row in aggregate_by_variant(df).to_dicts():
-            if in_lcr(row) or gnomad_filtered(row) or likely_mnv(row):
+        rows = aggregate_by_variant(df).to_dicts()
+        if evidence is not None:
+            for row in rows:
+                row["Variant"] = variant_key(row)
+            denovo.add_evidence(rows, evidence)
+        for row in rows:
+            if evidence is not None:
+                if row.get("dnm_strict") == "no":
+                    continue
+            elif in_lcr(row) or gnomad_filtered(row) or likely_mnv(row):
                 continue
             impact = _impact(row)
             if not impact:
@@ -166,11 +186,13 @@ def denovo_to_review(data_dir: Path, family_id: str) -> ReviewCount:
     if not found:
         return ReviewCount()
     n_high = sum(1 for i in found.values() if i == "HIGH")
+    which = "strict de novo candidate(s)" if evidence is not None else "de novo call(s)"
+    after = "" if evidence is not None else ", after the LCR, gnomAD and MNV exclusions"
     return ReviewCount(
         n=len(found),
         worst="high" if n_high else "medium",
-        tooltip=f"{len(found)} de novo call(s) of HIGH or MODERATE impact not yet"
-        f" validated ({n_high} HIGH), after the LCR, gnomAD and MNV exclusions",
+        tooltip=f"{len(found)} {which} of HIGH or MODERATE impact not yet"
+        f" validated ({n_high} HIGH){after}",
     )
 
 
@@ -413,6 +435,75 @@ def str_cohort_pills(
             f" (premutation range) not yet validated{among}",
         },
     )
+
+
+def denovo_cohort_status(
+    cohort: Any, data_dir: Path, with_curation: bool
+) -> Tuple[Dict[Key, str], List[Key]]:
+    """Blocking: each child's de novo QC verdict, and the curation issues.
+
+    The issues (``with_curation`` only) are the curated de novo calls the
+    strict set hides or the candidates lack (``denovo.curation_check``), one
+    ``(family, sample)`` each.
+    """
+    data = denovo.load_cohort_denovo(cohort)
+    if data is None:
+        return {}, []
+    verdicts = {
+        (str(q.get("family_id")), str(q.get("child"))): str(q.get("qc") or "")
+        for q in data.qc_rows()
+    }
+    if not with_curation or not len(data.dnm):
+        return verdicts, []
+    families = {str(f) for f in data.dnm["family_id"].to_list()}
+    curation = denovo.load_curation(data_dir, families)
+    issues = [
+        (r["FID"], r["sample"])
+        for r in denovo.curation_check(data.rows(), curation, families)
+    ]
+    return verdicts, issues
+
+
+def denovo_cohort_pills(
+    verdicts: Mapping[Key, str], issues: Iterable[Key], shown: Collection[Key]
+) -> List[Pill]:
+    """De novo: children shown out of the QC range, then curation issues."""
+    keys = set(shown)
+    high = sum(1 for k, v in verdicts.items() if k in keys and v == "high")
+    low = sum(
+        1 for k, v in verdicts.items() if k in keys and v in ("low", "no_callable")
+    )
+    pills = []
+    if high:
+        pills.append(
+            Pill(
+                f"{high:,}",
+                severity_info("high")["color"],
+                f"{_plural(high, 'child', 'children')} with too many strict de novo"
+                " candidates for the callable genome (QC high)",
+            )
+        )
+    if low:
+        pills.append(
+            Pill(
+                f"{low:,}",
+                severity_info("medium")["color"],
+                f"{_plural(low, 'child', 'children')} with too few strict de novo"
+                " candidates, or no callable genome (QC low)",
+            )
+        )
+    n_issues = sum(1 for k in issues if k in keys)
+    if n_issues:
+        pills.append(
+            Pill(
+                f"{n_issues:,}",
+                "#6a1b9a",
+                f"{_plural(n_issues, 'curated de novo call', 'curated de novo calls')}"
+                " not strict, or no longer candidates",
+                icon="visibility_off",
+            )
+        )
+    return pills
 
 
 def workflow_pills(

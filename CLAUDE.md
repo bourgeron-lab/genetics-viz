@@ -62,7 +62,8 @@ src/genetics_viz/
     vedette_details.py            # SV dialog for a Vedette call: details card, own call, SVSource
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
-    family_tabs.py                # Family pages' tab bar: link value, label, icon, tooltip per tab
+    family_tabs.py                # Family pages' tab bar: link value, label, icon, tooltip per tab, older link values
+    denovo_evidence.py            # Variant dialog: the denovo step's evidence card for one candidate
     tab_badge.py                  # Counts on tabs: the family page's review badges (TabBadge), the cohort page's (TabPills)
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
     diagnostic_dialog.py          # Diagnostic review dialog
@@ -75,6 +76,7 @@ src/genetics_viz/
     gene_index.yaml               # Gene index refresh period, Parquet row group size
     inheritance.yaml              # MOI flag: GeneTrek mode strings -> codes, verdict colours, PAR
     roh.yaml                      # ROH grades/wording, pattern + class colours, KING degrees
+    denovo.yaml                   # denovo step: flag wording/colours/tooltips, strict, origin, QC verdicts, literature references
     upd.yaml                      # upd step: confidence/origin/mode wording, member statuses (role), window colours
     sample_qc.yaml                # Sample QC flag wording (curator/reader), categories, plot lines
     str.yaml                      # STR class/status colours, support codes, REViewer filename
@@ -113,12 +115,14 @@ src/genetics_viz/
         cohort_roh_tab.py         # Runs of homozygosity tab + islands dialog (cohort-wide)
         cohort_upd_tab.py         # UPD tab (cohort-wide) + the individuals table's UPD column
         cohort_str_tab.py         # STR tab (cohort-wide): loci counts + flagged genotypes
+        cohort_denovo_tab.py      # De novo tab (cohort-wide): literature, rate/shares charts, children, flags, curation check
         sample_qc_tab.py          # Sample QC tab (per-family): issues, kinship, sex, quality
         cohort_sample_qc_tab.py   # Sample QC tab (cohort-wide) + cross-family network dialog
         docs_panel.py             # ghfc-ngs params reference, fetched at runtime
         params_panel.py           # Workflow params file, shown verbatim
         status_panel.py           # Pipeline run status (Workflow tab + home card)
-        wombat_tab.py             # WOMBAT analysis tab (per-family): sub-tabs, config panels, table
+        wombat_tab.py             # SNVs/Indels tab (per-family): De novo sub-tab, then the Wombat configs
+        wombat_denovo.py          # SNVs/Indels tab: de novo flag filter, per-child summary, curation banner, header QC badge
         wombat_rows.py            # Wombat tab data: result files, table rows, columns
         wombat_filters.py         # Wombat tab filters: WombatFilters, panel, apply_filters
         wombat_stats.py           # Wombat tab Stats dialog
@@ -153,6 +157,8 @@ src/genetics_viz/
     variant_rows.py               # Wombat rows: VEP/ClinVar/score badges, LCR/gnomAD/MNV/consequence filters
     diagnostic_files.py           # The diagnostic kinds (SNV/SV/STR/UPD) and their files
     diagnostic_labels.py          # Diagnostics panel wording: STR repeat counts, UPD origin
+    denovo.py                     # denovo step: discovery, reading, evidence on Wombat rows, strict/flag filter, curation check, cohort summaries
+    denovo_plots.py               # ECharts builders for the cohort De novo tab
     upd.py                        # validations/upds.tsv (role-guarded), UPD key, evidence, candidates merged from every source
     upd_calls.py                  # upd step tables: discovery (newest label), reading, windows, wording, exports
     upd_plots.py                  # UPD chromosome view (ECharts), genome overview (SVG), cohort chart
@@ -336,6 +342,22 @@ Config files (YAML) are loaded once at module level.
 - **Imprinting is the step's `imprinting` column, as written** (per region in trios and duos, per chromosome in solo mode). GeneTrek's imprinting regions are on the roadmap.
 - Test data: `datagen.add_upd_case(data_dir)` gives 1001's S3 a chr2 UPD (ROH and flag, family and cohort files). `datagen.add_upd_calls(data_dir)` writes the step's tables for 1001 and DEMO under `upd_v3` (no windows, dated a day earlier) and `upd_v4` (windows): S3 trio paternal iso chr2 0.1–39.7 Mb `high` (the flag's span), S3 chr16 `low` (recurrent at cohort level), S2 solo chr15 `medium` with the Prader-Willi/Angelman text. Both are opt-in: they change flag counts and report sections.
 
+### De Novo Step (SNVs and indels)
+- **The ghfc-ngs `denovo` step** reads the Wombat de novo table (the `#wombat_config` line of its inputs, `de_novo_mutations` by default) and writes `families/…/denovo/<FID>.<label>.{dnm,qc,inputs}.tsv` and `cohorts/<NAME>/denovo/<NAME>.<label>.{dnm,qc,inputs}.tsv`. The labels are `tsv.find_labels(…, "dnm")`, newest first. The contract is `modules/denovo/scripts/denovo_tables` in ghfc-ngs; the vault note is `ghfc-ngs/De novo step.md`.
+- **One dnm row per Wombat row**: the family table joins the aggregated Wombat de novo rows 1:1 on `(chrom:pos:ref:alt, child)` (checked on CANDY_mpx_ghent: 510 of 510). `denovo.add_evidence` sets the `dnm_*` fields on the Wombat rows and keeps the dnm row as `_dnm` for the variant dialog. A Wombat row with no dnm row gets the app's own `NOT_ASSESSED` flag and stays in Strict view.
+- **Read through `utils/denovo.py`.** `.` is null and the IDs are forced to strings (`family_id` is numeric-looking). Tables are cached on `(path, mtime, size)`; `clear_denovo_cache` is in `conftest._reset_globals`.
+- **The cohort table is preferred for a family when it is as new** (`load_family_denovo(…, cohort)`). Only it carries `recurrence_families`, the `RECURRENT` flag (which can turn a strict candidate flagged) and the per-child QC verdict (`qc`: ok, high, low, no_callable, with `qc_low`/`qc_high`/`qc_reference`, and `sampleqc_flags`).
+- **Strict = no flag but `SIB_SHARED`** (`strict_ignored` in `config/denovo.yaml` mirrors the pipeline's `STRICT_IGNORED`). The QC counts are autosomal. The cohort tab recounts the strict SNVs and indels, transitions and origins from the candidates (`child_rows`), so every figure follows one strict set; the QC table's split is the family pass's, from before `RECURRENT`.
+- **Flags, statuses and verdicts are the pipeline's**; the app words them (`config/denovo.yaml`, a tooltip per flag) and filters on them. An unknown flag is shown raw, grey.
+- **The De novo sub-tab is first in SNVs/Indels** (`wombat_tab.DENOVO_TAB` = `denovo`, link `wcfg=denovo`; `wcfg=<the source config>` from older links maps to it). The source config gets no sub-tab of its own (`denovo.denovo_source`). Without the step's tables it is the plain Wombat table, with a note.
+  - With the step's tables: `DenovoFilter` (link `wdm` strict|all, `wfh` flags hidden, `wfo` flags kept), Wombat exclusions off by default (`WombatFilters(exclusions=False)`, the link defaults follow), the "De novo View" preset.
+  - The curation banner lists the rows the filters hide that are curated de novo (`is_curated_denovo`: validated present without an inherited mode, i.e. not paternal/maternal/either/homozygous, or with a diagnostic), and the family's `de novo` validations with no row at all.
+  - The variant dialog gets the Python row (`view.row_for`), which holds `_dnm`.
+- **Cohort De novo tab** (`cohort_denovo_tab.py`): reads the cohort tables and the curation files off-thread and follows the individuals filter. The literature table is `references` in `config/denovo.yaml`, each `metric` a key of `denovo.cohort_summary`. Rates are per child per Gb of haploid callable unmasked sequence, the pipeline's `rate_per_gb`, so 2 × μ × 1e9. The values were read from the papers in Zotero on 2026-11-14; keep the sources with the numbers.
+- **The curation check** (`curation_check`): `hidden` = a non-strict candidate curated as de novo; `missing` = a `de novo` validation (present) of an assessed family with no candidate. It shows on the cohort tab, in its pill and in the family banner, for curators only.
+- **Badges**: the family SNVs/Indels badge counts strict (or not assessed) HIGH/MODERATE unvalidated candidates when the step ran (`denovo_to_review(…, cohort)`). The cohort De novo pills are QC high, QC low and curation issues (`denovo_cohort_status` off-thread, `denovo_cohort_pills`). The family header's "De novo QC" badge reads only the QC tables (`load_child_qc`).
+- Test data: `datagen.add_denovo_calls(data_dir)` gives 1001 (`rare_denovo`) the step's tables. SHANK3 is strict and paternal; PLAIN is flagged `TR_HOMOPOLYMER,PARENT_ALT_POSSIBLE` and validated de novo, so the banner and the check find it. The DEMO cohort tables are written one second later and give S3 the verdict `low`. Opt-in: it changes 1001's de novo table and badge.
+
 ### Family Report
 Curators send it to the referring clinician of each centre, who decides whether to recontact the family; it is not addressed to patients. "See report" and "PDF" sit at the right end of the title row of both family pages (`render_report_buttons`), for `can_write()` only, so it always uses the curator wording.
 - **One HTML string, two uses.** `build_family_report` (pure, blocking, `asyncio.to_thread`) → `render_report_html`. The dialog shows it in an `<iframe srcdoc>`, which keeps Quasar and Tailwind out, so the screen looks like the print. PDF writes it into a hidden iframe and calls the browser's print. The document `<title>` (`<cohort>_<family>_report_<date>`) is the PDF's default name. No server-side PDF library: the VM installs with `uvx`.
@@ -367,13 +389,14 @@ Curators send it to the referring clinician of each centre, who decides whether 
 
 ### Family Page Tabs
 - **Both family pages draw their analysis tabs through `components/family_tabs.family_tab_bar`.** `FAMILY_TABS` holds each tab's link value (`tab=`), label, icon and tooltip; `TAB_LABELS` / `TAB_SLUGS` derive from it, and a tab mapped to false in the availability dict is disabled. A new tab is one entry there plus its panel and lazy loader on each page.
+- **The Wombat tab is SNVs/Indels** (`snvs`). A renamed tab's old link value goes in `TAB_ALIASES` (`wombat` → `snvs`), and the pages read `tab=` through `canonical_tab`.
 - **The row matches the cohort page's**: icon left of the label, mixed case, from the left (`TABS_PROPS`, `inline-label no-caps align=left`), and a tab the cohort page also has takes its icon. Eight tabs take about 900 of the 1,185 px a 1,280 px window leaves, so Quasar's 16 px padding stays; the floating review badges sit at the top right of the label, as before.
 - **A tooltip is text `should_see` matches.** The ROH tab's "Runs of homozygosity" is also the panel's title, so a test waiting for the panel waits for something only the panel draws.
 
 ### Family Page Review Badges
 - **The family tabs carry a count of what waits for a curator** (`components/tab_badge.py`, counts in `utils/review_counts.py`), on both family pages, through `family_review_badges`.
   - **Sample QC**: unacknowledged high/medium flags of the family files, `UPD_CANDIDATE` left to the UPD tab when it exists. Shown to every role, as the header badge.
-  - **Wombat**: de novo configs (`wombat.DENOVO_CONFIG`) aggregated per variant and carrier, after the LCR/gnomAD/MNV exclusions, HIGH or MODERATE impact (`VEP_IMPACT`, else the consequences' impact), never validated (`UNVALIDATED`). A family whose de novo table Sample QC holds back is not read: `!`.
+  - **SNVs/Indels** (mark `snvs-tab-count`): de novo calls aggregated per variant and carrier, HIGH or MODERATE impact (`VEP_IMPACT`, else the consequences' impact), never validated (`UNVALIDATED`). With the denovo step's tables: its config's strict (or not assessed) candidates. Without them: every `wombat.DENOVO_CONFIG` config after the LCR/gnomAD/MNV exclusions. A family whose de novo table Sample QC holds back is not read: `!`.
   - **STR**: flagged genotypes (`flagged_expr`) of the newest catalog, no validation.
   - **UPD**: `upd.count_to_review`.
   - Wombat, STR and UPD are for `can_write()` only, resolved on the event loop before the counts run in `asyncio.to_thread`.
@@ -453,9 +476,9 @@ Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: 
 - `config/pipeline_steps.yaml` holds step labels, display order and status chip colours only. A step the pipeline reports but the file does not know is appended under its raw name.
 
 ### Cohort Page Tabs
-One row of tabs, each with an icon (`_TABS` in `cohort.py`: label, `tab=` link value, icon, tooltip): `Individuals` (the table), `Statistics`, `Ancestry`, `Polygenic Scores`, `ROH`, `UPD`, `STR`, `Sample QC`, `Workflow`. Up to v0.34.0 the analyses sat in a column beside the table; once the table had nine columns (1,366 px) that column was 138 px wide in a 1,600 px window.
+One row of tabs, each with an icon (`_TABS` in `cohort.py`: label, `tab=` link value, icon, tooltip): `Individuals` (the table), `Statistics`, `Ancestry`, `Polygenic Scores`, `ROH`, `UPD`, `De novo`, `STR`, `Sample QC`, `Workflow`. Up to v0.34.0 the analyses sat in a column beside the table; once the table had nine columns (1,366 px) that column was 138 px wide in a 1,600 px window.
 - **The tab row and the filter bar are one sticky block** under the fixed page header. The header's height changes when its menus wrap, so `_HEADER_HEIGHT_JS` keeps `--gv-header-height` up to date (ResizeObserver) and the block's `top` reads it.
-- **Nine tabs with icons and badges fit 1,280 px only with `no-caps` labels and 12 px tab padding** (`_TABS_CSS`): about 1,140 px, against 1,300 px in Quasar's defaults.
+- **Ten tabs with icons and badges fit 1,280 px only with `no-caps` labels and 10 px tab padding** (`_TABS_CSS`): about 1,150 px of the 1,185 px the row gets; at 12 px the De novo tab pushed Workflow off the row (measured 1,189 px).
 - **The filter bar** shows the count and one removable chip per filter (`_filter_chips`, worded from the column definitions). A chip's cross, or "Clear all", calls `apply_filters(..., to_table=True)`, which sets the table's filter row through `DataTable.set_filters` (no filter event follows, so the page applies them itself). The filters stay in the table header; "Edit filters" switches to Individuals. Workflow hides the bar: it is about the cohort, not the filter.
 - **Every tab but Individuals, Statistics and Workflow loads on first view** through `lazy_content(label, render, ...)`, which registers an opener in `openers`; `Workflow`'s opener is its own, `async` one, because it warms the run-record and document caches off-thread. Tabs without data are disabled; `Workflow` is *created only when the cohort has a params file* — absent, not disabled.
 - **The tab change is `tabs.on_value_change`**, so `tabs.set_value(label)` from Python (Edit filters) runs the same handler as a click. Tab values are labels (`ui.tab_panels(tabs, value=<label>)`), never `ui.tab` objects.

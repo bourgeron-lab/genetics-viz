@@ -20,6 +20,7 @@ from genetics_viz.utils import (
     cnv_coverage,
     cohort_state,
     data,
+    denovo,
     gene_index,
     gene_scoring,
     genetrek,
@@ -70,6 +71,7 @@ def _reset_globals() -> None:
     login_throttle.clear_login_throttle()
     vedette.clear_vedette_cache()
     upd_calls.clear_upd_cache()
+    denovo.clear_denovo_cache()
     change_monitor._change_callbacks.clear()
 
 

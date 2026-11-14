@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.components.denovo_evidence import render_evidence_card
+
 from genetics_viz.models import is_dummy_id
 from genetics_viz.utils.data import get_data_store, get_static_prefix
 from genetics_viz.utils.inheritance import infer_inheritance
@@ -358,10 +360,13 @@ def show_variant_dialog(
                                     sanitize=False,
                                 )
 
+                    # The denovo step's evidence has its own card below;
+                    # ``_`` fields are internal.
                     other_fields = {
                         k: v
                         for k, v in variant_data.items()
                         if k not in excluded_fields
+                        and not k.startswith(("_", "dnm_", "Dnm"))
                     }
 
                     if other_fields:
@@ -406,6 +411,9 @@ def show_variant_dialog(
                                             ).classes("text-sm text-gray-800 break-all")
 
                         details_container.set_visibility(False)
+
+            if variant_data.get("_dnm"):
+                render_evidence_card(variant_data["_dnm"])
 
             # Build IGV tracks function
             def build_igv_tracks():

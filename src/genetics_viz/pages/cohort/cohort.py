@@ -30,6 +30,10 @@ from genetics_viz.pages.cohort.components.cohort_sample_qc_tab import (
     probe_cohort_qc_data,
     render_cohort_sample_qc_tab,
 )
+from genetics_viz.pages.cohort.components.cohort_denovo_tab import (
+    probe_cohort_denovo,
+    render_cohort_denovo_tab,
+)
 from genetics_viz.pages.cohort.components.cohort_str_tab import (
     probe_cohort_eh_data,
     render_cohort_str_tab,
@@ -59,6 +63,8 @@ from genetics_viz.utils.review_counts import (
     filter_pills,
     qc_cohort_pills,
     qc_worst_by_individual,
+    denovo_cohort_pills,
+    denovo_cohort_status,
     str_cohort_open_flags,
     str_cohort_pills,
     upd_cohort_pills,
@@ -155,6 +161,12 @@ _TABS: List[Tuple[str, str, str, str]] = [
     ("Polygenic Scores", "pgs", "functions", ""),
     ("ROH", "roh", "linear_scale", "Runs of homozygosity"),
     ("UPD", "upd", "content_copy", "Uniparental disomy"),
+    (
+        "De novo",
+        "denovo",
+        "new_releases",
+        "De novo SNVs and indels: per-child QC, flags, literature (denovo step)",
+    ),
     ("STR", "str", "repeat", "Short tandem repeats"),
     ("Sample QC", "qc", "fact_check", "Relatedness, sex and contamination (somalier)"),
     ("Workflow", "workflow", "account_tree", "Pipeline run status and parameters"),
@@ -179,9 +191,10 @@ _HEADER_HEIGHT_JS = """
 """
 
 
-#: Nine tabs with icons and badges fit a 1280 px window only with Quasar's
-#: 16 px tab padding cut to 12 (and mixed-case labels): about 1,140 px.
-_TABS_CSS = ".cohort-tabs .q-tab { padding: 0 12px; }"
+#: Ten tabs with icons and badges fit a 1280 px window only with Quasar's
+#: 16 px tab padding cut to 10 (and mixed-case labels): about 1,150 px with
+#: the De novo and Workflow pills, of the 1,185 px the row gets.
+_TABS_CSS = ".cohort-tabs .q-tab { padding: 0 10px; }"
 
 
 def _linked_tab(link: PageLink) -> Optional[str]:
@@ -604,6 +617,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             "ROH": probe_cohort_roh_data(cohort),
             "UPD": probe_cohort_upd_data(cohort),
             "STR": probe_cohort_eh_data(cohort),
+            "De novo": probe_cohort_denovo(cohort),
             "Sample QC": probe_cohort_qc_data(cohort),
             "Workflow": cohort.params_file is not None,
         }
@@ -643,7 +657,12 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         # tabs that have actually been loaded register here, so a filter
         # change never forces work for a tab never opened.
         refreshers: List[Callable[[], None]] = []
-        state: Dict[str, Any] = {"filters": {}, "tab": initial, "str_flags": []}
+        state: Dict[str, Any] = {
+            "filters": {},
+            "tab": initial,
+            "str_flags": [],
+            "denovo": ({}, []),
+        }
         dt_ref: Dict[str, Any] = {"dt": None}
 
         ui.run_javascript(_HEADER_HEIGHT_JS)
@@ -771,7 +790,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
 
                 # Badges: the filter for everyone, as Sample QC and the run;
                 # UPD and STR count what only a curator settles.
-                pill_tabs = ["Individuals", "Sample QC", "Workflow"]
+                pill_tabs = ["Individuals", "Sample QC", "De novo", "Workflow"]
                 if show_review:
                     pill_tabs += ["UPD", "STR"]
                 pills: Dict[str, TabPills] = {
@@ -803,6 +822,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     )
                 if "STR" in pills:
                     pills["STR"].set(str_cohort_pills(state["str_flags"], keys))
+                if "De novo" in pills:
+                    verdicts, issues = state["denovo"]
+                    pills["De novo"].set(denovo_cohort_pills(verdicts, issues, keys))
 
             async def load_badges() -> None:
                 """The STR flags and the run record, read once off the loop."""
@@ -813,6 +835,13 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         )
                     except Exception:
                         logger.warning("Failed to count STR flags", exc_info=True)
+                if "De novo" in pills:
+                    try:
+                        state["denovo"] = await asyncio.to_thread(
+                            denovo_cohort_status, cohort, store.data_dir, show_review
+                        )
+                    except Exception:
+                        logger.warning("Failed to read the de novo QC", exc_info=True)
                 if "Workflow" in pills:
                     try:
                         run = await asyncio.to_thread(read_cohort_state, cohort.path)
@@ -916,6 +945,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     ),
                     ("ROH", render_cohort_roh_tab, "ROH", "runs of homozygosity"),
                     ("UPD", render_cohort_upd_tab, "UPD", "uniparental disomy"),
+                    ("De novo", render_cohort_denovo_tab, "de novo", "de novo calls"),
                     ("STR", render_cohort_str_tab, "STR", "short tandem repeats"),
                     (
                         "Sample QC",

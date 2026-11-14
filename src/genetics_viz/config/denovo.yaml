@@ -1,0 +1,263 @@
+# De novo step (ghfc-ngs `denovo`): wording and colours of what it writes.
+#
+# The pipeline assigns every flag, the strict status, the parent of origin and the per-child
+# QC (modules/denovo/scripts/denovo_tables); the app only words and draws them. A flag or a
+# status this file does not know is shown raw, grey.
+
+# Mirrors denovo_tables STRICT_IGNORED: a candidate with no other flag is strict.
+strict_ignored: [SIB_SHARED]
+
+# Flag categories, in menu order.
+categories:
+  mask:
+    label: "Region masks"
+    color: "#607d8b"
+  reads:
+    label: "Child's reads"
+    color: "#ef6c00"
+  parents:
+    label: "Parents and siblings"
+    color: "#c62828"
+  cohort:
+    label: "Cohort"
+    color: "#6d4c41"
+  missing:
+    label: "Missing data"
+    color: "#9e9e9e"
+
+# One entry per flag, in display order. `color` overrides the category's.
+flags:
+  PARENT_ALT_LIKELY:
+    label: "Parent alt ≥2"
+    category: parents
+    tooltip: >-
+      An informative parent has 2 or more alternate reads (mapping and base quality ≥ 20):
+      likely a parental mosaic, or an inherited variant the parent's genotype missed.
+      42% confirmed as parental mosaics at this level in DDD (Wright 2019).
+  PARENT_ALT_POSSIBLE:
+    label: "Parent alt 1"
+    category: parents
+    color: "#e57373"
+    tooltip: >-
+      An informative parent has 1 high-quality alternate read: a possible parental mosaic
+      (5% confirmed at one read in DDD, Wright 2019). Informative: both parents on the
+      autosomes and PARs, the mother for a son's chrX, the father for a son's chrY.
+  SIB_SHARED:
+    label: "Sibling shared"
+    category: parents
+    color: "#6a1b9a"
+    tooltip: >-
+      A full sibling has the same candidate, or 2 or more high-quality alternate reads: a
+      parental germline mosaic until shown otherwise (recurrence risk). Does not make a
+      candidate non-strict.
+  CHILD_MOSAIC_POSSIBLE:
+    label: "Child mosaic?"
+    category: reads
+    color: "#00897b"
+    tooltip: >-
+      Heterozygous call whose high-quality VAF is below 0.5 with a two-sided binomial
+      p < 0.001: a postzygotic (mosaic) mutation in the child, or an artefact.
+  LOW_QUALITY_SUPPORT:
+    label: "Low-quality support"
+    category: reads
+    tooltip: >-
+      Fewer than 3 high-quality alternate reads in the child, or under half of its alternate
+      reads are of high quality (mapping and base quality ≥ 20).
+  STRAND_BIAS:
+    label: "Strand bias"
+    category: reads
+    tooltip: >-
+      The child's alternate reads lean to one strand against its reference reads (Fisher
+      p < 0.001), or 5 or more alternate reads all on one strand.
+  CLUSTER:
+    label: "Cluster"
+    category: reads
+    color: "#f9a825"
+    tooltip: >-
+      Another candidate of the same child within 20 bp: clustered de novo mutations are a
+      known signal and a known artefact.
+  RECURRENT:
+    label: "Recurrent"
+    category: cohort
+    tooltip: >-
+      Another family of the cohort has the same candidate: usually an artefact, but the signal
+      itself at a known recurrent pathogenic variant.
+  TR_HOMOPOLYMER:
+    label: "Tandem repeat"
+    category: mask
+    tooltip: >-
+      In a tandem repeat or homopolymer (GIAB v3.6 AllTandemRepeatsandHomopolymers, slop 5).
+  LCR:
+    label: "LCR"
+    category: mask
+    tooltip: "In a low-complexity region (LCR-hs38, Heng Li's mdust regions)."
+  LOWMAP:
+    label: "Low mappability"
+    category: mask
+    tooltip: >-
+      In a low-mappability region (GIAB v3.6 nonunique, 100 bp k-mers, 2 mismatches, 1 indel).
+  SEGDUP:
+    label: "Segmental dup."
+    category: mask
+    tooltip: "In a segmental duplication (GIAB v3.6 segdups)."
+  SATELLITE:
+    label: "Satellite"
+    category: mask
+    tooltip: "In a satellite repeat (GIAB v3.6 satellites, slop 5)."
+  BLACKLIST:
+    label: "Blacklist"
+    category: mask
+    tooltip: "In the ENCODE blacklist (hg38-blacklist.v2)."
+  CENTROMERE:
+    label: "Centromere"
+    category: mask
+    tooltip: "In a centromere (UCSC hg38 centromeres table)."
+  NO_CHILD_READS:
+    label: "No child CRAM"
+    category: missing
+    tooltip: "The child has no CRAM: its read columns are empty."
+  NO_PARENT_READS:
+    label: "No parent CRAM"
+    category: missing
+    tooltip: "An informative parent has no CRAM: its read columns are empty."
+  # Not the pipeline's: a Wombat de novo row the step has no row for (the denovo tables are
+  # older than the Wombat table). Shown, never hidden by Strict.
+  NOT_ASSESSED:
+    label: "Not assessed"
+    category: missing
+    tooltip: >-
+      The denovo step has no evidence for this candidate: its tables predate the Wombat de
+      novo table. Rerun the step to assess it. Shown in Strict view.
+
+strict:
+  "yes":
+    label: "Strict"
+    color: "#2e7d32"
+    tooltip: "No flag but Sibling shared: the candidates the per-child count is made of."
+  "no":
+    label: "Flagged"
+    color: "#9e9e9e"
+    tooltip: "At least one flag other than Sibling shared."
+
+origin:
+  paternal:
+    label: "Paternal"
+    color: "#1565c0"
+  maternal:
+    label: "Maternal"
+    color: "#ad1457"
+
+origin_status:
+  phased: "Phased by Unfazed"
+  unphased: "Unfazed found no informative read"
+  error: "Unfazed failed for this child"
+  not_run: "Unfazed was not run for this child (no CRAM, or a parent missing from the BCF)"
+
+# Per-child QC (cohort table `qc`): the strict autosomal rate per callable unmasked Gb against
+# the cohort (median ± 4 scaled MADs, 20 children or more) or a fixed range.
+qc:
+  ok:
+    label: "OK"
+    color: "#2e7d32"
+    tooltip: "Strict de novo rate within the expected range."
+  high:
+    label: "High"
+    color: "#c62828"
+    tooltip: >-
+      Too many strict de novo candidates for the callable genome: contamination, a wrong
+      parent, a sample swap or poor data.
+  low:
+    label: "Low"
+    color: "#ef6c00"
+    tooltip: >-
+      Too few strict de novo candidates: a parent's reads in the child's place (or the
+      reverse), or a callable genome overestimated.
+  no_callable:
+    label: "No callable genome"
+    color: "#9e9e9e"
+    tooltip: "No callable genome measured (a coverage bedgraph is missing): no rate."
+
+qc_reference:
+  cohort: "the cohort (median ± 4 scaled MADs)"
+  fixed: "the fixed range (fewer than 20 children)"
+
+# Literature reference values, read from the papers on 2026-11-14 (Zotero tag `de novo calling`).
+# Rates per callable Gb are per child (diploid) per Gb of haploid sequence: 2 × μ × 1e9, the unit
+# of the pipeline's rate_per_gb. Masked regions (a fifth of the genome) are left out of both our
+# count and our callable genome; their true rate is higher (1.9× in segmental duplications,
+# Porubsky 2025), so the published genome-wide figures are a slight upper bound for ours.
+expected:
+  # Band drawn on the rate plots: 2 × μ for μ = 1.10e-8 (Sasani 2019) to 1.29e-8 (Jónsson 2017)
+  snv_rate_per_gb: [22.0, 25.8]
+  # 2 × 9.29e-10 (Sasani 2019), the only per-bp de novo indel rate in the papers read
+  indel_rate_per_gb: 1.86
+  paternal_share: 0.80
+  ti_fraction: 0.69
+
+references:
+  - metric: snv_rate_median
+    label: "Strict SNVs per callable Gb"
+    format: "{:.1f}"
+    literature: "22.0–25.8"
+    source: "Sasani 2019 (μ 1.10e-8); Kong 2012 (1.20e-8); Porubsky 2025 (1.17e-8, CI 1.08–1.27); Jónsson 2017 (1.29e-8, SNVs + indels)"
+    note: "2 × μ × 1e9. 24.0 for the usual 1.2e-8 at parental age ~30 (Bergeron 2022)."
+  - metric: implied_snv_mu
+    label: "Implied SNV mutation rate (per bp per generation)"
+    format: "{:.2e}"
+    literature: "1.05–1.29 × 10⁻⁸"
+    source: "Wong 2016 (1.05e-8); Sasani 2019 (1.10e-8); Porubsky 2025 (1.17e-8); Kong 2012 (1.20e-8); Jónsson 2017 (1.29e-8)"
+    note: "Our median SNV rate per callable Gb ÷ 2e9, uncorrected for sensitivity or false positives."
+  - metric: indel_rate_median
+    label: "Strict indels per callable Gb"
+    format: "{:.2f}"
+    literature: "1.86"
+    source: "Sasani 2019 (indel μ 9.29e-10, ≤ 10 bp)"
+    note: "Tandem repeats and homopolymers are masked here, where most de novo indels fall (Porubsky 2025: 7.4 indels outside tandem repeats per transmission, 65.3 in them)."
+  - metric: strict_median
+    label: "Strict candidates per child (autosomes, unmasked callable genome)"
+    format: "{:.0f}"
+    literature: "≈ 55–65 on a ~2.3 Gb unmasked callable genome; 63–86 genome-wide"
+    source: "Kong 2012 (63.2 SNVs); Jónsson 2017 (70.3); Sasani 2019 (70.1 SNVs + 5.9 indels); Ng 2024 (78 ± 15); Shadrina 2025 (68.3); Lecoquierre 2025 (85.6)"
+    note: "Genome-wide counts on 2.58–2.68 Gb callable; scaled to our unmasked callable genome by its size."
+  - metric: indel_share
+    label: "Indel share of strict candidates"
+    format: "{:.1%}"
+    literature: "6.8–10.5%"
+    source: "Jónsson 2017 (6.8%); Turner 2017 (7.3%); Sasani 2019 (8%); Shadrina 2025 (8%); Lecoquierre 2025 (10.5%)"
+    note: "Lower here: the tandem-repeat mask removes most indel candidates."
+  - metric: ti_fraction
+    label: "Transitions among strict SNVs"
+    format: "{:.1%}"
+    literature: "64.5–69.0% (Ti/Tv 1.8–2.2)"
+    source: "Kong 2012 (67.8%); Jónsson 2017 (69.0%); Ng 2024 (Ti/Tv 2.11); Shadrina 2025 (64.5%)"
+    note: "Artefacts pull it towards 33% (random substitutions)."
+  - metric: phased_share
+    label: "Strict candidates phased"
+    format: "{:.1%}"
+    literature: "21–34% from short reads"
+    source: "Belyeu 2021a (Unfazed, 27.6% at 30×); Sasani 2019 (21%); Wong 2016 (30%); Lecoquierre 2025 (34% at 40×)"
+    note: ""
+  - metric: paternal_share
+    label: "Paternal share of phased strict candidates"
+    format: "{:.1%}"
+    literature: "78–81% (≈ 4:1)"
+    source: "Jónsson 2017 (80.4%); Sasani 2019 (79.8%); Porubsky 2025 (81.4%); Lecoquierre 2025 (80%); Wong 2016 (78%)"
+    note: "+1.5 de novo mutations per year of paternal age, +0.37 maternal (Jónsson 2017). Artefacts drift it towards 50%."
+  - metric: parent_mosaic
+    label: "Mosaic in a parent (context)"
+    format: "{:.1%} of all candidates flagged"
+    literature: "3–6% of DNMs"
+    source: "Sasani 2019 (≈3.1%); Lecoquierre 2025 (6.0%, 20 of 334)"
+    note: "Compare with the Parent alt flags: they also mark inherited variants the parent's genotype missed."
+  - metric: child_mosaic
+    label: "Postzygotic in the child (context)"
+    format: "{:.1%} of all candidates flagged"
+    literature: "2.5–9% of DNMs at short-read depth; 16% with long reads"
+    source: "Lecoquierre 2025 (2.45%); Sasani 2019 (~6% passing trio filters); Porubsky 2025 (16%)"
+    note: ""
+  - metric: sib_shared
+    label: "Shared by siblings (context)"
+    format: "{:.1%} of strict candidates"
+    literature: "1.1% of DNMs (paternal 1.0%, maternal 4.5%)"
+    source: "Jónsson 2018"
+    note: "Strict sibling-shared candidates per child are in the table below."

@@ -44,7 +44,7 @@ from genetics_viz.utils.variant_rows import add_vep_badges, consequence_badges
 _CURATED = {"snv": "SNV", "sv": "SV", "str": "STR"}
 
 #: The family page tab each kind opens on.
-_FAMILY_TAB = {"snv": "wombat", "sv": "svs", "str": "str", "roh": "roh"}
+_FAMILY_TAB = {"snv": "snvs", "sv": "svs", "str": "str", "roh": "roh"}
 
 
 # ---------------------------------------------------------------------------

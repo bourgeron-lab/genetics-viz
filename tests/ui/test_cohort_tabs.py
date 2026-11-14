@@ -49,6 +49,7 @@ async def test_one_tab_row_with_icons(user, monkeypatch):
         "Polygenic Scores",
         "ROH",
         "UPD",
+        "De novo",
         "STR",
         "Sample QC",
         "Workflow",

@@ -2067,3 +2067,109 @@ def build_vedette_results(data: Path) -> None:
     pysam.tabix_compress(str(plain), str(plain) + ".gz", force=True)
     pysam.tabix_index(str(plain) + ".gz", preset="vcf", force=True)
     plain.unlink()
+
+
+# ---------------------------------------------------------------------------
+# The denovo step (opt-in: it changes 1001's de novo table, badge and tabs)
+# ---------------------------------------------------------------------------
+
+DENOVO_LABEL = "dnm_v2"
+
+#: As ghfc-ngs ``denovo_tables`` writes them (DNM_COLUMNS, QC_COLUMNS).
+DNM_COLUMNS = [
+    "family_id", "child", "father", "mother", "child_sex", "chrom", "pos", "ref", "alt",
+    "var_type", "inheritance_model", "genes", "consequences", "wombat_child_gt",
+    "wombat_child_dp", "wombat_child_gq", "wombat_child_vaf", "cluster_n",
+    "nearby_calls", "child_ref", "child_alt", "child_alt_fwd", "child_alt_rev",
+    "child_ref_fwd", "child_ref_rev", "child_alt_raw", "child_vaf", "child_binom_p",
+    "strand_p", "father_ref", "father_alt", "father_alt_raw", "mother_ref",
+    "mother_alt", "mother_alt_raw", "sibs_called", "sibs_with_alt", "origin",
+    "origin_evidence", "origin_status", "flags", "strict",
+]  # fmt: skip
+DNM_QC_COLUMNS = [
+    "family_id", "child", "father", "mother", "child_sex", "n_candidates", "n_strict",
+    "n_strict_snv", "n_strict_indel", "ti_fraction", "median_vaf_strict",
+    "n_parent_alt", "n_child_mosaic", "n_sib_shared", "n_paternal", "n_maternal",
+    "callable_bp", "callable_unmasked_bp", "rate_per_gb", "callable_status",
+]  # fmt: skip
+DNM_COHORT_QC_COLUMNS = DNM_QC_COLUMNS + [
+    "sampleqc_flags", "qc_reference", "qc_low", "qc_high", "qc",
+]  # fmt: skip
+
+#: S3's two candidates: the SHANK3 de novo, strict and paternal; the PLAIN
+#: call, in a homopolymer with a read in the mother (not strict), which a
+#: curator validated de novo: the filter hides a curated call.
+DNM_ROWS = [
+    ["1001", "S3", "S1", "S2", "male", "chr22", "50674000", "G", "A", "SNV",
+     "heterozygous", "SHANK3", "missense_variant", "0/1", "30", "50", "0.5", "0", "0",
+     "15", "14", "7", "7", "8", "7", "14", "0.4828", "1", "1", "30", "0", "0", "28",
+     "0", "0", ".", ".", "paternal", "3", "phased", ".", "yes"],
+    ["1001", "S3", "S1", "S2", "male", "chr2", "2000", "G", "T", "SNV",
+     "heterozygous", "PLAIN", "missense_variant", "0/1", "25", "30", "0.3", "0", "1",
+     "17", "8", "4", "4", "9", "8", "9", "0.32", "0.11", "1", "25", "0", "0", "22",
+     "1", "1", ".", ".", ".", ".", "unphased", "TR_HOMOPOLYMER,PARENT_ALT_POSSIBLE",
+     "no"],
+]  # fmt: skip
+#: S3: one strict on the autosomes, over 2.3 Gb; the cohort calls it high.
+DNM_QC_ROW = [
+    "1001", "S3", "S1", "S2", "male", "2", "1", "1", "0", "1.0", "0.4828", "1", "0",
+    "0", "1", "0", "2640000000", "2300000000", "0.4348", "ok",
+]  # fmt: skip
+DNM_COHORT_QC_EXTRA = ["POSSIBLE_CONTAMINATION(S3,)", "fixed", "15.0", "40.0", "low"]
+
+DENOVO_VALIDATION = [
+    "1001", "chr2:2000:G:T", "S3", "curator", "de novo", "present", "", "0",
+    "2026-11-14T09:00:00",
+]  # fmt: skip
+
+
+def _inputs(path: Path, wombat_config: str, cohort: str = "") -> None:
+    lines = [
+        "#inputs\tv1", "#step\tdenovo", f"#label\t{DENOVO_LABEL}",
+        f"#wombat_config\t{wombat_config}", "#masks\tdenovo_masks_v1",
+        "#ref_name\tGRCh38_GIABv3", "#bin\t1000",
+    ]  # fmt: skip
+    if cohort:
+        lines.append(f"#cohort\t{cohort}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n1001\tS3\tS1\tS2\t1\tyes\tyes\n")
+
+
+def add_denovo_calls(data: Path, cohort: bool = True, validation: bool = True) -> None:
+    """The denovo step's tables for 1001 and DEMO, on 1001's ``rare_denovo``.
+
+    The Wombat table gains the PLAIN call; the cohort tables are written a
+    second later than the family's, so the family page reads them. Opt-in.
+    """
+    wombat = family_dir(data, "1001") / "wombat"
+    write_tsv(
+        wombat / "1001.rare.vep1.annotated.rare_denovo.tsv",
+        WOMBAT_COLUMNS,
+        [WOMBAT_ROWS[0], WOMBAT_ROWS[5]],
+    )
+    fam = family_dir(data, "1001") / "denovo"
+    write_tsv(fam / f"1001.{DENOVO_LABEL}.dnm.tsv", DNM_COLUMNS, DNM_ROWS)
+    write_tsv(fam / f"1001.{DENOVO_LABEL}.qc.tsv", DNM_QC_COLUMNS, [DNM_QC_ROW])
+    _inputs(fam / f"1001.{DENOVO_LABEL}.inputs.tsv", "rare_denovo")
+    if cohort:
+        demo = data / "cohorts" / "DEMO" / "denovo"
+        write_tsv(
+            demo / f"DEMO.{DENOVO_LABEL}.dnm.tsv",
+            DNM_COLUMNS + ["recurrence_families"],
+            [r + ["0"] for r in DNM_ROWS],
+        )
+        write_tsv(
+            demo / f"DEMO.{DENOVO_LABEL}.qc.tsv",
+            DNM_COHORT_QC_COLUMNS,
+            [DNM_QC_ROW + DNM_COHORT_QC_EXTRA],
+        )
+        _inputs(demo / f"DEMO.{DENOVO_LABEL}.inputs.tsv", "rare_denovo", "DEMO")
+        later = fam.stat().st_mtime + 1
+        for p in demo.iterdir():
+            os.utime(p, (later, later))
+    if validation:
+        path = data / "validations" / "snvs.tsv"
+        if not path.exists():
+            write_tsv(path, VALIDATION_COLUMNS, [])
+        with open(path, "a") as f:
+            f.write("\t".join(DENOVO_VALIDATION) + "\n")

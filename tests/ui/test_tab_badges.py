@@ -14,7 +14,7 @@ async def test_curator_sees_what_waits_for_a_review(user, data_dir):
     # 1001: NOT_PARENT (high) and S3's contamination (medium) not acknowledged.
     assert await badge_text(user, "qc-tab-count") == "2"
     # The NOT_PARENT flag holds the de novo table back: no count, a warning.
-    assert await badge_text(user, "wombat-tab-count") == "!"
+    assert await badge_text(user, "snvs-tab-count") == "!"
     # Two genotypes flagged by the pipeline, none validated.
     assert await badge_text(user, "str-tab-count") == "2"
 
@@ -22,7 +22,7 @@ async def test_curator_sees_what_waits_for_a_review(user, data_dir):
 async def test_reader_sees_the_qc_badge_only(user, data_dir):
     await _open(user, "reader")
     assert await badge_text(user, "qc-tab-count") == "2"
-    await user.should_not_see(marker="wombat-tab-count")
+    await user.should_not_see(marker="snvs-tab-count")
     await user.should_not_see(marker="str-tab-count")
 
 
@@ -34,7 +34,7 @@ async def test_denovo_calls_are_counted_once_the_table_is_read(user, data_dir):
         )  # fmt: skip
     await _open(user, "curator")
     # S3's SHANK3 missense de novo, MODERATE, not yet validated.
-    assert await badge_text(user, "wombat-tab-count") == "1"
+    assert await badge_text(user, "snvs-tab-count") == "1"
     assert await badge_text(user, "qc-tab-count") == "1"
 
 

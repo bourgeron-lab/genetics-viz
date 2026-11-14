@@ -382,3 +382,57 @@ seen_cohorts:
   name: "cohorts"
   type: string
   group: "All cohorts"
+# De novo sub-tab: the denovo step's evidence (utils/denovo.py)
+dnm_strict:
+  name: "strict"
+  type: string
+  group: "De novo"
+dnm_flags:
+  name: "flags"
+  type: string
+  group: "De novo"
+  min_width: 220
+dnm_child_reads:
+  name: "child alt/depth"
+  type: string
+  group: "De novo"
+dnm_child_vaf:
+  name: "child VAF"
+  type: float
+  group: "De novo"
+dnm_father_alt:
+  name: "father alt"
+  type: int
+  group: "De novo"
+dnm_mother_alt:
+  name: "mother alt"
+  type: int
+  group: "De novo"
+dnm_sibs:
+  name: "siblings"
+  type: string
+  group: "De novo"
+dnm_origin:
+  name: "origin"
+  type: string
+  group: "De novo"
+dnm_recurrence:
+  name: "other families"
+  type: int
+  group: "De novo"
+dnm_cluster_n:
+  name: "cluster"
+  type: int
+  group: "De novo"
+dnm_nearby_calls:
+  name: "nearby calls"
+  type: int
+  group: "De novo"
+dnm_binom_p:
+  name: "VAF binomial p"
+  type: float
+  group: "De novo"
+dnm_strand_p:
+  name: "strand p"
+  type: float
+  group: "De novo"
