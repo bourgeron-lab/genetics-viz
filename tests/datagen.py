@@ -2255,6 +2255,23 @@ DNM_QC_ROW = [
 ]  # fmt: skip
 DNM_COHORT_QC_EXTRA = ["POSSIBLE_CONTAMINATION(S3,)", "fixed", "15.0", "40.0", "low"]
 
+#: The cohort QC table once the cohort has a genome QC samples table
+#: (``denovo_tables`` COHORT_QC_COLUMNS, in its order): S3 is a cell line,
+#: high, held to the rl150 children, half its phased SNVs paternal.
+DNM_GENOME_QC_COLUMNS = DNM_QC_COLUMNS + [
+    "sampleqc_flags", "seq_class", "genomeqc_flags", "qc_reference", "qc_low",
+    "qc_high", "qc", "n_phased_strict_snv", "paternal_share", "paternal_p",
+    "snv_c_a", "snv_c_g", "snv_c_t", "snv_t_a", "snv_t_c", "snv_t_g",
+    "spectrum_cosine", "n_indel_candidates", "indel_per_snv", "indel_1bp_share",
+    "indel_ins_share", "indel_tr_share", "expected_germline_share", "qc_flags",
+]  # fmt: skip
+DNM_GENOME_QC_EXTRA = [
+    "POSSIBLE_CONTAMINATION(S3,)", "rl150", "CELL_LINE", "cohort:rl150", "7.6",
+    "48.5", "high", "522", "0.4713", "1.2e-42", "0.1700", "0.0600", "0.2300",
+    "0.1200", "0.2200", "0.2000", "0.8812", "293", "0.2001", "0.7100", "0.3400",
+    "0.6600", "0.0424", "CELL_LINE,NOT_GERMLINE_LIKE",
+]  # fmt: skip
+
 DENOVO_VALIDATION = [
     "1001", "chr2:2000:G:T", "S3", "curator", "de novo", "present", "", "0",
     "2026-11-14T09:00:00",
@@ -2273,11 +2290,15 @@ def _inputs(path: Path, wombat_config: str, cohort: str = "") -> None:
     path.write_text("\n".join(lines) + "\n1001\tS3\tS1\tS2\t1\tyes\tyes\n")
 
 
-def add_denovo_calls(data: Path, cohort: bool = True, validation: bool = True) -> None:
+def add_denovo_calls(
+    data: Path, cohort: bool = True, validation: bool = True, genome_qc: bool = False
+) -> None:
     """The denovo step's tables for 1001 and DEMO, on 1001's ``rare_denovo``.
 
     The Wombat table gains the PLAIN call; the cohort tables are written a
     second later than the family's, so the family page reads them. Opt-in.
+    ``genome_qc``: the cohort QC table as written with a genome QC samples
+    table, S3 a cell line (``DNM_GENOME_QC_EXTRA``).
     """
     wombat = family_dir(data, "1001") / "wombat"
     write_tsv(
@@ -2298,8 +2319,8 @@ def add_denovo_calls(data: Path, cohort: bool = True, validation: bool = True) -
         )
         write_tsv(
             demo / f"DEMO.{DENOVO_LABEL}.qc.tsv",
-            DNM_COHORT_QC_COLUMNS,
-            [DNM_QC_ROW + DNM_COHORT_QC_EXTRA],
+            DNM_GENOME_QC_COLUMNS if genome_qc else DNM_COHORT_QC_COLUMNS,
+            [DNM_QC_ROW + (DNM_GENOME_QC_EXTRA if genome_qc else DNM_COHORT_QC_EXTRA)],
         )
         _inputs(demo / f"DEMO.{DENOVO_LABEL}.inputs.tsv", "rare_denovo", "DEMO")
         later = fam.stat().st_mtime + 1

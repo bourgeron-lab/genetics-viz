@@ -40,6 +40,9 @@ _CHILD_EXPORT = [
     "indel_share", "ti_fraction", "n_phased", "paternal_share", "n_parent_alt",
     "n_child_mosaic", "n_sib_shared", "n_sib_shared_strict", "callable_gb",
     "callable_status", "qc_low", "qc_high", "qc_reference", "sampleqc_flags",
+    "seq_class", "genomeqc_flags", "qc_flags", "n_phased_strict_snv",
+    "paternal_share_snv", "paternal_p", "spectrum_cosine", "expected_germline_share",
+    "indel_per_snv", "indel_1bp_share",
 ]  # fmt: skip
 
 _CANDIDATE_EXPORT = [
@@ -199,15 +202,29 @@ def render_cohort_denovo_tab(
                     "No child with de novo results among the individuals shown"
                 ).classes("text-gray-500 italic")
                 return
-            summary = denovo.cohort_summary(children)
+            # Cell lines' strict candidates are mostly somatic: they stay in
+            # the charts and the table, not in the comparison with the
+            # literature (the pipeline leaves them out of its reference too).
+            cell_lines = [c for c in children if c["cell_line"]]
+            germline = [c for c in children if not c["cell_line"]]
+            summary = denovo.cohort_summary(germline)
             masks = data.meta.get("masks")
             ui.label(
                 f"{len(children)} children shown, {len(candidates):,} candidates,"
                 f" {summary['n_strict']:,} strict on the autosomes"
-                f" ({summary['n_snv']:,} SNVs, {summary['n_indel']:,} indels)."
+                f" ({summary['n_snv']:,} SNVs, {summary['n_indel']:,} indels)"
+                + (
+                    f" without the {len(cell_lines)} cell-line"
+                    f" child{'ren' if len(cell_lines) > 1 else ''}"
+                    f" ({', '.join(c['child'] for c in cell_lines)}), left out of"
+                    " the comparison with the literature"
+                    if cell_lines
+                    else ""
+                )
+                + "."
                 + (f" Masks {masks}." if masks else "")
                 + f" Median callable unmasked genome {summary['callable_gb_median'] or 0:.2f} Gb."
-            ).classes("text-xs text-gray-500")
+            ).classes("text-xs text-gray-500").mark("denovo-cohort-note")
 
             _render_references(summary)
 
@@ -284,7 +301,10 @@ def _render_references(summary: Dict[str, Any]) -> None:
 
 def _render_children(cohort: Any, children: List[Dict[str, Any]]) -> None:
     ui.label("Children").classes("text-base font-semibold text-blue-700 mt-4")
-    rows = sorted(children, key=lambda c: (c["qc"] == "ok", -(c["rate_per_gb"] or 0)))
+    rows = sorted(
+        children,
+        key=lambda c: (c["qc"] == "ok" and not c["qc_flags"], -(c["rate_per_gb"] or 0)),
+    )
     with _box():
         DataTable(
             columns=[
@@ -320,6 +340,23 @@ def _render_children(cohort: Any, children: List[Dict[str, Any]]) -> None:
                 {"id": "n_child_mosaic", "header": "Mosaic?", **_NUM},
                 {"id": "n_sib_shared", "header": "Sib. shared", **_NUM},
                 {"id": "callable_gb", "header": "Callable Gb", **_NUM},
+                {"id": "expected_germline_share", "header": "Germline share", **_NUM},
+                {"id": "paternal_p", "header": "Paternal p", **_NUM},
+                {"id": "spectrum_cosine", "header": "Spectrum cos.", **_NUM},
+                {
+                    "id": "qc_flags",
+                    "header": "QC flags",
+                    "cellType": "badge_list",
+                    "badgesField": "QcFlagBadges",
+                    "sortable": True,
+                },
+                {
+                    "id": "seq_class",
+                    "header": "Class",
+                    "cellType": "badge_list",
+                    "badgesField": "SeqClassBadges",
+                    "sortable": True,
+                },
                 {"id": "sampleqc_flags", "header": "Sample QC flags", "sortable": True},
             ],  # fmt: skip
             rows=rows,
@@ -330,7 +367,11 @@ def _render_children(cohort: Any, children: List[Dict[str, Any]]) -> None:
         "Strict, SNVs, Indels, Per Gb, Ti and Paternal: strict candidates on the"
         " autosomes (Paternal: share of the phased ones). Parent alt, Mosaic? and"
         " Sib. shared: candidates carrying the flag, strict or not. QC: the"
-        " pipeline's verdict on the strict rate."
+        " pipeline's verdict on the strict rate, against the children of the same"
+        " class (read length and library) when the cohort has a genome QC."
+        " Germline share, Paternal p and Spectrum cos.: the pipeline's checks of"
+        " whether the strict SNVs are germline (paternal share against the"
+        " reference's, about 0.77; spectrum against the reference's)."
     ).classes("text-xs text-gray-500")
 
 

@@ -56,8 +56,12 @@ _STRING_COLUMNS = (
     "family_id", "child", "father", "mother", "child_sex", "chrom", "ref", "alt",
     "var_type", "inheritance_model", "genes", "consequences", "wombat_child_gt",
     "sibs_called", "sibs_with_alt", "origin", "origin_status", "flags", "strict",
-    "callable_status", "sampleqc_flags", "qc_reference", "qc",
+    "callable_status", "sampleqc_flags", "qc_reference", "qc", "seq_class",
+    "genomeqc_flags", "qc_flags",
 )  # fmt: skip
+
+#: The genome QC's cell-line flag, in ``qc_flags`` and ``genomeqc_flags``.
+CELL_LINE = "CELL_LINE"
 
 
 def _load_config() -> Dict[str, Any]:
@@ -175,7 +179,39 @@ def qc_info(value: Optional[str]) -> Dict[str, str]:
 
 
 def qc_reference_text(value: Optional[str]) -> str:
-    return (_CONFIG.get("qc_reference") or {}).get(value or "", value or "")
+    """The reference a child's QC range comes from, worded.
+
+    ``cohort:<seq_class>`` (the genome QC's class) names the class.
+    """
+    texts = _CONFIG.get("qc_reference") or {}
+    if value and value.startswith("cohort:") and "cohort_class" in texts:
+        from .genome_qc import seq_class_info
+
+        cls = seq_class_info(value.split(":", 1)[1])["label"]
+        return texts["cohort_class"].format(cls=cls)
+    return texts.get(value or "", value or "")
+
+
+def qc_flag_badges(value: Any) -> List[Dict[str, str]]:
+    """``badge_list`` entries of a ``qc_flags`` cell; unknown codes raw, grey."""
+    out = []
+    for code in split_flags(value):
+        entry = _entry("qc_flags", code)
+        out.append(
+            {
+                "label": entry.get("label", code),
+                "color": entry.get("color", _GREY),
+                "tooltip": entry.get("tooltip", ""),
+            }
+        )
+    return out
+
+
+def is_cell_line(q: Dict[str, Any]) -> bool:
+    """Whether a QC row's child is a cell line (its own or the genome QC's flag)."""
+    return CELL_LINE in split_flags(q.get("qc_flags")) or CELL_LINE in split_flags(
+        q.get("genomeqc_flags")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -415,11 +451,15 @@ def load_child_qc(
 
 
 def qc_alerts(qc_rows: Iterable[Dict[str, Any]]) -> List[Tuple[str, str]]:
-    """``(child, verdict)`` of the children whose de novo QC is not ``ok``."""
+    """``(child, verdict)`` of the children whose de novo QC needs a look.
+
+    A verdict other than ``ok``, or a ``qc_flags`` entry: a polyclonal cell
+    line can have a normal count and still be one.
+    """
     return [
-        (str(q.get("child")), str(q.get("qc")))
+        (str(q.get("child")), str(q.get("qc") or ""))
         for q in qc_rows
-        if q.get("qc") and q.get("qc") != "ok"
+        if (q.get("qc") and q.get("qc") != "ok") or split_flags(q.get("qc_flags"))
     ]
 
 
@@ -779,9 +819,65 @@ def child_rows(
                 "qc_high": _float(q.get("qc_high")),
                 "qc_reference": q.get("qc_reference"),
                 "sampleqc_flags": q.get("sampleqc_flags") or "",
+                # The pipeline's germline checks, against the child's class
+                # (cohort table, with the genome QC samples table).
+                "seq_class": q.get("seq_class") or "",
+                "SeqClassBadges": _seq_class_badges(q.get("seq_class")),
+                "genomeqc_flags": q.get("genomeqc_flags") or "",
+                "qc_flags": q.get("qc_flags") or "",
+                "QcFlagBadges": qc_flag_badges(q.get("qc_flags")),
+                "cell_line": is_cell_line(q),
+                "n_phased_strict_snv": _int(q.get("n_phased_strict_snv")),
+                "paternal_share_snv": _float(q.get("paternal_share")),
+                "paternal_p": _float(q.get("paternal_p")),
+                "spectrum_cosine": _float(q.get("spectrum_cosine")),
+                "expected_germline_share": _float(q.get("expected_germline_share")),
+                "indel_per_snv": _float(q.get("indel_per_snv")),
+                "indel_1bp_share": _float(q.get("indel_1bp_share")),
             }
         )
     return out
+
+
+def _seq_class_badges(value: Optional[str]) -> List[Dict[str, str]]:
+    if not value:
+        return []
+    from .genome_qc import seq_class_info
+
+    info = seq_class_info(value)
+    return [
+        {"label": info["label"], "color": info["color"], "tooltip": info["explain"]}
+    ]
+
+
+def germline_text(q: Dict[str, Any]) -> str:
+    """The pipeline's germline checks of one QC row, in a sentence; ``""`` without.
+
+    The expected germline share only for a high count or a flagged child.
+
+    E.g. ``expected germline share 4%; paternal 47% of 522 phased strict SNVs
+    (p = 1.2e-42); spectrum cosine 0.88``.
+    """
+    parts = []
+    share = _float(q.get("expected_germline_share"))
+    # The share answers "how much of an excess is germline": shown for a high
+    # count or a flagged child only. Within the range, a child above the
+    # median would read as partly somatic.
+    excess = q.get("qc") == "high" or bool(split_flags(q.get("qc_flags")))
+    if share is not None and share < 1 and excess:
+        parts.append(f"expected germline share {share:.0%}")
+    paternal = _float(q.get("paternal_share"))
+    phased = _int(q.get("n_phased_strict_snv"))
+    if paternal is not None and phased:
+        text = f"paternal {paternal:.0%} of {phased} phased strict SNVs"
+        p = _float(q.get("paternal_p"))
+        if p is not None:
+            text += f" (p = {p:.2g})"
+        parts.append(text)
+    cosine = _float(q.get("spectrum_cosine"))
+    if cosine is not None:
+        parts.append(f"spectrum cosine {cosine:.2f}")
+    return "; ".join(parts)
 
 
 def _median(values: Iterable[Optional[float]]) -> Optional[float]:

@@ -166,3 +166,45 @@ async def test_cohort_tab_disabled_without_tables(user, data_dir):
         t for t in user.find(ui.tab).elements if t.props.get("name") == "De novo"
     )
     assert tab.props.get("disable") is True
+
+
+async def test_cell_line_child_gets_the_banner(user, data_dir, monkeypatch):
+    # S3 a cell line, its count high and not germline-like (genome QC).
+    datagen.add_denovo_calls(data_dir, validation=False, genome_qc=True)
+    _explain_not_parent(data_dir)
+    await login(user, "curator")
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Wombat Configuration: rare_denovo", retries=30)
+    await user.should_see(marker="denovo-germline-banner", retries=10)
+    await user.should_see("S3: DNA from a cell line (expected germline share 4%")
+    await user.should_see("Cell line", retries=5)
+    badge = user.find(marker="denovo-qc-badge").elements.pop()
+    assert badge.text == "De novo QC: S3"
+
+
+async def test_cohort_tab_leaves_cell_lines_out_of_the_literature(
+    user, data_dir, monkeypatch
+):
+    datagen.add_denovo_calls(data_dir, validation=False, genome_qc=True)
+    await login(user, "curator")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO?tab=denovo")
+    await user.should_see(marker="denovo-references", retries=30)
+    children = next(t for t in tables if "n_strict" in t["columns"])
+    (row,) = children["rows"]
+    assert row["cell_line"] and row["qc_flags"] == "CELL_LINE,NOT_GERMLINE_LIKE"
+    assert {"qc_flags", "seq_class", "expected_germline_share"} <= set(
+        children["columns"]
+    )
+    # The only child is a cell line: nothing left to compare with the
+    # literature, and the note says why.
+    note = user.find(marker="denovo-cohort-note").elements.pop().text
+    assert "without the 1 cell-line child (S3)" in note
+    assert "0 strict on the autosomes" in note
+    chart = next(
+        c
+        for c in user.find(ui.echart).elements
+        if c.options["title"]["text"] == "Strict candidates per callable Gb"
+    )
+    assert chart.options["series"][0]["data"][0]["itemStyle"]["color"] == "#880e4f"
+    assert "purple: cell lines" in chart.options["title"]["subtext"]

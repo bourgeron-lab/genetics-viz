@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - for curators, links to each sample's samtools stats.
   - **A cell line stays visible after review.** The family header gets a "Cell line: <sample>" badge, and the section opens with a warning: the inherited genotypes are sound; de novo calls, UPD isodisomies and CNVs need confirmation on primary DNA. Acknowledging the flag takes it out of the counts, not this warning.
   - **Readers** get no EBV column or chart. `CELL_LINE` reads "DNA from a cell line", `EBV_TRACE` "Atypical DNA signal".
+- **The de novo views read the denovo step's germline checks** (its cohort QC table, once the cohort has a genome QC). Each child is held to the children of its read length and library class, and gets:
+  - `paternal_share` of its phased strict SNVs with a binomial p against the reference (germline mutations are about 77% paternal; a cell line's somatic calls phase half and half);
+  - its spectrum cosine;
+  - an expected germline share;
+  - `qc_flags`: `CELL_LINE`, `NOT_GERMLINE_LIKE`, `SPECTRUM_OFF`.
+
+  Where they show:
+  - **SNVs/Indels → De novo**: a red banner for a cell-line or not-germline-like child, with the checks (e.g. "expected germline share 4%; paternal 47% of 522 phased strict SNVs (p = 1.2e-42)"). The table stays: inherited calls are sound, and a candidate that matters can be confirmed on primary DNA. The per-child summary gains a "Germline checks" column. The expected germline share is shown only for a high count or a flagged child.
+  - **The family header's "De novo QC" badge** also lights for a flagged child whose count is in range: a polyclonal cell line can have a normal count.
+  - **The cohort De novo tab** leaves cell-line children out of the comparison with the literature, and says so. Their bars in the rate chart are purple. The rate axis is set on the other children: on dataset_paper_20251010, C0011HW (AU-RD-DED-057) at 651 per Gb had flattened 653 children with a median near 28. The QC range lines are drawn only when the children shown share one class. The children's table and export gain the class, the QC flags, the germline share, the paternal p and the spectrum cosine.
+  - On CANDY_mpx_ghent (all `rl150`, no flag): C0XYE9X (88171200006) has 93% paternal of 27 phased strict SNVs, p = 0.098, cosine 0.98.
 
 ### Fixed
 - **The family Issues table sent each flag's evidence to readers' browsers.** The Evidence column was hidden for them, but its text (e.g. "S1 is not the father of S3") was still in the table's data. It is now left out of readers' rows.

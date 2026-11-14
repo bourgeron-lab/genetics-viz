@@ -129,11 +129,59 @@ def render_denovo_filter(
                         ).props("dense no-caps size=sm").mark(f"denovo-flag-{flag}")
 
 
+def render_germline_banner(qc_rows: List[Dict[str, Any]]) -> None:
+    """A warning per child whose strict candidates may not be germline.
+
+    A cell line (``CELL_LINE``) or a high count that does not phase like
+    germline mutations (``NOT_GERMLINE_LIKE``). The table stays: inherited
+    calls are sound, and a candidate that matters can be confirmed on primary
+    DNA.
+    """
+    alerts = [
+        q
+        for q in qc_rows
+        if {"CELL_LINE", "NOT_GERMLINE_LIKE"}
+        & set(denovo.split_flags(q.get("qc_flags")))
+        or denovo.is_cell_line(q)
+    ]
+    if not alerts:
+        return
+    with (
+        ui.row()
+        .classes(
+            "w-full items-start gap-2 p-3 mt-2 rounded border border-red-300"
+            " bg-red-50 no-wrap"
+        )
+        .mark("denovo-germline-banner")
+    ):
+        ui.icon("biotech", color="red-8").classes("mt-0.5")
+        with ui.column().classes("gap-0 min-w-0 flex-1"):
+            for q in alerts:
+                what = (
+                    "DNA from a cell line"
+                    if denovo.is_cell_line(q)
+                    else "strict candidates not germline-like"
+                )
+                checks = denovo.germline_text(q)
+                ui.label(
+                    f"{q.get('child')}: {what}"
+                    + (f" ({checks})" if checks else "")
+                    + "."
+                ).classes("font-semibold text-red-900")
+            ui.label(
+                "Many of the strict candidates may be somatic mutations (of the"
+                " culture, for a cell line), one by one indistinguishable from"
+                " germline ones. Confirm any candidate that matters on primary DNA"
+                " (blood or saliva); inherited calls are not affected."
+            ).classes("text-sm text-red-900")
+
+
 def render_child_summary(data: DenovoData, members: List[str]) -> None:
-    """One line per child: candidates, strict, rate, QC, origins."""
+    """One line per child: candidates, strict, rate, QC, origins, germline checks."""
     rows = [q for q in data.qc_rows() if q.get("child") in members] or data.qc_rows()
     if not rows:
         return
+    render_germline_banner(rows)
     with (
         ui.element("div")
         .classes("w-full mt-2 rounded border border-gray-200 bg-gray-50 p-2")
@@ -152,12 +200,15 @@ def render_child_summary(data: DenovoData, members: List[str]) -> None:
                 )
         header = [
             "Child", "Candidates", "Strict (SNV / indel)", "Strict per Gb",
-            "QC", "Paternal / maternal", "Sibling shared",
+            "QC", "Paternal / maternal", "Sibling shared", "Germline checks",
         ]  # fmt: skip
         with (
             ui.element("div")
             .classes("grid gap-x-4 gap-y-0.5 text-sm mt-1")
-            .style("grid-template-columns: repeat(7, max-content)")
+            .style(
+                # The germline checks wrap rather than run past the card.
+                "grid-template-columns: repeat(7, max-content) minmax(12rem, 1fr)"
+            )
         ):
             for h in header:
                 ui.label(h).classes("text-xs font-semibold text-gray-500")
@@ -182,12 +233,29 @@ def render_child_summary(data: DenovoData, members: List[str]) -> None:
                     if q.get("sampleqc_flags"):
                         tip += f" Sample QC: {q.get('sampleqc_flags')}."
                     ui.badge(info["label"], color=info["color"]).tooltip(tip).classes(
-                        "w-fit"
+                        "w-fit self-start"
                     ).mark(f"denovo-qc-{q.get('child')}")
                 else:
                     ui.label("–").tooltip("The QC verdict is in the cohort table")
                 ui.label(f"{q.get('n_paternal') or 0} / {q.get('n_maternal') or 0}")
                 ui.label(str(q.get("n_sib_shared") or 0))
+                with ui.row().classes("gap-1 items-center min-w-0"):
+                    for b in denovo.qc_flag_badges(q.get("qc_flags")):
+                        ui.badge(b["label"], color=b["color"]).tooltip(b["tooltip"])
+                    checks = denovo.germline_text(q)
+                    cls = q.get("seq_class")
+                    if checks or cls:
+                        ui.label(checks or "–").classes(
+                            "text-xs text-gray-600"
+                        ).tooltip(
+                            "The pipeline's checks against the children of the same"
+                            " read length and library"
+                            + (f" ({cls})" if cls else "")
+                            + ": germline mutations are about 80% paternal and have"
+                            " the cohort's spectrum."
+                        )
+                    elif not denovo.qc_flag_badges(q.get("qc_flags")):
+                        ui.label("–").classes("text-gray-500")
 
 
 def _row_text(r: Dict[str, Any]) -> str:
@@ -283,7 +351,16 @@ def render_denovo_qc_badge(
     alerts = denovo.qc_alerts(qc_rows)
     if not alerts:
         return
-    worst = "high" if any(v == "high" for _, v in alerts) else alerts[0][1]
+    flagged = any(
+        denovo.split_flags(q.get("qc_flags"))
+        for q in qc_rows
+        if str(q.get("child")) in {c for c, _ in alerts}
+    )
+    worst = (
+        "high"
+        if flagged or any(v == "high" for _, v in alerts)
+        else next((v for _, v in alerts if v and v != "ok"), "high")
+    )
     info = denovo.qc_info(worst)
     lines = []
     for child, verdict in alerts:
@@ -291,12 +368,17 @@ def render_denovo_qc_badge(
         rate = q.get("rate_per_gb")
         low, high = q.get("qc_low"), q.get("qc_high")
         text = f"{child}: {denovo.qc_info(verdict)['label']}"
+        codes = [b["label"] for b in denovo.qc_flag_badges(q.get("qc_flags"))]
+        if codes:
+            text += f" ({', '.join(codes)})"
         if isinstance(rate, (int, float)):
             text += f", {rate:.1f} strict per Gb"
         if isinstance(low, (int, float)) and isinstance(high, (int, float)):
             text += f" (range {low:.1f}–{high:.1f})"
         if q.get("sampleqc_flags"):
             text += f"; Sample QC: {q.get('sampleqc_flags')}"
+        if denovo.germline_text(q):
+            text += f"; {denovo.germline_text(q)}"
         lines.append(text)
     badge = (
         ui.badge(f"De novo QC: {', '.join(c for c, _ in alerts)}", color=info["color"])
@@ -304,7 +386,8 @@ def render_denovo_qc_badge(
         .mark("denovo-qc-badge")
     )
     badge.tooltip(
-        "Strict de novo count out of range (open SNVs/Indels):\n" + "\n".join(lines)
+        "Strict de novo count out of range, or not germline-like (open"
+        " SNVs/Indels):\n" + "\n".join(lines)
     ).props("max-width=40rem").classes("whitespace-pre-line")
     if on_click is not None:
         badge.on("click", lambda: on_click())
