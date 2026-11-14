@@ -179,7 +179,35 @@ qc:
 
 qc_reference:
   cohort: "the cohort (median ± 4 scaled MADs)"
+  # cohort:<seq_class>, from genomeqc: the class is worded by config/genome_qc.yaml.
+  cohort_class: "the cohort's {cls} children (median ± 4 scaled MADs, cell lines left out)"
   fixed: "the fixed range (fewer than 20 children)"
+
+# Per-child flags of the cohort QC table (qc_flags), from the genome QC and
+# the germline checks: is the excess germline? A cell line's somatic calls
+# phase half to each parent, germline ones about 80% paternal.
+qc_flags:
+  CELL_LINE:
+    label: "Cell line"
+    color: "#880e4f"
+    tooltip: >-
+      DNA from an EBV-transformed cell line (genome QC). Its strict candidates
+      may be somatic mutations of the culture, indistinguishable one by one
+      from germline ones: confirm any that matters on primary DNA. Left out of
+      the cohort's reference range and of the literature comparison.
+  NOT_GERMLINE_LIKE:
+    label: "Not germline-like"
+    color: "#c62828"
+    tooltip: >-
+      A high count whose phased strict SNVs are much less often paternal than
+      the reference's (p < 0.001 over 20 phased SNVs or more): most of the
+      excess is not germline. A cell line, or another source of somatic calls.
+  SPECTRUM_OFF:
+    label: "Spectrum off"
+    color: "#ef6c00"
+    tooltip: >-
+      The six-class spectrum of the strict SNVs is unlike the reference's
+      (cosine under 0.85 over 30 SNVs or more). A weak signal on its own.
 
 # Literature reference values, read from the papers on 2026-11-14 (Zotero tag `de novo calling`).
 # Rates per callable Gb are per child (diploid) per Gb of haploid sequence: 2 × μ × 1e9, the unit

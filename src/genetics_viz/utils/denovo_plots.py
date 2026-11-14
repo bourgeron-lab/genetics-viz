@@ -15,6 +15,8 @@ _INDEL = "#ef6c00"
 _LIT = "rgba(46, 125, 50, 0.12)"
 _LIT_LINE = "#2e7d32"
 _QC_LINE = "#c62828"
+_CELL_LINE = "#880e4f"
+_CELL_LINE_INDEL = "#d81b60"
 
 
 def _label(c: Dict[str, Any]) -> str:
@@ -32,14 +34,28 @@ def rate_option(children: List[Dict[str, Any]]) -> Dict[str, Any]:
         key=lambda c: c["rate_per_gb"],
     )
     band = denovo.EXPECTED.get("snv_rate_per_gb") or []
-    low = next((c["qc_low"] for c in rows if c.get("qc_low") is not None), None)
-    high = next((c["qc_high"] for c in rows if c.get("qc_high") is not None), None)
+    # One QC range per class (genome QC): drawn only when the children shown
+    # share one, as a line across children of other classes would mislead.
+    ranges = {
+        (c.get("qc_low"), c.get("qc_high"))
+        for c in rows
+        if c.get("qc_low") is not None and c.get("qc_high") is not None
+    }
+    low, high = next(iter(ranges)) if len(ranges) == 1 else (None, None)
+    scale_rows = [c for c in rows if not c.get("cell_line")] or rows
+
+    def bar(c: Dict[str, Any], value: Any, color: str) -> Any:
+        # A cell line's bars in its own colour: its count is mostly somatic.
+        if not c.get("cell_line"):
+            return value
+        return {"value": value, "itemStyle": {"color": color}}
+
     snv_series: Dict[str, Any] = {
         "name": "SNVs",
         "type": "bar",
         "stack": "rate",
         "color": _SNV,
-        "data": [c["snv_per_gb"] for c in rows],
+        "data": [bar(c, c["snv_per_gb"], _CELL_LINE) for c in rows],
     }
     if len(band) == 2:
         snv_series["markArea"] = {
@@ -62,7 +78,7 @@ def rate_option(children: List[Dict[str, Any]]) -> Dict[str, Any]:
         "type": "bar",
         "stack": "rate",
         "color": _INDEL,
-        "data": [c["indel_per_gb"] for c in rows],
+        "data": [bar(c, c["indel_per_gb"], _CELL_LINE_INDEL) for c in rows],
     }
     if lines:
         indel_series["markLine"] = {
@@ -76,7 +92,13 @@ def rate_option(children: List[Dict[str, Any]]) -> Dict[str, Any]:
         "title": {
             "text": "Strict candidates per callable Gb",
             "subtext": "Autosomes, unmasked callable genome; green: published SNV"
-            " rate (2 × μ); red: the QC range",
+            " rate (2 × μ); red: the QC range"
+            + ("" if len(ranges) <= 1 else " (one per class: see the table)")
+            + (
+                "; purple: cell lines (their bars may run past the axis)"
+                if any(c.get("cell_line") for c in rows)
+                else ""
+            ),
             "left": "center",
             "textStyle": {"fontSize": 14},
         },
@@ -88,12 +110,21 @@ def rate_option(children: List[Dict[str, Any]]) -> Dict[str, Any]:
             "data": [_label(c) for c in rows],
             "axisLabel": {"rotate": 60, "fontSize": 10},
         },
-        # The QC lines may lie above every bar: the axis reaches them
+        # The QC lines may lie above every bar: the axis reaches them. Cell
+        # lines (up to 650 per Gb against a median of 28) would flatten the
+        # others: the axis is set on the rest, and their bars run past it.
         "yAxis": {
             "type": "value",
             "name": "per Gb",
             "max": round(
-                max([high or 0, *(c["rate_per_gb"] for c in rows), *band]) * 1.08
+                max(
+                    [
+                        high or 0,
+                        *(c["rate_per_gb"] for c in scale_rows),
+                        *band,
+                    ]
+                )
+                * 1.08
             ),
         },
         "series": [snv_series, indel_series],

@@ -166,3 +166,64 @@ def test_child_qc_alerts(data_dir, demo):
     assert denovo.qc_alerts(rows) == [("S3", "low")]
     # The family table has no verdict: no alert
     assert denovo.qc_alerts(denovo.load_child_qc(data_dir, "1001")) == []
+
+
+# ---------------------------------------------------------------------------
+# With the genome QC (ghfc-ngs genomeqc): classes, cell lines, germline checks
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def demo_gqc(data_dir):
+    """As ``demo``, the cohort QC table written with a genome QC: S3 a cell line."""
+    datagen.add_denovo_calls(data_dir, genome_qc=True)
+
+    class Demo:
+        name = "DEMO"
+        path = data_dir / "cohorts" / "DEMO"
+
+    return Demo()
+
+
+def test_child_rows_carry_the_germline_checks(data_dir, demo_gqc):
+    data = denovo.load_cohort_denovo(demo_gqc)
+    (child,) = denovo.child_rows(data)
+    assert child["qc"] == "high" and child["cell_line"]
+    assert child["seq_class"] == "rl150"
+    assert child["SeqClassBadges"][0]["label"] == "150 bp"
+    assert [b["label"] for b in child["QcFlagBadges"]] == [
+        "Cell line",
+        "Not germline-like",
+    ]
+    assert child["paternal_p"] == pytest.approx(1.2e-42)
+    assert child["expected_germline_share"] == 0.0424
+    assert child["n_phased_strict_snv"] == 522
+    # The app's own paternal share (all strict, recounted) stays apart from
+    # the pipeline's (strict SNVs only).
+    assert child["paternal_share"] == 1.0 and child["paternal_share_snv"] == 0.4713
+
+
+def test_germline_wording(data_dir, demo_gqc):
+    (q,) = denovo.load_child_qc(data_dir, "1001", demo_gqc)
+    assert denovo.is_cell_line(q)
+    assert denovo.germline_text(q) == (
+        "expected germline share 4%; paternal 47% of 522 phased strict SNVs"
+        " (p = 1.2e-42); spectrum cosine 0.88"
+    )
+    assert denovo.qc_reference_text("cohort:rl150") == (
+        "the cohort's 150 bp children (median ± 4 scaled MADs, cell lines left out)"
+    )
+    assert denovo.qc_reference_text("fixed").startswith("the fixed range")
+    assert denovo.qc_flag_badges("NEW_FLAG")[0]["label"] == "NEW_FLAG"
+    assert denovo.germline_text({}) == ""
+    # Within the range, no expected germline share (it would read as somatic)
+    ok = {**q, "qc": "ok", "qc_flags": None}
+    assert denovo.germline_text(ok).startswith("paternal 47%")
+
+
+def test_a_flag_alone_raises_the_alert():
+    # A polyclonal cell line can have a normal count: still an alert.
+    q = {"child": "S3", "qc": "ok", "qc_flags": "CELL_LINE"}
+    assert denovo.qc_alerts([q]) == [("S3", "ok")]
+    assert denovo.qc_alerts([{**q, "qc_flags": None}]) == []
+    assert denovo.is_cell_line({"genomeqc_flags": "EBV_TRACE,CELL_LINE"})

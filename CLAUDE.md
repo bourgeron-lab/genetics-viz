@@ -386,6 +386,14 @@ Config files (YAML) are loaded once at module level.
   - With the step's tables: `DenovoFilter` (link `wdm` strict|all, `wfh` flags hidden, `wfo` flags kept), Wombat exclusions off by default (`WombatFilters(exclusions=False)`, the link defaults follow), the "De novo View" preset.
   - The curation banner lists the rows the filters hide that are curated de novo (`is_curated_denovo`: validated present without an inherited mode, i.e. not paternal/maternal/either/homozygous, or with a diagnostic), and the family's `de novo` validations with no row at all.
   - The variant dialog gets the Python row (`view.row_for`), which holds `_dnm`.
+- **With a genome QC, the cohort QC table adds the germline checks** (`seq_class`, `genomeqc_flags`, `qc_reference` `cohort:<class>`, `paternal_share`/`paternal_p` of the strict SNVs, the spectrum and `spectrum_cosine`, the indel profile, `expected_germline_share`, `qc_flags`: `CELL_LINE`, `NOT_GERMLINE_LIKE`, `SPECTRUM_OFF`, worded in `denovo.yaml`).
+  - `child_rows` keeps the app's own `paternal_share` (all strict, recounted) and adds the pipeline's as `paternal_share_snv`.
+  - `germline_text` words the checks, the expected germline share only for a high count or a flagged child.
+  - `is_cell_line` reads both flag columns.
+  - No gate: a cell-line child keeps its table, with `render_germline_banner`.
+  - `qc_alerts` includes a flagged child whose count is in range.
+  - The cohort tab's literature comparison leaves cell lines out (none left: no comparison). The rate chart draws QC lines only for one shared range.
+  - Test data: `datagen.add_denovo_calls(…, genome_qc=True)` makes S3 a high, not-germline-like cell line.
 - **Cohort De novo tab** (`cohort_denovo_tab.py`): reads the cohort tables and the curation files off-thread and follows the individuals filter. The literature table is `references` in `config/denovo.yaml`, each `metric` a key of `denovo.cohort_summary`. Rates are per child per Gb of haploid callable unmasked sequence, the pipeline's `rate_per_gb`, so 2 × μ × 1e9. The values were read from the papers in Zotero on 2026-11-14; keep the sources with the numbers.
 - **The curation check** (`curation_check`): `hidden` = a non-strict candidate curated as de novo; `missing` = a `de novo` validation (present) of an assessed family with no candidate. It shows on the cohort tab, in its pill and in the family banner, for curators only.
 - **Badges**: the family SNVs/Indels badge counts strict (or not assessed) HIGH/MODERATE unvalidated candidates when the step ran (`denovo_to_review(…, cohort)`). The cohort De novo pills are QC high, QC low and curation issues (`denovo_cohort_status` off-thread, `denovo_cohort_pills`). The family header's "De novo QC" badge reads only the QC tables (`load_child_qc`).
