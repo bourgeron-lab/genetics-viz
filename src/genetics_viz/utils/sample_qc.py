@@ -248,9 +248,18 @@ def qc_path(directory: Path, prefix: str, label: str, kind: str) -> Path:
     return directory / f"{prefix}.{label}.{kind}.tsv"
 
 
+#: The ghfc-ngs step that writes these tables. ``genomeqc`` writes
+#: ``<prefix>.<label>.{samples,flags}.tsv`` in the same ``qc/`` directories,
+#: so a label is told apart by its ``inputs.tsv`` snapshot.
+QC_STEP = "sampleqc"
+
+
 def find_qc_labels(directory: Path, prefix: str) -> List[str]:
-    """Sites labels with a samples table in ``directory``, newest first."""
-    return find_labels(directory, prefix, "samples")
+    """Sites labels with a samples table in ``directory``, newest first.
+
+    Only ``sampleqc``'s: a ``genomeqc`` label in the same directory is left out.
+    """
+    return find_labels(directory, prefix, "samples", step=QC_STEP)
 
 
 def probe_qc_data(data_dir: Path, family_id: str) -> bool:

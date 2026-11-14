@@ -74,6 +74,23 @@ steps:
     note: >-
       Counts samples with a somalier extract; the family and cohort tables
       are not counted.
+  genomeqc:
+    label: "Genome QC (DNA and library)"
+    unit: "samples"
+    note: >-
+      Counts samples with a metrics table (EBV and mtDNA copies, read length,
+      chr20 alignment metrics); the family and cohort tables are not counted.
+  upd:
+    label: "UPD"
+    unit: "families"
+    note: >-
+      Counts families whose tables were built from the current snapshot.
+  denovo:
+    label: "De novo (SNVs and indels)"
+    unit: "families"
+    note: >-
+      Counts only families with a child whose two parents are in the
+      pedigree.
   snvs_cohort:
     label: "Cohort merge"
     unit: "cohort"

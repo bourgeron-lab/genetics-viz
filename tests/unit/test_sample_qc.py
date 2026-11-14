@@ -28,6 +28,22 @@ def test_discovery(data_dir):
     )
 
 
+def test_genomeqc_tables_beside_are_not_sample_qc(data_dir):
+    # genomeqc writes DEMO.gqc_v1.{samples,flags}.tsv in the same qc/
+    # directories, later: picked as the newest label, they hid every flag.
+    datagen.add_genomeqc_tables(data_dir)
+    cohort = Cohort(data_dir)
+    directory = qc.get_cohort_qc_dir(cohort)
+    assert qc.find_qc_labels(directory, "DEMO") == [datagen.QC_LABEL]
+    data = qc.load_cohort_qc(cohort)
+    assert data.label == datagen.QC_LABEL and data.labels == [datagen.QC_LABEL]
+    assert "CRYPTIC_RELATED" in {f.code for f in data.flags}
+    assert data.pair_rows()
+    assert qc.find_qc_labels(qc.get_family_qc_dir(data_dir, "1001"), "1001") == [
+        datagen.QC_LABEL
+    ]
+
+
 def test_dotted_label_is_kept_whole(tmp_path):
     (tmp_path / "F1.somalier.hg38.v2.samples.tsv").write_text("family_id\tsample\n")
     assert qc.find_qc_labels(tmp_path, "F1") == ["somalier.hg38.v2"]

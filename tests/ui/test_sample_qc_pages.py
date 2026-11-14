@@ -173,6 +173,21 @@ async def test_cohort_qc_panel_follows_the_filters(user, monkeypatch):
     assert {r["sample"] for r in flagged["rows"]} == {"S5"}
 
 
+async def test_cohort_qc_panel_ignores_genomeqc_tables(user, monkeypatch, data_dir):
+    # The genomeqc step's tables sit beside sampleqc's, newer: the panel must
+    # keep reading the somalier ones (flags, cross-family pairs).
+    datagen.add_genomeqc_tables(data_dir)
+    await login(user, "curator")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Sample QC")
+    await user.should_see("5 of 6 shown individuals checked", retries=30)
+    await user.should_see("2 related pair(s) across families", retries=10)
+    flagged = [t for t in tables if "issues" in t["columns"]][-1]
+    assert {r["sample"] for r in flagged["rows"]} == {"S1", "S3", "S5"}
+
+
 async def test_cohort_table_qc_column_filters(user, monkeypatch):
     await login(user, "reader")
     tables = capture_tables(monkeypatch)
