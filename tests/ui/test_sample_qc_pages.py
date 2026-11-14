@@ -133,7 +133,7 @@ async def test_denovo_config_carries_the_qc_warning(user, monkeypatch):
     await user.should_see("Wombat Configuration: default", retries=30)
     await user.should_not_see("de novo calls of this family may be unreliable")
     built = len(tables)
-    open_tab(user, "wombat-subtabs", "rare_denovo")
+    open_tab(user, "wombat-subtabs", "denovo")
     await user.should_see("de novo calls of this family may be unreliable", retries=30)
     await user.should_see("Not the declared parent", retries=10)
     await user.should_see(marker="denovo-held")
@@ -338,8 +338,8 @@ async def test_denovo_warning_drops_explained_flags_only(user, data_dir):
     )  # fmt: skip
     await login(user, "curator")
     await user.open("/cohort/DEMO/family/1001")
-    await user.should_see("Wombat Configuration: default", retries=30)
-    open_tab(user, "wombat-subtabs", "rare_denovo")
+    # Not held back: the De novo sub-tab is the first one shown
+    await user.should_see("Wombat Configuration: rare_denovo", retries=30)
     await user.should_see("de novo calls of this family may be unreliable", retries=30)
     await user.should_see("Confirmed issue by curator", retries=10)
     # Contamination warns but does not hold the table back
@@ -364,8 +364,6 @@ async def test_denovo_warning_gone_when_every_flag_is_explained(user, data_dir):
     await login(user, "curator")
     await user.open("/cohort/DEMO/family/1001")
     await user.should_see("QC ok", retries=10)
-    await user.should_see("Wombat Configuration: default", retries=30)
-    open_tab(user, "wombat-subtabs", "rare_denovo")
     await user.should_see("Wombat Configuration: rare_denovo", retries=30)
     await user.should_not_see("de novo calls of this family may be unreliable")
 

@@ -13,6 +13,7 @@ from genetics_viz.components.header import create_header
 from genetics_viz.components.family_tabs import (
     TAB_LABELS,
     TAB_SLUGS,
+    canonical_tab,
     family_tab_bar,
 )
 from genetics_viz.components.tab_badge import family_review_badges
@@ -403,7 +404,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
             upd_review: Dict[str, Any] = {"open": None, "pending": None}
 
             tab_has_data = {
-                "wombat": True,
+                "snvs": True,
                 "svs": True,
                 "ancestry": has_ancestry,
                 "pgs": has_pgs,
@@ -414,7 +415,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
             }
             # A tab without data is disabled
             tabs, tab_by_slug = family_tab_bar(tab_has_data)
-            wombat_tab = tab_by_slug["wombat"]
+            wombat_tab = tab_by_slug["snvs"]
             svs_tab = tab_by_slug["svs"]
             ancestry_tab = tab_by_slug["ancestry"]
             pgs_tab = tab_by_slug["pgs"]
@@ -431,8 +432,8 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
             )
 
             # A shared link opens its tab, when the family has its data
-            linked_tab = link.get("tab") or ""
-            open_tab = linked_tab if tab_has_data.get(linked_tab) else "wombat"
+            linked_tab = canonical_tab(link.get("tab"))
+            open_tab = linked_tab if tab_has_data.get(linked_tab) else "snvs"
             if open_tab == "upd":
                 upd_review["pending"] = parse_upd_link(link.get("upd"))
 
@@ -452,9 +453,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                                 data_table_refreshers=data_table_refreshers,
                                 family=family,
                                 link=link,
-                                on_review_changed=_badge_refresh(
-                                    review_badges, "wombat"
-                                ),
+                                on_review_changed=_badge_refresh(review_badges, "snvs"),
                             )
                         else:
                             with ui.column().classes(
@@ -702,7 +701,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
             }
 
             def on_tab_change(e):
-                link.set("tab", TAB_SLUGS.get(e.args), default="wombat")
+                link.set("tab", TAB_SLUGS.get(e.args), default="snvs")
                 link.push()
                 entry = lazy_tabs.get(e.args)
                 if entry is None:
@@ -724,7 +723,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                 if not has_upd:
                     return
                 tabs.set_value(upd_tab)
-                link.set("tab", "upd", default="wombat")
+                link.set("tab", "upd", default="snvs")
                 link.push()
                 if upd_state["loaded"] and upd_review["open"] is not None:
                     upd_review["open"](sample, chrom)
@@ -739,7 +738,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                     ui.timer(0.1, load_upd, once=True)
 
             # The linked tab loads as a click on it would
-            if open_tab != "wombat":
+            if open_tab != "snvs":
                 _, state, content = lazy_tabs[TAB_LABELS[open_tab]]
 
                 def load_linked():

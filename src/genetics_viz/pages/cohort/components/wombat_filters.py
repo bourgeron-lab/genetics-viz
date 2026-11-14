@@ -40,9 +40,12 @@ def _flag(value: bool) -> Dict[str, bool]:
 class WombatFilters:
     """One config's filters. ``{"value": ...}`` dicts, as the menus take them.
 
-    The exclusions are on by default; every consequence and validation
-    status is selected, and no geneset.
+    The exclusions are on by default (``exclusions``), off on the De novo
+    sub-tab with the denovo step's tables, whose masks replace them; every
+    consequence and validation status is selected, and no geneset.
     """
+
+    exclusions: bool = True
 
     exclude_lcr: Dict[str, bool] = field(default_factory=lambda: _flag(True))
     exclude_gnomad: Dict[str, bool] = field(default_factory=lambda: _flag(True))
@@ -55,17 +58,21 @@ class WombatFilters:
         default_factory=lambda: {"value": list(FILTER_STATUSES)}
     )
 
+    def __post_init__(self) -> None:
+        for state in (self.exclude_lcr, self.exclude_gnomad, self.exclude_mnv):
+            state["value"] = self.exclusions
+
 
 #: Link keys of the shown config's filters, prefixed ``w`` (Wombat tab).
 LINK_KEYS = ("wlcr", "wgnomad", "wmnv", "wgs", "wimp", "wval")
 
 
-def filters_from_link(link: PageLink) -> WombatFilters:
+def filters_from_link(link: PageLink, exclusions: bool = True) -> WombatFilters:
     """The filters a shared link sets; defaults for what it leaves out."""
-    filters = WombatFilters()
-    filters.exclude_lcr["value"] = link.get_bool("wlcr", True)
-    filters.exclude_gnomad["value"] = link.get_bool("wgnomad", True)
-    filters.exclude_mnv["value"] = link.get_bool("wmnv", True)
+    filters = WombatFilters(exclusions=exclusions)
+    filters.exclude_lcr["value"] = link.get_bool("wlcr", exclusions)
+    filters.exclude_gnomad["value"] = link.get_bool("wgnomad", exclusions)
+    filters.exclude_mnv["value"] = link.get_bool("wmnv", exclusions)
     if (genesets := link.get_list("wgs")) is not None:
         filters.genesets["value"] = genesets
     if (impacts := link.get_list("wimp")) is not None:
@@ -77,9 +84,10 @@ def filters_from_link(link: PageLink) -> WombatFilters:
 
 def filters_to_link(filters: WombatFilters, link: PageLink) -> None:
     """Write the filters into the link, leaving defaults out."""
-    link.set("wlcr", filters.exclude_lcr["value"], default=True)
-    link.set("wgnomad", filters.exclude_gnomad["value"], default=True)
-    link.set("wmnv", filters.exclude_mnv["value"], default=True)
+    default = filters.exclusions
+    link.set("wlcr", filters.exclude_lcr["value"], default=default)
+    link.set("wgnomad", filters.exclude_gnomad["value"], default=default)
+    link.set("wmnv", filters.exclude_mnv["value"], default=default)
     link.set("wgs", filters.genesets["value"], default=[])
     impacts = filters.impacts["value"]
     link.set(

@@ -78,7 +78,7 @@ async def test_address_bar_follows_the_view(user, monkeypatch):
     await user.should_see("Wombat Configuration: default", retries=30)
     open_tab(user, "family-tabs", "ROH")
     await wait_for(lambda: pushed and pushed[-1].endswith("?tab=roh"))
-    open_tab(user, "family-tabs", "Wombat")
+    open_tab(user, "family-tabs", "SNVs/Indels")
     await wait_for(lambda: pushed[-1] == "/cohort/DEMO/family/1001")
     open_tab(user, "wombat-subtabs", "strict")
     await wait_for(lambda: pushed[-1].endswith("?wcfg=strict"))

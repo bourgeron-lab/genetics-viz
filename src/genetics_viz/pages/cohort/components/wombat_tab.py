@@ -1,8 +1,16 @@
-"""Wombat tab component for family page.
+"""SNVs/Indels tab of the family page (Wombat results).
 
-One sub-tab per Wombat config of the family, each built when first shown:
-the rows and columns come from ``wombat_rows``, the filters from
-``wombat_filters``, the Stats dialog from ``wombat_stats``.
+A De novo sub-tab first, then one sub-tab per other Wombat config of the
+family, each built when first shown: the rows and columns come from
+``wombat_rows``, the filters from ``wombat_filters``, the Stats dialog from
+``wombat_stats``.
+
+The De novo sub-tab shows the Wombat config the ``denovo`` step reads (its
+inputs name it; without the step, ``de_novo_mutations`` or the first
+``de_?novo`` config), that config's own sub-tab left out. With the step's
+tables each row carries its evidence and flags (``utils/denovo.py``), the
+Strict filter is on, and the Wombat exclusions (LCR, gnomAD, MNV) are off:
+the step's masks replace them. ``wombat_denovo`` draws its own parts.
 """
 
 from __future__ import annotations
@@ -47,6 +55,16 @@ from genetics_viz.pages.cohort.components.wombat_rows import (
     wombat_file_pattern,
 )
 from genetics_viz.pages.cohort.components.wombat_stats import show_wombat_stats_dialog
+from genetics_viz.pages.cohort.components.wombat_denovo import (
+    filter_from_link as denovo_filter_from_link,
+    filter_to_link as denovo_filter_to_link,
+    missing_validations,
+    render_child_summary,
+    render_curation_banner,
+    render_denovo_filter,
+)
+from genetics_viz.utils import denovo
+from genetics_viz.utils.denovo import DenovoData, DenovoFilter
 from genetics_viz.utils import gene_index
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.data import user_data_dirs
@@ -84,6 +102,11 @@ def probe_wombat_data(data_dir: Path, family_id: str) -> bool:
 
 #: Wombat configs whose calls are de novo mutations.
 _DENOVO_CONFIG = DENOVO_CONFIG
+
+#: The De novo sub-tab's name and link value (``wcfg``).
+DENOVO_TAB = "denovo"
+#: Its preset when the denovo step's evidence is there.
+_DENOVO_PRESET = "De novo View"
 
 
 @dataclass
@@ -187,6 +210,8 @@ class _Prepared:
     rows: List[Dict[str, Any]]
     unknown_consequences: Any
     unknown_clinvar: Any
+    #: Rows the denovo step has no evidence for (with its tables only).
+    not_assessed: int = 0
 
 
 @dataclass(frozen=True)
@@ -216,11 +241,13 @@ def _prepare(
     scope: _CountScope,
     gene_scorer: Any = None,
     load_counts: bool = False,
+    evidence: Optional[DenovoData] = None,
 ) -> _Prepared:
     """One row per variant and sample (other columns joined), badged.
 
     The cohort and all-cohort counts come from the gene index in memory;
     ``load_counts`` (off the event loop only) reads it from disk if need be.
+    ``evidence``: the denovo step's tables, joined on variant and child.
     """
     df = aggregate_by_variant(df)
     rows, unknown_consequences, unknown_clinvar = build_rows(
@@ -238,12 +265,18 @@ def _prepare(
         scope.cohort_size,
         scope.cohort in gene_index.indexed_cohorts(here),
     )
+    columns = list(df.columns)
+    not_assessed = 0
+    if evidence is not None:
+        not_assessed = denovo.add_evidence(rows, evidence)
+        columns += denovo.EVIDENCE_COLUMNS
     return _Prepared(
-        list(df.columns),
+        columns,
         "sample" in df.columns,
         rows,
         unknown_consequences,
         unknown_clinvar,
+        not_assessed,
     )
 
 
@@ -263,6 +296,8 @@ class _ConfigView:
     )
     table: Optional[DataTable] = None
     family: Optional[Family] = None
+    #: The De novo sub-tab's flag filter, with the denovo step's tables.
+    denovo: Optional[DenovoFilter] = None
 
     def row_for(self, sent: Dict[str, Any]) -> Dict[str, Any]:
         """The Python row of a row sent back by the table, else the one sent."""
@@ -302,19 +337,30 @@ class _WombatLink:
         self.current = shown
         self.views: Dict[str, _ConfigView] = {}
 
-    def initial_state(self, cfg: str) -> tuple[WombatFilters, Dict[str, Any]]:
-        """The filters and table state a config opens with.
+    def initial_state(
+        self, cfg: str, exclusions: bool = True, with_denovo: bool = False
+    ) -> tuple[WombatFilters, Dict[str, Any], Optional[DenovoFilter]]:
+        """The filters, table state and de novo filter a config opens with.
 
         The link's apply to the config it names, once: a config opened later
-        starts from the defaults.
+        starts from the defaults. ``exclusions``: the Wombat exclusions'
+        default; ``with_denovo``: the config has a de novo filter.
         """
         if self.link is not None and cfg == self.current and not self.views:
             page = self.link.get("wpage") or "0"
-            return filters_from_link(self.link), {
-                "sorting": decode_sorting(self.link.get("wsort")),
-                "page": int(page) if page.isdigit() else 0,
-            }
-        return WombatFilters(), {"sorting": [], "page": 0}
+            return (
+                filters_from_link(self.link, exclusions),
+                {
+                    "sorting": decode_sorting(self.link.get("wsort")),
+                    "page": int(page) if page.isdigit() else 0,
+                },
+                denovo_filter_from_link(self.link) if with_denovo else None,
+            )
+        return (
+            WombatFilters(exclusions=exclusions),
+            {"sorting": [], "page": 0},
+            DenovoFilter() if with_denovo else None,
+        )
 
     def register(self, cfg: str, view: _ConfigView) -> None:
         self.views[cfg] = view
@@ -334,8 +380,10 @@ class _WombatLink:
         view = self.views.get(self.current)
         if view is None:
             self.link.drop(*LINK_KEYS, "wsort", "wpage")
+            denovo_filter_to_link(None, self.link)
         else:
             filters_to_link(view.filters, self.link)
+            denovo_filter_to_link(view.denovo, self.link)
             self.link.set("wsort", encode_sorting(view.table_state.get("sorting", [])))
             self.link.set("wpage", view.table_state.get("page", 0), default=0)
         self.link.push()
@@ -386,6 +434,27 @@ def render_wombat_tab(
     # tiers, GeneTrek's lists and the data directory's params/genesets/*.tsv
     available_genesets = geneset_sources(store.data_dir, get_gene_scorer())
 
+    # The denovo step's tables (the cohort's when as new: they know
+    # RECURRENT), and the Wombat config its De novo sub-tab shows.
+    cohort = getattr(store, "cohorts", {}).get(cohort_name) if cohort_name else None
+    try:
+        evidence = denovo.load_family_denovo(store.data_dir, family_id, cohort)
+    except Exception:
+        logger.warning(
+            "Failed to read the denovo tables of %s", family_id, exc_info=True
+        )
+        evidence = None
+    source = denovo.denovo_source(wombat_files, evidence)
+    if source is None:
+        evidence = None
+    # Sub-tab key -> Wombat file: De novo first, then every other config.
+    entries: Dict[str, Dict[str, Any]] = {}
+    if source is not None:
+        entries[DENOVO_TAB] = source
+    for wf in wombat_files:
+        if wf is not source:
+            entries[wf["wombat_config"]] = wf
+
     # De novo configs of a family whose Sample QC finds a wrong relationship
     # are held back: their table is mostly inherited variants read as de
     # novo, tens of thousands of rows. Only counted, loaded on request.
@@ -399,43 +468,58 @@ def render_wombat_tab(
     # Pre-load DataFrames to determine which configs have data
     config_dfs: Dict[str, pl.DataFrame] = {}
     held: Dict[str, int] = {}
-    for wf in wombat_files:
-        cname = wf["wombat_config"]
-        if held_back and _DENOVO_CONFIG.search(cname):
+    for key, wf in entries.items():
+        if held_back and _DENOVO_CONFIG.search(wf["wombat_config"]):
             n = count_rows(wf["file_path"])
             if n:
-                held[cname] = n
+                held[key] = n
             continue
         df = load_config_frame(wf["file_path"])
         if df is not None:
-            config_dfs[cname] = df
+            config_dfs[key] = df
+
+    def tab_label(key: str, n: int) -> str:
+        if key != DENOVO_TAB:
+            return f"{key} ({n})"
+        if evidence is not None and "strict" in evidence.dnm.columns:
+            strict = evidence.dnm.filter(pl.col("strict") == "yes").height
+            return f"De novo ({strict} strict / {evidence.dnm.height})"
+        return f"De novo ({n})"
 
     # Create subtabs — disable empty ones, add variant count badges
     with ui.tabs().classes("w-full").mark("wombat-subtabs") as wombat_subtabs:
         subtab_refs = {}
-        for wf in wombat_files:
-            cname = wf["wombat_config"]
-            if cname in config_dfs:
-                tab = ui.tab(cname, label=f"{cname} ({len(config_dfs[cname])})")
-            elif cname in held:
-                tab = ui.tab(cname, label=f"{cname} ({held[cname]})", icon="warning")
+        for key, wf in entries.items():
+            plain = "De novo" if key == DENOVO_TAB else key
+            if key in config_dfs:
+                tab = ui.tab(key, label=tab_label(key, len(config_dfs[key])))
+            elif key in held:
+                tab = ui.tab(key, label=f"{plain} ({held[key]})", icon="warning")
                 tab.tooltip("Not loaded: Sample QC finds a wrong relationship")
             else:
-                tab = ui.tab(cname, label=cname).props("disable")
-            subtab_refs[cname] = tab
+                tab = ui.tab(key, label=plain).props("disable")
+            if key == DENOVO_TAB:
+                tab.tooltip(
+                    f"Wombat {wf['wombat_config']}"
+                    + (
+                        f", with the denovo step's evidence ({evidence.label})"
+                        if evidence is not None
+                        else " (the denovo step has not run for this family)"
+                    )
+                )
+            subtab_refs[key] = tab
 
     # Pick first enabled sub-tab as default, a loaded one before a held one
     first_active_name = next(
-        (
-            wf["wombat_config"]
-            for wf in wombat_files
-            if wf["wombat_config"] in config_dfs
-        ),
-        next(iter(held), wombat_files[0]["wombat_config"]),
+        (key for key in entries if key in config_dfs),
+        next(iter(held), next(iter(entries))),
     )
-    # A shared link names the config to show, when it has variants
+    # A shared link names the config to show, when it has variants. An older
+    # link names the de novo config itself.
     default_cfg = first_active_name
     linked_cfg = link.get("wcfg") if link is not None else None
+    if source is not None and linked_cfg == source["wombat_config"]:
+        linked_cfg = DENOVO_TAB
     if linked_cfg in config_dfs or linked_cfg in held:
         first_active_name = linked_cfg
     first_active = subtab_refs[first_active_name]
@@ -451,10 +535,11 @@ def render_wombat_tab(
         link=_WombatLink(link, default_cfg, first_active_name),
         denovo_qc=denovo_qc,
         on_review_changed=on_review_changed,
+        evidence=evidence,
     )
 
     # Each sub-tab is built the first time it is shown, as the family page's
-    # tabs are: a config nobody opens costs nothing. Keyed by config name,
+    # tabs are: a config nobody opens costs nothing. Keyed by sub-tab name,
     # which is the tab name the "update:model-value" event reports.
     unbuilt_panels: Dict[str, tuple] = {}
 
@@ -463,10 +548,9 @@ def render_wombat_tab(
         .props("keep-alive")
         .classes("w-full")
     ):
-        for wf in wombat_files:
-            config_name = wf["wombat_config"]
-            with ui.tab_panel(subtab_refs[config_name]):
-                if config_name not in config_dfs and config_name not in held:
+        for key, wf in entries.items():
+            with ui.tab_panel(subtab_refs[key]):
+                if key not in config_dfs and key not in held:
                     ui.label("No variants found").classes("text-gray-500 italic mt-4")
                     continue
 
@@ -474,16 +558,16 @@ def render_wombat_tab(
                     with ui.column().classes("w-full items-center py-16"):
                         ui.spinner(size="xl", color="blue")
 
-            def build_panel(wf=wf, config_name=config_name) -> None:
-                if config_name in held:
-                    _render_held_panel(tab, wf, held[config_name])
+            def build_panel(wf=wf, key=key) -> None:
+                if key in held:
+                    _render_held_panel(tab, wf, held[key], key)
                 else:
-                    _render_config_panel(tab, wf, config_dfs[config_name])
+                    _render_config_panel(tab, wf, config_dfs[key], key)
 
-            unbuilt_panels[config_name] = (panel_slot, build_panel)
+            unbuilt_panels[key] = (panel_slot, build_panel)
 
-    def build_subtab(config_name: str) -> None:
-        entry = unbuilt_panels.pop(config_name, None)
+    def build_subtab(key: str) -> None:
+        entry = unbuilt_panels.pop(key, None)
         if entry is None:
             return
         panel_slot, build_panel = entry
@@ -516,13 +600,34 @@ class _Tab:
     denovo_qc: Optional[_DenovoQC]
     #: Called after a validation or diagnostic is saved: the tab's badge.
     on_review_changed: Optional[Callable[[], None]] = None
+    #: The denovo step's tables, for the De novo sub-tab.
+    evidence: Optional[DenovoData] = None
+
+    def evidence_for(self, key: str) -> Optional[DenovoData]:
+        return self.evidence if key == DENOVO_TAB else None
 
 
-def _render_config_panel(tab: _Tab, wf: Dict[str, Any], df: pl.DataFrame) -> None:
+def _render_denovo_header(tab: _Tab, key: str) -> None:
+    """Above the De novo table: the step's per-child summary, or its absence."""
+    if key != DENOVO_TAB:
+        return
+    if tab.evidence is None:
+        ui.label(
+            "The denovo step has not run for this family: no evidence, flags or"
+            " strict filter, only the Wombat de novo calls."
+        ).classes("text-sm text-gray-500 italic").mark("denovo-not-run")
+        return
+    render_child_summary(tab.evidence, tab.selected_members["value"])
+
+
+def _render_config_panel(
+    tab: _Tab, wf: Dict[str, Any], df: pl.DataFrame, key: str
+) -> None:
     """One config's sub-tab: the config card, the filters and the table."""
     if _DENOVO_CONFIG.search(wf["wombat_config"]) and tab.denovo_qc is not None:
         _render_denovo_qc_warning(tab.denovo_qc, tab.on_open_qc)
     _config_card(wf)
+    _render_denovo_header(tab, key)
     try:
         prepared = _prepare(
             df,
@@ -530,6 +635,7 @@ def _render_config_panel(tab: _Tab, wf: Dict[str, Any], df: pl.DataFrame) -> Non
             tab.family_id,
             tab.family,
             _count_scope(tab.store, tab.cohort_name),
+            evidence=tab.evidence_for(key),
         )
     except pl.exceptions.NoDataError:
         ui.label("No data available").classes("text-gray-500 italic mt-4")
@@ -537,18 +643,19 @@ def _render_config_panel(tab: _Tab, wf: Dict[str, Any], df: pl.DataFrame) -> Non
     except Exception as e:
         ui.label(f"Error reading file: {e}").classes("text-red-500 mt-4")
         return
-    _render_prepared(tab, wf, prepared)
+    _render_prepared(tab, wf, prepared, key)
 
 
 def _rows(n: int) -> str:
     return f"{n:,} row" + ("" if n == 1 else "s")
 
 
-def _render_held_panel(tab: _Tab, wf: Dict[str, Any], n_rows: int) -> None:
+def _render_held_panel(tab: _Tab, wf: Dict[str, Any], n_rows: int, key: str) -> None:
     """A de novo config held back by Sample QC: the warning, and Load anyway."""
     assert tab.denovo_qc is not None
     _render_denovo_qc_warning(tab.denovo_qc, tab.on_open_qc)
     _config_card(wf)
+    _render_denovo_header(tab, key)
     slot = ui.column().classes("w-full")
     with slot:
         with (
@@ -592,6 +699,7 @@ def _render_held_panel(tab: _Tab, wf: Dict[str, Any], n_rows: int) -> None:
                     scope,
                     scorer,
                     True,
+                    tab.evidence_for(key),
                 )
                 if df is not None
                 else None
@@ -607,21 +715,33 @@ def _render_held_panel(tab: _Tab, wf: Dict[str, Any], n_rows: int) -> None:
             if prepared is None:
                 ui.label("No variants found").classes("text-gray-500 italic mt-4")
             else:
-                _render_prepared(tab, wf, prepared)
+                _render_prepared(tab, wf, prepared, key)
 
     button.on_click(load_anyway)
 
 
-def _render_prepared(tab: _Tab, wf: Dict[str, Any], prepared: _Prepared) -> None:
-    """The filters and the table of a config whose rows are built."""
+def _render_prepared(
+    tab: _Tab, wf: Dict[str, Any], prepared: _Prepared, key: str
+) -> None:
+    """The filters and the table of a config whose rows are built.
+
+    ``key`` is the sub-tab's: the config name, or :data:`DENOVO_TAB`.
+    """
     config_name = wf["wombat_config"]
     wombat_link = tab.link
     notify_unknown_terms(prepared.unknown_consequences, prepared.unknown_clinvar)
+    with_denovo = tab.evidence_for(key) is not None
 
     all_columns = wombat_columns(prepared.df_columns)
     # Auto-select preset based on keywords, its columns that the data has
-    initial_preset = select_preset_for_config(config_name, VIEW_PRESETS)
-    filters, table_state = wombat_link.initial_state(config_name)
+    initial_preset = (
+        next((p for p in VIEW_PRESETS if p["name"] == _DENOVO_PRESET), None)
+        if with_denovo
+        else None
+    ) or select_preset_for_config(config_name, VIEW_PRESETS)
+    filters, table_state, denovo_filter = wombat_link.initial_state(
+        key, exclusions=not with_denovo, with_denovo=with_denovo
+    )
     view = _ConfigView(
         has_sample=prepared.has_sample,
         all_rows=prepared.rows,
@@ -633,8 +753,9 @@ def _render_prepared(tab: _Tab, wf: Dict[str, Any], prepared: _Prepared) -> None
         filters=filters,
         table_state=table_state,
         family=tab.family,
+        denovo=denovo_filter,
     )
-    wombat_link.register(config_name, view)
+    wombat_link.register(key, view)
 
     # Capture the client context for use in callbacks
     from nicegui import context
@@ -647,11 +768,41 @@ def _render_prepared(tab: _Tab, wf: Dict[str, Any], prepared: _Prepared) -> None
             # A filter change shows the first page again
             view.table_state["page"] = 0
             render_data_table.refresh()
-            wombat_link.changed(config_name)
+            wombat_link.changed(key)
 
-        render_filter_panel(
-            view.filters, tab.available_genesets, on_change=filters_changed
-        )
+        if view.denovo is not None:
+            present = {
+                f for r in view.all_rows for f in denovo.split_flags(r.get("dnm_flags"))
+            }
+            render_denovo_filter(view.denovo, present, on_change=filters_changed)
+            if prepared.not_assessed:
+                ui.label(
+                    f"{prepared.not_assessed} candidate(s) have no evidence: the"
+                    " denovo tables predate the Wombat de novo table. They are"
+                    " marked Not assessed and shown in Strict view."
+                ).classes("text-sm text-amber-800").mark("denovo-not-assessed")
+
+        def show_all_candidates() -> None:
+            if view.denovo is not None:
+                view.denovo.mode["value"] = "all"
+                view.denovo.hide["value"] = []
+                view.denovo.only["value"] = []
+            for state in (
+                view.filters.exclude_lcr,
+                view.filters.exclude_gnomad,
+                view.filters.exclude_mnv,
+            ):
+                state["value"] = False
+            filters_panel.refresh()
+            filters_changed()
+
+        @ui.refreshable
+        def filters_panel() -> None:
+            render_filter_panel(
+                view.filters, tab.available_genesets, on_change=filters_changed
+            )
+
+        filters_panel()
 
         @ui.refreshable
         def render_data_table() -> None:
@@ -664,7 +815,9 @@ def _render_prepared(tab: _Tab, wf: Dict[str, Any], prepared: _Prepared) -> None
                 tab.selected_members,
                 tab.available_genesets,
                 on_curation_saved=refresh_curation,
-                on_table_change=lambda: wombat_link.changed(config_name),
+                on_table_change=lambda: wombat_link.changed(key),
+                on_show_all=show_all_candidates,
+                is_denovo=key == DENOVO_TAB,
             )
 
         def refresh_curation() -> None:
@@ -690,8 +843,14 @@ def _render_table(
     available_genesets: List[Any],
     on_curation_saved: Callable[[], None],
     on_table_change: Callable[[], None],
+    on_show_all: Optional[Callable[[], None]] = None,
+    is_denovo: bool = False,
 ) -> None:
-    """The count, preset, Columns/Stats/Download row, then the table itself."""
+    """The count, preset, Columns/Stats/Download row, then the table itself.
+
+    On the De novo sub-tab a banner lists the curated de novo calls the
+    filters hide, and the validated ones with no row at all.
+    """
     config_name = wf["wombat_config"]
 
     # Filter rows by selected members
@@ -702,7 +861,23 @@ def _render_table(
     else:
         rows = view.all_rows
     total_before_filters = len(rows)
+    member_rows = rows
     rows = apply_filters(rows, view.filters, available_genesets)
+    if view.denovo is not None:
+        rows = denovo.apply_denovo_filter(rows, view.denovo)
+    if is_denovo:
+        try:
+            missing = [
+                m
+                for m in missing_validations(store.data_dir, family_id, view.all_rows)
+                if m["sample"] in selected_members["value"]
+            ]
+        except Exception:
+            logger.warning("Failed to read the validations", exc_info=True)
+            missing = []
+        render_curation_banner(
+            denovo.hidden_curated(member_rows, rows), missing, on_show_all
+        )
     columns = table_columns(view.all_columns)
 
     def _apply_col_visibility():
@@ -808,7 +983,7 @@ def _render_table(
                 ref=row_data.get("REF", ""),
                 alt=row_data.get("ALT", ""),
                 sample=sample_val,
-                variant_data=row_data,
+                variant_data=view.row_for(row_data),
                 on_save_callback=lambda s: on_curation_saved(),
             )
 

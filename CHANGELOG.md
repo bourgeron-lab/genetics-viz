@@ -5,6 +5,45 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **The ghfc-ngs `denovo` step is shown** (label `dnm_v2` on CANDY_mpx_ghent, the only cohort with its tables so far). The step annotates every candidate of the Wombat de novo table with region masks, a pileup of every family member's CRAM, the parent of origin (Unfazed) and flags. It counts each child's *strict* candidates (no flag but sibling shared) against the callable genome.
+- **A De novo tab on the cohort page**, following the individuals filter:
+  - **The cohort against the literature.** Strict SNVs and indels per callable Gb, the implied SNV mutation rate, the indel share, transitions, the phased and paternal shares, and the parental mosaic, child mosaic and sibling-shared shares as context. Each comes with its published range and sources (Kong 2012, Jónsson 2017 and 2018, Sasani 2019, Belyeu 2021, Porubsky 2025, Lecoquierre 2025, and others; `references` in `config/denovo.yaml`). On CANDY_mpx_ghent:
+    - median 23.5 strict SNVs per callable Gb against 22.0–25.8 published, an implied rate of 1.17 × 10⁻⁸;
+    - 79% paternal against 78–81%;
+    - 66% transitions against 64.5–69%.
+  - **Charts:**
+    - strict candidates per callable Gb per child, with the published SNV rate and the QC range;
+    - paternal share and transitions per child.
+  - **The children's QC table**, linked to each family's De novo sub-tab.
+  - **The flags:** how many candidates each marks, and how many it alone marks. For curators, also the validated de novo calls, absent calls and diagnostics among them.
+  - **Curated de novo calls the strict set loses (curators)**: candidates validated present without an inherited mode, or with a diagnostic, that a flag keeps out of the strict set; and de novo validations with no candidate at all. CANDY_mpx_ghent has two:
+    - 88171200002 / C0XYE9H, chrX:30696032 C>T, in a tandem repeat;
+    - 88171200006 / C0XYED6, chr17:42699120 C>T, one alternate read in a parent.
+    No diagnostic is lost.
+  - **Badges:** children whose strict rate is out of the QC range (high in red, low in orange) and, for curators, the curated calls lost.
+  - **Downloads:** the per-child QC and the candidates with their flags.
+- **The family header warns when a child's de novo count is out of range** ("De novo QC: <child>"). The tooltip gives the rate, the range and the trio's sample QC flags; a click opens SNVs/Indels.
+- **The variant dialog opened from the De novo sub-tab shows the step's evidence:**
+  - the high-quality and raw reads of the child and each parent;
+  - the child's VAF, binomial p and strand counts;
+  - the siblings' reads, the parent of origin and the clusters;
+  - each flag explained.
+
+### Changed
+- **The family page's Wombat tab is now SNVs/Indels** (link `tab=snvs`; `tab=wombat` links still open it). Its first sub-tab is **De novo**: the Wombat config the denovo step reads (its inputs name it; without the step, `de_novo_mutations` or the first `de_?novo` config). That config no longer has a sub-tab of its own. The other Wombat configs follow as before.
+- **With the step's tables the De novo sub-tab shows only the strict candidates by default:**
+  - "All candidates" shows the others, and a Flags menu hides each flag or keeps only it.
+  - Each row carries its evidence: flag badges (each explained in a tooltip), strict, the child's alternate reads and depth, VAF, the parents' alternate reads, the siblings, the parent of origin and other families. A "De novo View" preset shows them.
+  - The Wombat LCR, gnomAD and MNV exclusions are off by default there, as the step's masks replace them.
+  - A per-child summary sits above the table (candidates, strict SNVs and indels, rate per Gb, QC verdict, paternal and maternal).
+  - A banner lists the curated de novo calls the current filters hide, with "Show all candidates", and the family's de novo validations that are no longer candidates.
+  - When the cohort's tables are as new as the family's, they are used: they know `RECURRENT`.
+- **The SNVs/Indels review badge counts only strict candidates** (HIGH or MODERATE, never validated) when the step has run; otherwise it counts as before.
+- The cohort page's tab padding is cut to 10 px so that ten tabs fit a 1,280 px window.
+
 ## [0.36.0] - 2026-11-12
 
 ### Changed

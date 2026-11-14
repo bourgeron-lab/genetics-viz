@@ -192,6 +192,10 @@ _BADGE_COLUMNS: Dict[str, Tuple[str, str, Optional[str]]] = {
     "VEP_SYMBOL": ("gene_badge", "GeneBadges", None),
     "VEP_Gene": ("gene_badge", "VEP_Gene_badges", None),
     "MOI": ("badge_list", "MoiBadges", "_moi_rank"),
+    # The denovo step's evidence (De novo sub-tab)
+    "dnm_strict": ("badge_list", "DnmStrictBadges", None),
+    "dnm_flags": ("badge_list", "DnmFlagBadges", "_dnm_n_flags"),
+    "dnm_origin": ("badge_list", "DnmOriginBadges", None),
 }
 
 

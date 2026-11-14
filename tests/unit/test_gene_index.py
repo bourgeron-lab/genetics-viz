@@ -201,7 +201,7 @@ def test_snv_rows_join_configs_and_curation(indexed: Path):
     assert s3["Configs"] == "default, strict"
     assert s3["Validation"] == "present"
     assert s3["Diagnostic"] == "pathogenic"
-    assert s3["_next"] == "/cohort/DEMO/family/1001?tab=wombat&wcfg=default"
+    assert s3["_next"] == "/cohort/DEMO/family/1001?tab=snvs&wcfg=default"
     # The ignored "present" does not count
     assert by_sample[("S9", SHANK3_DE_NOVO)]["Validation"] == "absent"
 

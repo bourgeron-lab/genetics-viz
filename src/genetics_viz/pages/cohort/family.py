@@ -1,5 +1,6 @@
 """Family detail page - displays family members and analysis tabs."""
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -14,6 +15,7 @@ from genetics_viz.components.family_tabs import (
     TAB_LABELS,
     TAB_SLUGS,
     TABS_PROPS,
+    canonical_tab,
     family_tab_bar,
 )
 from genetics_viz.components.tab_badge import family_review_badges
@@ -61,6 +63,10 @@ from genetics_viz.utils.sample_qc import (
     severity_summary,
 )
 from genetics_viz.utils.upd import parse_upd_link, probe_family_upd
+from genetics_viz.utils.denovo import load_child_qc
+from genetics_viz.pages.cohort.components.wombat_denovo import render_denovo_qc_badge
+
+logger = logging.getLogger(__name__)
 
 
 @ui.page("/cohort/{cohort_name}/family/{family_id}")
@@ -130,6 +136,13 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             qc = {"summary": family_qc_summary(store, family_id)}
             # Filled in once the analysis tabs exist: the badge opens one.
             open_qc_tab: Dict[str, Any] = {"fn": None}
+            open_snvs_tab: Dict[str, Any] = {"fn": None}
+            # The denovo step's per-child QC verdicts (cohort table, a few KB)
+            try:
+                denovo_qc_rows = load_child_qc(store.data_dir, family_id, cohort)
+            except Exception:
+                logger.warning("Failed to read the de novo QC", exc_info=True)
+                denovo_qc_rows = []
 
             with ui.row().classes("w-full items-center gap-4 mb-6"):
                 ui.label(f"👨‍👩‍👧‍👦 Family: {family_id}").classes(
@@ -158,6 +171,10 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     ).tooltip(tip)
 
                 qc_badge()
+                render_denovo_qc_badge(
+                    denovo_qc_rows,
+                    lambda: open_snvs_tab["fn"] and open_snvs_tab["fn"](),
+                )
 
                 ui.space()
                 render_report_buttons(store.data_dir, family_id, family, cohort)
@@ -401,7 +418,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             upd_review: Dict[str, Any] = {"open": None, "pending": None}
 
             tab_has_data = {
-                "wombat": has_wombat,
+                "snvs": has_wombat,
                 "svs": has_svs,
                 "ancestry": has_ancestry,
                 "pgs": has_pgs,
@@ -413,7 +430,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
 
             # Analysis tabs section: a tab without data is disabled
             tabs, tab_by_slug = family_tab_bar(tab_has_data)
-            wombat_tab = tab_by_slug["wombat"]
+            wombat_tab = tab_by_slug["snvs"]
             svs_tab = tab_by_slug["svs"]
             ancestry_tab = tab_by_slug["ancestry"]
             pgs_tab = tab_by_slug["pgs"]
@@ -425,13 +442,18 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             # Counts of what waits for a curator, drawn on the tabs once in
             review_badges.update(
                 family_review_badges(
-                    store.data_dir, family_id, tab_by_slug, tab_has_data, can_write()
+                    store.data_dir,
+                    family_id,
+                    tab_by_slug,
+                    tab_has_data,
+                    can_write(),
+                    cohort=cohort,
                 )
             )
 
             # Pick the first enabled tab as the default
             if has_wombat:
-                default_tab_name = "wombat"
+                default_tab_name = "snvs"
             elif has_svs:
                 default_tab_name = "svs"
             elif has_ancestry:
@@ -447,12 +469,13 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             elif has_qc:
                 default_tab_name = "qc"
             else:
-                default_tab_name = "wombat"
+                default_tab_name = "snvs"
             first_tab_name = default_tab_name
 
             # A shared link opens its tab, when the family has its data
-            if tab_has_data.get(link.get("tab") or ""):
-                default_tab_name = link.get("tab")
+            linked_tab = canonical_tab(link.get("tab"))
+            if tab_has_data.get(linked_tab):
+                default_tab_name = linked_tab
             if default_tab_name == "upd":
                 upd_review["pending"] = parse_upd_link(link.get("upd"))
 
@@ -484,9 +507,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                                     else None
                                 ),
                                 link=link,
-                                on_review_changed=_badge_refresh(
-                                    review_badges, "wombat"
-                                ),
+                                on_review_changed=_badge_refresh(review_badges, "snvs"),
                             )
                         else:
                             with ui.column().classes(
@@ -726,7 +747,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
             # Each tab loads its data on first view: keyed by the tab name that
             # the "update:model-value" event reports.
             lazy_tabs = {
-                "Wombat": (has_wombat, wombat_state, wombat_content),
+                "SNVs/Indels": (has_wombat, wombat_state, wombat_content),
                 "SVs": (has_svs, svs_state, svs_content),
                 "Ancestry": (has_ancestry, ancestry_state, ancestry_content),
                 "Polygenic Scores": (has_pgs, pgs_state, pgs_content),
@@ -775,6 +796,16 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     ui.timer(0.1, make_loader(qc_state, qc_content), once=True)
 
             open_qc_tab["fn"] = show_qc_tab
+
+            def show_snvs_tab() -> None:
+                if not has_wombat:
+                    return
+                tabs.set_value(wombat_tab)
+                link_tab("SNVs/Indels")
+                if not wombat_state["loaded"]:
+                    ui.timer(0.1, make_loader(wombat_state, wombat_content), once=True)
+
+            open_snvs_tab["fn"] = show_snvs_tab
 
             def show_upd_tab(sample: str, chrom: str) -> None:
                 """Open the UPD tab on ``sample``'s ``chrom``, its review open."""

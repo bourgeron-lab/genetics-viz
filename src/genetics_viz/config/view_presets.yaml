@@ -21,6 +21,31 @@ presets:
       - Validation
       - Diagnostic
 
+  # The De novo sub-tab with the denovo step's evidence (chosen by name, not keyword)
+  - name: "De novo View"
+    keywords: []
+    columns:
+      - Variant
+      - VEP_Consequence
+      - VEP_SYMBOL
+      - MOI
+      - VEP_CLIN_SIG
+      - fafmax_faf95_max_genomes
+      - cohort_freq
+      - seen_families
+      - sample
+      - dnm_strict
+      - dnm_flags
+      - dnm_child_reads
+      - dnm_child_vaf
+      - dnm_father_alt
+      - dnm_mother_alt
+      - dnm_sibs
+      - dnm_origin
+      - dnm_recurrence
+      - Validation
+      - Diagnostic
+
   - name: "Recessive View"
     keywords: ["rare_homalt"]
     columns:
