@@ -232,3 +232,41 @@ async def test_readers_get_no_upd_or_str_badge(user, monkeypatch, data_dir):
     assert pill_texts(user, "qc-tab-pills")
     assert pill_texts(user, "upd-tab-pills") == []
     assert pill_texts(user, "str-tab-pills") == []
+
+
+def _position(user):
+    return user.find(marker="family-position").elements.pop()
+
+
+async def test_family_arrows_follow_the_families_tab(user, monkeypatch):
+    from types import SimpleNamespace
+
+    families, _ = await _families(user, monkeypatch)
+    table = families["table"]
+    with user.client:
+        families["on_filter"]({"filters": {"Structure": ["Trio", "Duo"]}})
+        table._default_sort_handler(
+            SimpleNamespace(args={"sorting": [{"id": "FID", "desc": True}]})
+        )
+    await wait_for(lambda: [r["FID"] for r in table.rows] == ["AU-X-1", "1001"])
+
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Family: 1001", retries=10)
+    assert _position(user).text == "2 of 2"
+    previous = user.find(marker="family-previous").elements.pop()
+    assert previous.props.get("icon") == "arrow_back"
+    await user.should_see("Previous: AU-X-1")
+    await user.should_not_see(marker="family-next")
+
+    # 1002 is not in the list: every family, by ID.
+    await user.open("/cohort/DEMO/family/1002")
+    await user.should_see("Family: 1002", retries=10)
+    assert _position(user).text == "2 of 3"
+    await user.should_see("Among all the cohort's families, by ID")
+
+    # A bare cohort page forgets the list.
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Family: 1001", retries=10)
+    assert _position(user).text == "1 of 3"

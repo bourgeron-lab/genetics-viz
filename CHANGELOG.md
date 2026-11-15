@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - diagnostics: the strongest verdict and how many.
 
   Each column filters (structure, has a trio, 2+ affected, ancestry, FROH grade, QC category, de novo verdict, waiting for review, diagnostic verdict, no conclusion yet), and the filters are in the link (`fstruct=Trio`, `frev=1`…). **One scope for both tables**: the families filters keep their members, the individuals filters keep the families with a member left, and every analysis tab follows. The filter bar counts both ("1 of 3 families · 3 of 6 individuals"), and "Edit filters" goes back to the table last filtered. The ancestry, FROH and de novo columns are read off the event loop once the page is drawn.
+- **The family page's previous / next arrows follow the Families tab**: once the table is filtered or sorted, they walk the families it shows, in its order, and the position sits between them ("3 of 52"). A family opened from elsewhere (Search, a gene page, a link), or a cohort page opened without filter or sort, keeps the old walk through every family by ID.
 
 ### Changed
 - **The cohort and family tabs are grouped, without icons.** A small caption over each group says what its tabs are for; the icons for ROH, UPD, STR or Polygenic Scores said nothing. Same groups, same order on both pages:

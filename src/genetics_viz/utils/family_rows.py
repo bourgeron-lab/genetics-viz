@@ -609,3 +609,45 @@ def compact_qc_cell(
             }
         )
     return {**cell, "QC_badges": shown}
+
+
+# ---------------------------------------------------------------------------
+# Previous / next on the family page
+# ---------------------------------------------------------------------------
+
+#: ``app.storage.user`` key: per cohort, the Families table's family order
+#: when it is filtered or sorted. The family page's arrows walk it.
+FAMILY_ORDER_KEY = "family_order"
+
+
+def save_family_order(
+    storage: Any, cohort_name: str, order: Optional[List[str]]
+) -> None:
+    """Remember ``order`` for ``cohort_name``; ``None`` forgets it.
+
+    A new dict is assigned, so a persisted storage sees the change.
+    """
+    orders = dict(storage.get(FAMILY_ORDER_KEY) or {})
+    if order is None:
+        if cohort_name not in orders:
+            return
+        orders.pop(cohort_name)
+    elif orders.get(cohort_name) == order:
+        return
+    else:
+        orders[cohort_name] = list(order)
+    storage[FAMILY_ORDER_KEY] = orders
+
+
+def family_order(
+    storage: Any, cohort_name: str, family_id: str, all_families: List[str]
+) -> Tuple[List[str], bool]:
+    """The families the arrows walk, and whether they are the Families tab's.
+
+    The remembered order when it holds ``family_id``; else every family by
+    ID (a family opened from Search, a gene page or a shared link).
+    """
+    saved = (storage.get(FAMILY_ORDER_KEY) or {}).get(cohort_name) or []
+    if family_id in saved:
+        return list(saved), True
+    return sorted(all_families), False

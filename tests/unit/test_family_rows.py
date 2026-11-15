@@ -124,3 +124,18 @@ def test_compact_qc_cell_is_one_badge_plus_cell_line():
         "Acknowledged",
     )
     assert [b["label"] for b in acked["QC_badges"]] == ["Acknowledged", "Cell line"]
+
+
+def test_family_order_is_remembered_per_cohort():
+    storage: dict = {}
+    fr.save_family_order(storage, "DEMO", ["B", "A"])
+    fr.save_family_order(storage, "OTHER", ["X"])
+    assert fr.family_order(storage, "DEMO", "A", ["A", "B", "C"]) == (["B", "A"], True)
+    # A family outside the list walks every family by ID.
+    assert fr.family_order(storage, "DEMO", "C", ["C", "B", "A"]) == (
+        ["A", "B", "C"],
+        False,
+    )
+    fr.save_family_order(storage, "DEMO", None)
+    assert fr.family_order(storage, "DEMO", "A", ["B", "A"]) == (["A", "B"], False)
+    assert storage[fr.FAMILY_ORDER_KEY] == {"OTHER": ["X"]}

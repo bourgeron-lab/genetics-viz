@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import Request
-from nicegui import ui
+from nicegui import app, ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tab_groups import GROUPED_TABS_PROPS, tab_group
@@ -65,6 +65,7 @@ from genetics_viz.utils.family_rows import (
     family_row,
     filter_families,
     load_family_facts,
+    save_family_order,
 )
 from genetics_viz.utils.ghfc_ngs_docs import fetch_params_doc
 from genetics_viz.utils.pedigree_labels import dummy_badges
@@ -878,12 +879,32 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     if dt is not None:
                         if push:
                             dt.set_filters(filters)
-                        dt.update_data(rows)
+                        # The sort is Python's: keep the one the header shows.
+                        dt.update_data(dt.sort_rows(list(rows)))
+                remember_order()
                 filter_bar.refresh()
                 update_pills()
                 # Re-render the tabs that follow the filters
                 for refresher in refreshers:
                     refresher()
+
+            def remember_order() -> None:
+                """The family page's arrows walk the families shown, as sorted.
+
+                Forgotten while the table is neither filtered nor sorted: the
+                arrows then walk every family by ID, as they always did.
+                """
+                dt = dt_ref["families"]
+                rows = dt.rows if dt is not None else state["families"]
+                narrowed = _filter_chips(state["family_filters"], family_cols) or (
+                    _filter_chips(state["filters"], columns)
+                )
+                sorted_ = dt is not None and bool(dt.sorting)
+                save_family_order(
+                    app.storage.user,
+                    cohort_name,
+                    [r["FID"] for r in rows] if narrowed or sorted_ else None,
+                )
 
             def apply_filters(filters: Dict[str, Any], to_table: bool = False) -> None:
                 """Set the individuals table's filters (from it, or the bar)."""
@@ -1190,6 +1211,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         pagination={"rowsPerPage": 20},
                         on_filter=on_family_filter,
                         initial_filters=linked_family_filters,
+                        on_state_change=lambda: remember_order(),
                     )
                 with ui.tab_panel(tab_objects["Individuals"]).classes(panel_classes):
                     dt_ref["dt"] = DataTable(
@@ -1272,6 +1294,8 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             update_pills()
             ui.timer(0.2, load_badges, once=True)
             ui.timer(0.2, load_families, once=True)
+            # A bare page forgets an order left by an earlier, filtered visit.
+            remember_order()
 
     except RuntimeError as e:
         ui.label(f"Error: {e}").classes("text-red-500")
