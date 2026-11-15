@@ -35,6 +35,14 @@ from genetics_viz.pages.cohort.components.cohort_denovo_tab import (
     probe_cohort_denovo,
     render_cohort_denovo_tab,
 )
+from genetics_viz.pages.cohort.components.cohort_snvs_tab import (
+    probe_cohort_snvs,
+    render_cohort_snvs_tab,
+)
+from genetics_viz.pages.cohort.components.cohort_svs_tab import (
+    probe_cohort_svs,
+    render_cohort_svs_tab,
+)
 from genetics_viz.pages.cohort.components.cohort_str_tab import (
     probe_cohort_eh_data,
     render_cohort_str_tab,
@@ -199,16 +207,27 @@ _TAB_GROUPS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
                 "Relatedness, sex and contamination (somalier); DNA source and library",
             ),
             (
-                "De novo",
+                "De novo QC",
                 "denovo",
-                "De novo SNVs and indels: per-child QC, flags, literature"
-                " (denovo step)",
+                "De novo rate per child against the literature, flags, curation"
+                " check (denovo step)",
             ),
         ],
     ),
     (
         "Variants",
         [
+            (
+                "SNVs/Indels",
+                "snvs",
+                "De novo candidates across families, and the genes hit in two or more",
+            ),
+            (
+                "SVs",
+                "svs",
+                "Large copy-number calls, whole-chromosome gains and losses, regions"
+                " hit in two or more families (WisecondorX)",
+            ),
             ("STR", "str", "Short tandem repeats"),
             ("UPD", "upd", "Uniparental disomy"),
         ],
@@ -729,7 +748,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             "ROH": probe_cohort_roh_data(cohort),
             "UPD": probe_cohort_upd_data(cohort),
             "STR": probe_cohort_eh_data(cohort),
-            "De novo": probe_cohort_denovo(cohort),
+            "De novo QC": probe_cohort_denovo(cohort),
+            "SNVs/Indels": probe_cohort_snvs(cohort),
+            "SVs": probe_cohort_svs(store, cohort),
             "Sample QC": probe_cohort_qc_data(cohort),
             "Workflow": cohort.params_file is not None,
         }
@@ -760,7 +781,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             diag_options=[d for d in DIAG_ORDER if d in diag_values_raw],
             with_ancestry=has_data["Ancestry"],
             with_roh=has_data["ROH"],
-            with_denovo=has_data["De novo"],
+            with_denovo=has_data["De novo QC"],
             curator=show_review,
         )
         upd_open_by_family: Dict[str, List[str]] = defaultdict(list)
@@ -1046,7 +1067,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
 
                 # Badges: the filter for everyone, as Sample QC and the run;
                 # UPD and STR count what only a curator settles.
-                pill_tabs = ["Families", "Individuals", "Sample QC", "De novo"]
+                pill_tabs = ["Families", "Individuals", "Sample QC", "De novo QC"]
                 if show_review:
                     pill_tabs += ["UPD", "STR"]
                 pills: Dict[str, TabPills] = {
@@ -1091,9 +1112,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     )
                 if "STR" in pills:
                     pills["STR"].set(str_cohort_pills(state["str_flags"], keys))
-                if "De novo" in pills:
+                if "De novo QC" in pills:
                     verdicts, issues = state["denovo"]
-                    pills["De novo"].set(denovo_cohort_pills(verdicts, issues, keys))
+                    pills["De novo QC"].set(denovo_cohort_pills(verdicts, issues, keys))
 
             async def load_badges() -> None:
                 """The STR flags and the run record, read once off the loop."""
@@ -1104,7 +1125,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         )
                     except Exception:
                         logger.warning("Failed to count STR flags", exc_info=True)
-                if "De novo" in pills:
+                if "De novo QC" in pills:
                     try:
                         state["denovo"] = await asyncio.to_thread(
                             denovo_cohort_status, cohort, store.data_dir, show_review
@@ -1243,7 +1264,14 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     ),
                     ("ROH", render_cohort_roh_tab, "ROH", "runs of homozygosity"),
                     ("UPD", render_cohort_upd_tab, "UPD", "uniparental disomy"),
-                    ("De novo", render_cohort_denovo_tab, "de novo", "de novo calls"),
+                    ("De novo QC", render_cohort_denovo_tab, "de novo", "de novo QC"),
+                    (
+                        "SNVs/Indels",
+                        render_cohort_snvs_tab,
+                        "de novo",
+                        "de novo candidates",
+                    ),
+                    ("SVs", render_cohort_svs_tab, "SV", "copy-number calls"),
                     ("STR", render_cohort_str_tab, "STR", "short tandem repeats"),
                     (
                         "Sample QC",

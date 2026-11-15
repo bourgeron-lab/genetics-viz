@@ -44,7 +44,9 @@ async def test_one_row_of_grouped_tabs_without_icons(user, monkeypatch):
         "Families",
         "Individuals",
         "Sample QC",
-        "De novo",
+        "De novo QC",
+        "SNVs/Indels",
+        "SVs",
         "STR",
         "UPD",
         "Ancestry",
@@ -270,3 +272,23 @@ async def test_family_arrows_follow_the_families_tab(user, monkeypatch):
     await user.open("/cohort/DEMO/family/1001")
     await user.should_see("Family: 1001", retries=10)
     assert _position(user).text == "1 of 3"
+
+
+async def test_cohort_svs_tab_filters_calls_by_size(user, monkeypatch):
+    await login(user, "curator")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "SVs")
+    # DEMO's two calls are 0.2 and 0.5 Mb: none at the default 1 Mb.
+    await user.should_see("0 calls in 0 individuals", retries=30)
+    size = user.find(marker="svs-size").elements.pop()
+    with user.client:
+        size.set_value(100)
+    await user.should_see("2 calls in 2 individuals", retries=30)
+    calls = [t for t in tables if "locus" in t["columns"]][-1]
+    assert [(r["FID"], r["sample"], r["call"]) for r in calls["rows"]] == [
+        ("1001", "S3", "Robust LOSS"),
+        ("AU-X-1", "S6", "Robust GAIN"),
+    ]
+    assert calls["rows"][0]["Validation"] == "TODO"
