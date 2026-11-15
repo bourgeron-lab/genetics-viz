@@ -46,9 +46,12 @@ async def test_cohort_tabs_download_what_they_show(user):
     assert {"region", "PC1", "PC20", "snp_coverage", "admix_EUR"} <= set(columns)
 
     open_tab(user, "cohort-tabs", "Polygenic Scores")
-    columns, rows = _rows(await _download(user, "download-pgs"))
+    columns, rows = _rows(await _download(user, "download-pgs", "pgs"))
     assert columns[:5] == ["FID", "IID", "sex", "phenotype", "region"]
     assert "height_test" in columns and len(rows) == 6
+    # The outliers: none in the default data (every z under 2).
+    user.find(marker="download-pgs-outliers").click()
+    await user.should_see("Nothing to download", retries=30)
 
     open_tab(user, "cohort-tabs", "ROH")
     columns, rows = _rows(await _download(user, "download-roh"))

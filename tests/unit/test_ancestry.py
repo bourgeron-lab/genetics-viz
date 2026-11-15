@@ -115,3 +115,28 @@ def test_reference_panel_loads_and_is_cached(app_config, reference_root):
 
 def test_missing_reference_bundle_is_none(app_config):
     assert load_reference_pcs("0.0.1") is None
+
+
+def test_pgs_outlier_rows_keep_scores_past_the_cut_off():
+    from genetics_viz.utils.ancestry import pgs_outlier_rows
+
+    ind = lambda fid, sid: {"FID": fid, "Sample ID": sid, "Sex": "1", "Phenotype": "2"}  # noqa: E731
+    paired = [
+        ({"height": 2.4, "bmi": "nan", "region": "EUR"}, ind("F1", "S1")),
+        ({"height": -3.1, "bmi": 1.0}, ind("F2", "S2")),
+        ({"height": 0.3, "bmi": 2.0}, ind("F3", "S3")),
+    ]
+    rows = pgs_outlier_rows(paired, ["height"], 2.0)
+    assert [(r["sample"], r["z"]) for r in rows] == [("S2", -3.1), ("S1", 2.4)]
+    assert rows[0]["z_badges"][0]["label"] == "-3.10"
+    # Φ(2.4) is 99.2 %, worded as the family report does.
+    assert rows[1]["percentile_text"] == ">99th" and rows[1]["region"] == "EUR"
+    assert rows[1]["sex"] == "1 (male)" and rows[1]["phenotype"] == "2 (aff)"
+    # Every trait: S3's bmi at exactly 2 counts; S1's nan does not.
+    every = pgs_outlier_rows(paired, ["height", "bmi"], 2.0)
+    assert [(r["sample"], r["trait"]) for r in every] == [
+        ("S2", "height"),
+        ("S1", "height"),
+        ("S3", "bmi"),
+    ]
+    assert pgs_outlier_rows(paired, ["height"], 3.0)[0]["sample"] == "S2"
