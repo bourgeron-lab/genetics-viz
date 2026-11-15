@@ -14,7 +14,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Collection, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple
 
 import polars as pl
 import yaml
@@ -486,3 +486,60 @@ def pgs_export(
     if regions is not None:
         out = out.filter(pl.col("region").fill_null("—").is_in(list(regions)))
     return out.select([*PERSON_COLUMNS, "region", *traits])
+
+
+#: Cut-offs the cohort PGS tab offers for its outliers table, in SD.
+PGS_OUTLIER_THRESHOLDS = (2.0, 2.5, 3.0)
+#: Badge colours of a z-score beyond the cut-off, above and below.
+_PGS_HIGH, _PGS_LOW = "#c62828", "#1565c0"
+
+
+def pgs_outlier_rows(
+    paired: Iterable[Tuple[Dict[str, Any], Dict[str, Any]]],
+    traits: Iterable[str],
+    threshold: float,
+) -> List[Dict[str, Any]]:
+    """Individuals whose z-score for one of ``traits`` is ±``threshold`` or beyond.
+
+    ``paired`` holds ``(z-score row, individuals-table row)`` pairs, the cohort
+    tab's. One row per individual and trait, with the percentile Φ(z) the
+    family report uses (the pipeline's z is already ancestry-matched). Sorted
+    by |z|, largest first.
+    """
+    from .pedigree_labels import pheno_label, sex_label
+    from .report_svg import ordinal, percentile
+
+    traits = list(traits)
+    out: List[Dict[str, Any]] = []
+    for sample, ind in paired:
+        for trait in traits:
+            raw = sample.get(trait)
+            try:
+                z = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if z != z or abs(z) < threshold:
+                continue
+            pct = percentile(z)
+            out.append(
+                {
+                    "_key": f"{ind.get('FID')}:{ind.get('Sample ID')}:{trait}",
+                    "FID": ind.get("FID") or "",
+                    "sample": ind.get("Sample ID") or "",
+                    "sex": sex_label(ind.get("Sex")),
+                    "phenotype": pheno_label(ind.get("Phenotype")),
+                    "region": sample.get("region") or "",
+                    "trait": trait,
+                    "z": round(z, 2),
+                    "z_badges": [
+                        {
+                            "label": f"{z:+.2f}",
+                            "color": _PGS_HIGH if z > 0 else _PGS_LOW,
+                        }
+                    ],
+                    "percentile": round(pct, 2),
+                    "percentile_text": ordinal(pct),
+                }
+            )
+    out.sort(key=lambda r: (-abs(r["z"]), r["trait"], r["FID"], r["sample"]))
+    return out

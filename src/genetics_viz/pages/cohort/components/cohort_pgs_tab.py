@@ -2,12 +2,13 @@
 
 Violin plots of the cohort's z-scores for one selected trait, grouped by
 phenotype, sex or predicted ancestry region, optionally split by sex within
-each group, and optionally restricted to a subset of regions. Everything
-follows the filters applied to the individuals table.
+each group, and optionally restricted to a subset of regions. Below them, the
+individuals beyond ±2 SD (or 2.5, 3) for that trait or every trait, linked to
+their family, as the ROH, UPD and STR tabs list theirs. Everything follows
+the filters applied to the individuals table.
 
 Violins are Plotly rather than ECharts, which has no violin series and would
-mean hand-rolling a KDE. The sibling Statistics tab is already Plotly, so the
-two sit consistently side by side.
+mean hand-rolling a KDE. The cohort ROH tab's violins are Plotly too.
 """
 
 import logging
@@ -16,20 +17,24 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from nicegui import ui
 
 from genetics_viz.components.download_button import Download, download_button
+from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.ancestry import (
     ID_COLUMNS,
     NULL_VALUES,
+    PGS_OUTLIER_THRESHOLDS,
     AncestryFiles,
     Variant,
     find_cohort_ancestry_files,
     get_cohort_ancestry_dir,
     get_region_color,
     pgs_export,
+    pgs_outlier_rows,
 )
 from genetics_viz.utils.export import (
     export_filename,
     frame_to_tsv,
     people_from_individuals,
+    rows_to_tsv,
 )
 from genetics_viz.utils.pedigree_labels import (
     PHENO_COLORS,
@@ -58,6 +63,10 @@ _GROUP_OPTIONS = [_GROUP_PHENOTYPE, _GROUP_SEX, _GROUP_REGION]
 
 #: Sex colours for the split halves, used whatever the grouping axis is.
 _SPLIT_SIDES = (("1", "negative"), ("2", "positive"))
+
+_OUTLIER_EXPORT = [
+    "FID", "sample", "sex", "phenotype", "region", "trait", "z", "percentile",
+]  # fmt: skip
 
 
 def probe_cohort_pgs_data(cohort: Any) -> bool:
@@ -221,7 +230,31 @@ def render_cohort_pgs_tab(
         "group_by": _GROUP_PHENOTYPE,
         "split_sex": False,
         "regions": list(state["regions"]),
+        "threshold": PGS_OUTLIER_THRESHOLDS[0],
+        "all_traits": False,
     }
+
+    def scoped() -> List[Tuple[Dict, Dict]]:
+        """``(z-score row, individual)`` of the individuals shown, in the regions."""
+        by_sample = state["by_sample"] or {}
+        allowed = set(controls["regions"])
+        pairs = []
+        for ind in filtered_state.get("individuals", []):
+            sample = by_sample.get(ind["Sample ID"])
+            if sample is None:
+                continue
+            if state["regions"] and (sample.get("region") or "—") not in allowed:
+                continue
+            pairs.append((sample, ind))
+        return pairs
+
+    def outliers() -> List[Dict[str, Any]]:
+        traits = state["traits"] if controls["all_traits"] else [controls["trait"]]
+        return pgs_outlier_rows(scoped(), traits, controls["threshold"])
+
+    def refresh() -> None:
+        render_plot.refresh()
+        render_outliers.refresh()
 
     with ui.card().classes("w-full"):
         with ui.row().classes("items-center gap-2 w-full"):
@@ -249,7 +282,15 @@ def render_cohort_pgs_tab(
                                 ),
                             )
                         ),
-                    )
+                    ),
+                    Download(
+                        "outliers",
+                        "The individuals beyond the cut-off, for the trait or every trait",
+                        lambda: export_filename(
+                            cohort.name, "pgs", "outliers", tag=state["files"].file_tag
+                        ),
+                        lambda: rows_to_tsv(outliers(), _OUTLIER_EXPORT),
+                    ),
                 ],
                 mark="download-pgs",
             )
@@ -262,7 +303,7 @@ def render_cohort_pgs_tab(
                 load_variant((bundle, tag))
                 provenance.text = state["files"].label
                 controls["regions"] = list(state["regions"])
-                render_plot.refresh()
+                refresh()
 
             ui.select(
                 options=[f"{b} / {t}" for b, t in variants],
@@ -278,7 +319,7 @@ def render_cohort_pgs_tab(
             with_input=True,
             on_change=lambda e: (
                 controls.update({"trait": e.value}),
-                render_plot.refresh(),
+                refresh(),
             ),
         ).props("outlined dense").classes("w-full mb-2")
 
@@ -289,7 +330,7 @@ def render_cohort_pgs_tab(
                 label="Group by",
                 on_change=lambda e: (
                     controls.update({"group_by": e.value}),
-                    render_plot.refresh(),
+                    refresh(),
                 ),
             ).props("outlined dense").classes("flex-1")
 
@@ -298,7 +339,7 @@ def render_cohort_pgs_tab(
                 value=controls["split_sex"],
                 on_change=lambda e: (
                     controls.update({"split_sex": e.value}),
-                    render_plot.refresh(),
+                    refresh(),
                 ),
             )
 
@@ -310,7 +351,7 @@ def render_cohort_pgs_tab(
                 multiple=True,
                 on_change=lambda e: (
                     controls.update({"regions": e.value or []}),
-                    render_plot.refresh(),
+                    refresh(),
                 ),
             ).props("use-chips outlined dense").classes("w-full mt-2")
 
@@ -322,23 +363,9 @@ def render_cohort_pgs_tab(
             split = controls["split_sex"] and group_by != _GROUP_SEX
             split_box.set_enabled(group_by != _GROUP_SEX)
 
-            by_sample = state["by_sample"]
             trait = controls["trait"]
-            allowed_regions = set(controls["regions"])
-
-            # Pair each filtered individual with its z-score row.
-            paired: List[Tuple[Dict, Dict]] = []
-            for ind in filtered_state.get("individuals", []):
-                sample = by_sample.get(ind["Sample ID"])
-                if sample is None:
-                    continue
-                if state["regions"] and (sample.get("region") or "—") not in (
-                    allowed_regions
-                ):
-                    continue
-                if _to_float(sample.get(trait)) is None:
-                    continue
-                paired.append((sample, ind))
+            # Each individual shown with a score for the trait.
+            paired = [p for p in scoped() if _to_float(p[0].get(trait)) is not None]
 
             if not paired:
                 ui.label(
@@ -422,4 +449,74 @@ def render_cohort_pgs_tab(
             ui.plotly(fig).classes("w-full")
 
         render_plot()
-        refreshers.append(render_plot.refresh)
+
+        with ui.row().classes("items-center gap-4 w-full mt-4"):
+            ui.label("Outliers").classes("text-base font-semibold text-blue-700")
+            ui.select(
+                {t: f"|z| ≥ {t:g}" for t in PGS_OUTLIER_THRESHOLDS},
+                value=controls["threshold"],
+                label="Cut-off",
+                on_change=lambda e: (
+                    controls.update({"threshold": float(e.value)}),
+                    render_outliers.refresh(),
+                ),
+            ).props("outlined dense").classes("w-36").mark("pgs-threshold")
+            ui.switch(
+                "Every trait",
+                value=False,
+                on_change=lambda e: (
+                    controls.update({"all_traits": bool(e.value)}),
+                    render_outliers.refresh(),
+                ),
+            ).tooltip("Off: the trait plotted above").mark("pgs-all-traits")
+
+        @ui.refreshable
+        def render_outliers() -> None:
+            rows = outliers()
+            which = "any trait" if controls["all_traits"] else f"{controls['trait']}"
+            people = {(r["FID"], r["sample"]) for r in rows}
+            ui.label(
+                f"{len(people):,} individual{'s' if len(people) != 1 else ''} at"
+                f" |z| ≥ {controls['threshold']:g} for {which}"
+                + (f" ({len(rows):,} scores)" if controls["all_traits"] else "")
+                + ". The z-scores are ancestry-matched by the pipeline;"
+                " the percentile is Φ(z), as in the family report."
+            ).classes("text-xs text-gray-500").mark("pgs-outliers-note")
+            if not rows:
+                return
+            DataTable(
+                columns=[
+                    {
+                        "id": "FID",
+                        "header": "Family",
+                        "cellType": "link",
+                        "href": f"/cohort/{cohort.name}/family/{{FID}}?tab=pgs",
+                        "sortable": True,
+                    },
+                    {"id": "sample", "header": "Sample", "sortable": True},
+                    {"id": "sex", "header": "Sex", "sortable": True},
+                    {"id": "phenotype", "header": "Phenotype", "sortable": True},
+                    {"id": "region", "header": "Region", "sortable": True},
+                    {"id": "trait", "header": "Trait", "sortable": True},
+                    {
+                        "id": "z",
+                        "header": "z",
+                        "cellType": "badge_list",
+                        "sortable": True,
+                        "sorting": "numerical",
+                    },
+                    {
+                        "id": "percentile_text",
+                        "header": "Percentile",
+                        "sortable": True,
+                        "sortField": "percentile",
+                        "sorting": "numerical",
+                    },
+                ],
+                rows=rows,
+                row_key="_key",
+                pagination={"rowsPerPage": 20},
+            )
+
+        render_outliers()
+        refreshers.append(refresh)

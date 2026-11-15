@@ -292,3 +292,45 @@ async def test_cohort_svs_tab_filters_calls_by_size(user, monkeypatch):
         ("AU-X-1", "S6", "Robust GAIN"),
     ]
     assert calls["rows"][0]["Validation"] == "TODO"
+
+
+async def test_cohort_pgs_outliers_follow_the_cut_off(user, monkeypatch, data_dir):
+    # S3 far above for height, S5 below; S6's BMI just past 2.
+    scores = {"S3": (2.6, 0.1), "S5": (-3.2, 0.0), "S6": (0.5, 2.1)}
+    for tag in datagen.TAGS:
+        prefix = data_dir / "cohorts" / "DEMO" / "ancestry"
+        datagen.write_tsv(
+            prefix / f"DEMO.apgs_b{datagen.BUNDLE}_{tag}.pgs_zscore.tsv",
+            ["IID", *datagen.TRAITS, "family_id"],
+            [
+                [m[1], *scores.get(m[1], (0.0, 0.0)), m[0]]
+                for m in datagen.DEMO_PEDIGREE
+            ],
+        )
+    await login(user, "reader")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Polygenic Scores")
+    # The plotted trait is the first, bmi_test: only S6 passes 2.
+    await user.should_see("1 individual at |z| ≥ 2 for bmi_test", retries=30)
+
+    def latest():
+        return [t for t in tables if "percentile_text" in t["columns"]][-1]["rows"]
+
+    assert [r["sample"] for r in latest()] == ["S6"]
+    switch = user.find(marker="pgs-all-traits").elements.pop()
+    with user.client:
+        switch.set_value(True)
+    await user.should_see(
+        "3 individuals at |z| ≥ 2 for any trait (3 scores)", retries=30
+    )
+    assert [(r["sample"], r["trait"]) for r in latest()] == [
+        ("S5", "height_test"),
+        ("S3", "height_test"),
+        ("S6", "bmi_test"),
+    ]
+    cut = user.find(marker="pgs-threshold").elements.pop()
+    with user.client:
+        cut.set_value(3.0)
+    await user.should_see("1 individual at |z| ≥ 3 for any trait", retries=30)
