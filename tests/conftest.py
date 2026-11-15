@@ -15,6 +15,7 @@ import yaml
 import datagen
 from genetics_viz import config_model
 from genetics_viz.utils import (
+    cohort_svs,
     ancestry,
     change_monitor,
     cnv_coverage,
@@ -72,6 +73,7 @@ def _reset_globals() -> None:
     gene_index.clear_gene_index()
     login_throttle.clear_login_throttle()
     vedette.clear_vedette_cache()
+    cohort_svs.clear_cache()
     upd_calls.clear_upd_cache()
     denovo.clear_denovo_cache()
     change_monitor._change_callbacks.clear()

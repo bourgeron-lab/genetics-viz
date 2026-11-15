@@ -1,4 +1,7 @@
-"""Cohort-wide De novo tab: the ``denovo`` step's per-child QC and flags.
+"""Cohort-wide De novo QC tab: the ``denovo`` step's per-child QC and flags.
+
+The candidates themselves, and the genes they hit in several families, are
+the SNVs/Indels tab's (``cohort_snvs_tab.py``).
 
 Follows the filters of the individuals table: the children shown are those
 the filters leave, and every count, chart and table is theirs. From top:
@@ -43,13 +46,6 @@ _CHILD_EXPORT = [
     "seq_class", "genomeqc_flags", "qc_flags", "n_phased_strict_snv",
     "paternal_share_snv", "paternal_p", "spectrum_cosine", "expected_germline_share",
     "indel_per_snv", "indel_1bp_share",
-]  # fmt: skip
-
-_CANDIDATE_EXPORT = [
-    "family_id", "child", "father", "mother", "child_sex", "chrom", "pos", "ref",
-    "alt", "var_type", "genes", "consequences", "strict", "flags", "child_alt",
-    "child_ref", "child_vaf", "father_alt", "mother_alt", "sibs_with_alt", "origin",
-    "origin_status", "recurrence_families",
 ]  # fmt: skip
 
 
@@ -129,9 +125,7 @@ def render_cohort_denovo_tab(
 
     with ui.card().classes("w-full min-w-0"):
         with ui.row().classes("items-center gap-2 w-full"):
-            ui.label("De novo SNVs and indels").classes(
-                "text-lg font-semibold text-blue-700"
-            )
+            ui.label("De novo QC").classes("text-lg font-semibold text-blue-700")
             ui.label(f"denovo step · {labels[0] if len(labels) == 1 else ''}").classes(
                 "text-xs text-gray-500"
             )
@@ -142,11 +136,6 @@ def render_cohort_denovo_tab(
                     return ""
                 return rows_to_tsv(shown()[0], _CHILD_EXPORT)
 
-            def export_candidates() -> str:
-                if not state["loaded"] or state["loaded"]["data"] is None:
-                    return ""
-                return rows_to_tsv(shown()[1], _CANDIDATE_EXPORT)
-
             download_button(
                 [
                     Download(
@@ -156,14 +145,6 @@ def render_cohort_denovo_tab(
                             cohort.name, "denovo", "children", tag=state["label"]
                         ),
                         export_children,
-                    ),
-                    Download(
-                        "candidates",
-                        "Every candidate of the children shown, with its flags",
-                        lambda: export_filename(
-                            cohort.name, "denovo", "candidates", tag=state["label"]
-                        ),
-                        export_candidates,
                     ),
                 ],
                 mark="download-denovo",

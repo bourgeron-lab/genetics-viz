@@ -2,14 +2,15 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import Request
-from nicegui import ui
+from nicegui import app, ui
 
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
+from genetics_viz.utils.family_rows import family_order
 from genetics_viz.components.family_tabs import (
     TAB_LABELS,
     TAB_SLUGS,
@@ -126,7 +127,11 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 ui.label(family_id).classes("font-semibold")
 
             # Family header with prev/next navigation
-            sorted_fids = sorted(cohort.families.keys())
+            # The Families tab's order when it was filtered or sorted, else
+            # every family by ID.
+            sorted_fids, from_tab = family_order(
+                app.storage.user, cohort_name, family_id, list(cohort.families)
+            )
             current_idx = (
                 sorted_fids.index(family_id) if family_id in sorted_fids else -1
             )
@@ -185,25 +190,41 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 ui.space()
                 render_report_buttons(store.data_dir, family_id, family, cohort)
 
+                def arrow(fid: Optional[str], icon: str, word: str) -> None:
+                    if fid is None:
+                        return
+                    ui.button(
+                        icon=icon,
+                        on_click=lambda _, f=fid: ui.navigate.to(
+                            f"/cohort/{cohort_name}/family/{f}"
+                        ),
+                    ).props("flat round color=blue").tooltip(f"{word}: {fid}").mark(
+                        f"family-{word.lower()}"
+                    )
+
                 if len(sorted_fids) > 1 and current_idx >= 0:
-                    if current_idx > 0:
-                        prev_fid = sorted_fids[current_idx - 1]
-                        ui.button(
-                            icon="arrow_back",
-                            on_click=lambda _, f=prev_fid: ui.navigate.to(
-                                f"/cohort/{cohort_name}/family/{f}"
-                            ),
-                        ).props("flat round color=blue").tooltip(
-                            f"Previous: {prev_fid}"
+                    # One group, so a wrapping title row keeps them together.
+                    with ui.row().classes("items-center gap-1 no-wrap"):
+                        last = len(sorted_fids) - 1
+                        arrow(
+                            sorted_fids[current_idx - 1] if current_idx > 0 else None,
+                            "arrow_back",
+                            "Previous",
                         )
-                    if current_idx < len(sorted_fids) - 1:
-                        next_fid = sorted_fids[current_idx + 1]
-                        ui.button(
-                            icon="arrow_forward",
-                            on_click=lambda _, f=next_fid: ui.navigate.to(
-                                f"/cohort/{cohort_name}/family/{f}"
-                            ),
-                        ).props("flat round color=blue").tooltip(f"Next: {next_fid}")
+                        ui.label(f"{current_idx + 1} of {len(sorted_fids)}").classes(
+                            "text-sm text-gray-600 whitespace-nowrap"
+                        ).mark("family-position").tooltip(
+                            "In the Families tab's list, as filtered and sorted"
+                            if from_tab
+                            else "Among all the cohort's families, by ID"
+                        )
+                        arrow(
+                            sorted_fids[current_idx + 1]
+                            if current_idx < last
+                            else None,
+                            "arrow_forward",
+                            "Next",
+                        )
 
             # Dummies are listed by the selector but never selected: the
             # selection is what every tab looks up.

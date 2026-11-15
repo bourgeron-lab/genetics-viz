@@ -41,9 +41,12 @@ async def test_one_row_of_grouped_tabs_without_icons(user, monkeypatch):
     bar = user.find(marker="cohort-tabs").elements.pop()
     tabs = [t for t in bar.descendants() if isinstance(t, ui.tab)]
     assert [t.props["name"] for t in tabs] == [
+        "Families",
         "Individuals",
         "Sample QC",
-        "De novo",
+        "De novo QC",
+        "SNVs/Indels",
+        "SVs",
         "STR",
         "UPD",
         "Ancestry",
@@ -57,37 +60,37 @@ async def test_one_row_of_grouped_tabs_without_icons(user, monkeypatch):
     ]
     assert captions == ["Browse", "Checks", "Variants", "Background"]
     assert not any(t.props.get("icon") for t in tabs)
-    assert bar.value == "Individuals"
+    assert bar.value == "Families"
 
 
 async def test_statistics_tab_is_gone(user, monkeypatch):
-    """An older ``tab=stats`` link opens the individuals."""
+    """An older ``tab=stats`` link opens the default tab, Families."""
     await login(user, "reader")
     await user.open("/cohort/DEMO?tab=stats")
     await user.should_see("6 samples", retries=10)
-    assert user.find(marker="cohort-tabs").elements.pop().value == "Individuals"
+    assert user.find(marker="cohort-tabs").elements.pop().value == "Families"
     await user.should_not_see("Carriers per geneset")
 
 
 async def test_filter_bar_chips_clear_the_table_filters(user, monkeypatch):
     individuals = await _open(user, monkeypatch)
     table = individuals["table"]
-    assert count_label(user) == "6 individuals"
+    assert count_label(user) == "3 families · 6 individuals"
     with user.client:
         individuals["on_filter"]({"filters": {"Phenotype": ["2"], "Father": True}})
-    await user.should_see("1 of 6 individuals", retries=10)
+    await user.should_see("1 of 3 families · 1 of 6 individuals", retries=10)
     chips = {c.text: c for c in user.find(marker="cohort-filter-chip").elements}
     assert set(chips) == {"Phenotype: 2", "Has sequenced father"}
 
     # A chip's cross clears its filter in the table's filter row too.
     with user.client:
         chips["Has sequenced father"].set_value(False)
-    await wait_for(lambda: count_label(user) == "2 of 6 individuals")
+    await wait_for(lambda: count_label(user) == "2 of 3 families · 2 of 6 individuals")
     assert {r["Sample ID"] for r in table.rows} == {"S3", "S5"}
     assert table.initial_filters == {"Phenotype": ["2"], "Father": False}
 
     user.find(marker="cohort-clear-filters").click()
-    await wait_for(lambda: count_label(user) == "6 individuals")
+    await wait_for(lambda: count_label(user) == "3 families · 6 individuals")
     assert len(table.rows) == 6 and table.initial_filters == {}
 
 
@@ -97,7 +100,80 @@ async def test_edit_filters_goes_back_to_the_table(user, monkeypatch):
     open_tab(user, "cohort-tabs", "ROH")
     await user.should_see(marker="cohort-edit-filters", retries=10)
     user.find(marker="cohort-edit-filters").click()
+    await wait_for(lambda: tabs.value == "Families")
+
+
+async def test_edit_filters_goes_back_to_the_table_last_filtered(user, monkeypatch):
+    individuals = await _open(user, monkeypatch)
+    tabs = user.find(marker="cohort-tabs").elements.pop()
+    with user.client:
+        individuals["on_filter"]({"filters": {"Phenotype": ["2"]}})
+    open_tab(user, "cohort-tabs", "ROH")
+    await user.should_see(marker="cohort-edit-filters", retries=10)
+    user.find(marker="cohort-edit-filters").click()
     await wait_for(lambda: tabs.value == "Individuals")
+
+
+async def _families(user, monkeypatch, username="reader"):
+    """Log in and open DEMO: the families and the individuals tables."""
+    await login(user, username)
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    return (
+        next(t for t in tables if "Structure" in t["columns"]),
+        next(t for t in tables if "Sample ID" in t["columns"]),
+    )
+
+
+async def test_families_tab_lists_each_family(user, monkeypatch, data_dir):
+    datagen.add_upd_case(data_dir)
+    datagen.add_upd_calls(data_dir)
+    families, _ = await _families(user, monkeypatch, "curator")
+    table = families["table"]
+    # The ancestry and FROH columns are read off-thread, then the rows redrawn.
+    await wait_for(lambda: all(r.get("Ancestry") for r in table.rows))
+    rows = {r["FID"]: r for r in table.rows}
+    assert list(rows) == ["1001", "1002", "AU-X-1"]
+    assert (rows["1001"]["Structure"], rows["1001"]["Trios"]) == ("Trio", 1)
+    assert rows["1002"]["Structure"] == "Singleton"
+    assert rows["AU-X-1"]["Affected"] == "1 / 2"
+    assert rows["1001"]["Ancestry"] == "EUR"
+    # S3's chr2 and S2's chr15 wait for a curator, then S3's HTT, S2's FMR1.
+    await wait_for(
+        lambda: (
+            [b["label"] for b in table.rows[0]["Review_badges"]] == ["UPD 2", "STR 2"]
+        )
+    )
+    assert {"Review", "Conclusion"} <= set(families["columns"])
+
+
+async def test_readers_get_no_review_columns(user, monkeypatch):
+    families, _ = await _families(user, monkeypatch, "reader")
+    assert {"Review", "Conclusion"}.isdisjoint(families["columns"])
+
+
+async def test_family_filter_narrows_every_tab(user, monkeypatch):
+    families, individuals = await _families(user, monkeypatch)
+    with user.client:
+        families["on_filter"]({"filters": {"Structure": ["Trio"]}})
+    await wait_for(lambda: count_label(user) == "1 of 3 families · 3 of 6 individuals")
+    assert {r["Sample ID"] for r in individuals["table"].rows} == {"S1", "S2", "S3"}
+    assert pill_texts(user, "families-tab-pills") == ["1"]
+    assert pill_texts(user, "individuals-tab-pills") == ["3"]
+    chip = user.find(marker="cohort-filter-chip").elements.pop()
+    assert chip.text == "Structure: Trio"
+    # The chip's cross clears it in the families table too.
+    with user.client:
+        chip.set_value(False)
+    await wait_for(lambda: count_label(user) == "3 families · 6 individuals")
+    assert families["table"].initial_filters == {"Structure": []}
+
+
+async def test_family_filters_are_in_the_link(user, monkeypatch):
+    await login(user, "reader")
+    await user.open("/cohort/DEMO?fstruct=Duo")
+    await user.should_see("1 of 3 families · 2 of 6 individuals", retries=30)
 
 
 async def test_workflow_tab_hides_the_filter_bar(user, monkeypatch):
@@ -158,3 +234,61 @@ async def test_readers_get_no_upd_or_str_badge(user, monkeypatch, data_dir):
     assert pill_texts(user, "qc-tab-pills")
     assert pill_texts(user, "upd-tab-pills") == []
     assert pill_texts(user, "str-tab-pills") == []
+
+
+def _position(user):
+    return user.find(marker="family-position").elements.pop()
+
+
+async def test_family_arrows_follow_the_families_tab(user, monkeypatch):
+    from types import SimpleNamespace
+
+    families, _ = await _families(user, monkeypatch)
+    table = families["table"]
+    with user.client:
+        families["on_filter"]({"filters": {"Structure": ["Trio", "Duo"]}})
+        table._default_sort_handler(
+            SimpleNamespace(args={"sorting": [{"id": "FID", "desc": True}]})
+        )
+    await wait_for(lambda: [r["FID"] for r in table.rows] == ["AU-X-1", "1001"])
+
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Family: 1001", retries=10)
+    assert _position(user).text == "2 of 2"
+    previous = user.find(marker="family-previous").elements.pop()
+    assert previous.props.get("icon") == "arrow_back"
+    await user.should_see("Previous: AU-X-1")
+    await user.should_not_see(marker="family-next")
+
+    # 1002 is not in the list: every family, by ID.
+    await user.open("/cohort/DEMO/family/1002")
+    await user.should_see("Family: 1002", retries=10)
+    assert _position(user).text == "2 of 3"
+    await user.should_see("Among all the cohort's families, by ID")
+
+    # A bare cohort page forgets the list.
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see("Family: 1001", retries=10)
+    assert _position(user).text == "1 of 3"
+
+
+async def test_cohort_svs_tab_filters_calls_by_size(user, monkeypatch):
+    await login(user, "curator")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "SVs")
+    # DEMO's two calls are 0.2 and 0.5 Mb: none at the default 1 Mb.
+    await user.should_see("0 calls in 0 individuals", retries=30)
+    size = user.find(marker="svs-size").elements.pop()
+    with user.client:
+        size.set_value(100)
+    await user.should_see("2 calls in 2 individuals", retries=30)
+    calls = [t for t in tables if "locus" in t["columns"]][-1]
+    assert [(r["FID"], r["sample"], r["call"]) for r in calls["rows"]] == [
+        ("1001", "S3", "Robust LOSS"),
+        ("AU-X-1", "S6", "Robust GAIN"),
+    ]
+    assert calls["rows"][0]["Validation"] == "TODO"

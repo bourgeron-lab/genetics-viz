@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import Request
-from nicegui import ui
+from nicegui import app, ui
 
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tab_groups import GROUPED_TABS_PROPS, tab_group
@@ -35,6 +35,14 @@ from genetics_viz.pages.cohort.components.cohort_denovo_tab import (
     probe_cohort_denovo,
     render_cohort_denovo_tab,
 )
+from genetics_viz.pages.cohort.components.cohort_snvs_tab import (
+    probe_cohort_snvs,
+    render_cohort_snvs_tab,
+)
+from genetics_viz.pages.cohort.components.cohort_svs_tab import (
+    probe_cohort_svs,
+    render_cohort_svs_tab,
+)
 from genetics_viz.pages.cohort.components.cohort_str_tab import (
     probe_cohort_eh_data,
     render_cohort_str_tab,
@@ -57,6 +65,16 @@ from genetics_viz.utils.auth import can_write, check_auth
 from genetics_viz.utils.cohort_state import read_cohort_state
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
+from genetics_viz.utils.family_rows import (
+    DIAG_ORDER,
+    FamilyFacts,
+    compact_qc_cell,
+    family_columns,
+    family_row,
+    filter_families,
+    load_family_facts,
+    save_family_order,
+)
 from genetics_viz.utils.ghfc_ngs_docs import fetch_params_doc
 from genetics_viz.utils.pedigree_labels import dummy_badges
 from genetics_viz.utils.review_counts import (
@@ -154,11 +172,32 @@ _FILTER_LINK = {
     "Mother": ("mother", False),
 }
 
+#: Link key of each families-table column filter, and its empty value.
+_FAMILY_FILTER_LINK = {
+    "FID": ("ffid", ""),
+    "Structure": ("fstruct", []),
+    "Trios": ("ftrio", False),
+    "Affected": ("fmulti", False),
+    "Ancestry": ("fanc", ""),
+    "FROH": ("froh", []),
+    "QC": ("fqc", []),
+    "DenovoQC": ("fdn", []),
+    "Review": ("frev", False),
+    "Diagnostics": ("fdiag", []),
+    "Conclusion": ("fconc", False),
+}
+
 #: The page's tab row by group: label, link value (``tab=``), tooltip. The
 #: groups follow a curator's work: browse the cohort, run the checks, then
 #: the views by variant type and the genetic background.
 _TAB_GROUPS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
-    ("Browse", [("Individuals", "individuals", "")]),
+    (
+        "Browse",
+        [
+            ("Families", "families", "One row per family: structure, QC, review"),
+            ("Individuals", "individuals", ""),
+        ],
+    ),
     (
         "Checks",
         [
@@ -168,16 +207,27 @@ _TAB_GROUPS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
                 "Relatedness, sex and contamination (somalier); DNA source and library",
             ),
             (
-                "De novo",
+                "De novo QC",
                 "denovo",
-                "De novo SNVs and indels: per-child QC, flags, literature"
-                " (denovo step)",
+                "De novo rate per child against the literature, flags, curation"
+                " check (denovo step)",
             ),
         ],
     ),
     (
         "Variants",
         [
+            (
+                "SNVs/Indels",
+                "snvs",
+                "De novo candidates across families, and the genes hit in two or more",
+            ),
+            (
+                "SVs",
+                "svs",
+                "Large copy-number calls, whole-chromosome gains and losses, regions"
+                " hit in two or more families (WisecondorX)",
+            ),
             ("STR", "str", "Short tandem repeats"),
             ("UPD", "upd", "Uniparental disomy"),
         ],
@@ -199,7 +249,9 @@ _TABS: List[Tuple[str, str, str]] = [
     tab for _caption, tabs in _TAB_GROUPS for tab in tabs
 ] + [_WORKFLOW]
 _SLUGS = {label: slug for label, slug, _tip in _TABS}
-_DEFAULT_TAB = "individuals"
+_DEFAULT_TAB = "families"
+#: The tabs holding a filterable table.
+_TABLE_TABS = ("Families", "Individuals")
 
 #: Values a filter chip lists before ``+N``.
 _CHIP_VALUES = 3
@@ -255,8 +307,14 @@ def _filter_chips(
     return chips
 
 
-def _count_text(shown: int, total: int, filtered: bool) -> str:
-    noun = "individual" if total == 1 else "individuals"
+def _count_text(
+    shown: int,
+    total: int,
+    filtered: bool,
+    one: str = "individual",
+    many: str = "individuals",
+) -> str:
+    noun = one if total == 1 else many
     if not filtered:
         return f"{total:,} {noun}"
     return f"{shown:,} of {total:,} {noun}"
@@ -433,10 +491,12 @@ def _individual_columns(
     return columns
 
 
-def _filters_from_link(link: PageLink) -> Dict[str, Any]:
-    """The table's column filter values a shared link sets."""
+def _filters_from_link(
+    link: PageLink, spec: Dict[str, Tuple[str, Any]] = _FILTER_LINK
+) -> Dict[str, Any]:
+    """A table's column filter values a shared link sets (``spec``: link keys)."""
     filters: Dict[str, Any] = {}
-    for col, (key, empty) in _FILTER_LINK.items():
+    for col, (key, empty) in spec.items():
         if key not in link.params:
             continue
         if isinstance(empty, list):
@@ -448,8 +508,12 @@ def _filters_from_link(link: PageLink) -> Dict[str, Any]:
     return filters
 
 
-def _filters_to_link(filters: Dict[str, Any], link: PageLink) -> None:
-    for col, (key, empty) in _FILTER_LINK.items():
+def _filters_to_link(
+    filters: Dict[str, Any],
+    link: PageLink,
+    spec: Dict[str, Tuple[str, Any]] = _FILTER_LINK,
+) -> None:
+    for col, (key, empty) in spec.items():
         value = filters.get(col)
         link.set(key, value if value else None, default=empty)
 
@@ -502,7 +566,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
 
         # Load diagnostics per sample (highest priority wins)
         sample_diag: Dict[str, str] = defaultdict(str)
-        for _dtype, diag_file in diagnostic_paths(store.data_dir):
+        # Per family, each diagnosed variant (kind, key) and its best verdict.
+        family_diag: Dict[str, Dict[Tuple[str, str], str]] = defaultdict(dict)
+        for dtype, diag_file in diagnostic_paths(store.data_dir):
             if not diag_file.exists():
                 continue
             with open(diag_file, "r") as f:
@@ -517,6 +583,18 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     current = sample_diag[sid]
                     if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
                         sample_diag[sid] = diag
+                    variants = family_diag[row.get("FID") or ""]
+                    key = (dtype, row.get("Variant") or "")
+                    if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(
+                        variants.get(key, ""), 0
+                    ):
+                        variants[key] = diag
+
+        def diagnostics_of(fid: str) -> Tuple[int, str]:
+            """A family's diagnosed variants and the strongest verdict."""
+            verdicts = list(family_diag.get(fid, {}).values())
+            strongest = next((v for v in DIAG_ORDER if v in verdicts), "")
+            return len(verdicts), strongest
 
         # Sample QC per (family, sample), when the cohort's step ran. The
         # tables are tens of KB and cached on their stat.
@@ -545,12 +623,41 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         )
         show_qc_detail = can_write()
 
+        # The same flags by family (a cross-family pair counts for both).
+        family_flags: Dict[str, List[Any]] = defaultdict(list)
+        family_acked: Dict[str, List[Any]] = defaultdict(list)
+        for flags, by_family in ((qc_active, family_flags), (qc_acked, family_acked)):
+            for flag in flags:
+                for fid in dict.fromkeys(k[0] for k in flag.keys):
+                    by_family[fid].append(flag)
+        qc_checked_families = {fid for fid, _sid in qc_checked}
+
         def qc_fields(fid: str, sid: str) -> Dict[str, Any]:
             if cohort_qc is None:
                 return {}
-            flags = qc_by_key.get((fid, sid), [])
-            acked = qc_acked_by_key.get((fid, sid), [])
-            if (fid, sid) not in qc_checked and not flags and not acked:
+            return qc_cell(
+                qc_by_key.get((fid, sid), []),
+                qc_acked_by_key.get((fid, sid), []),
+                (fid, sid) in qc_checked,
+            )
+
+        def family_qc_fields(fid: str) -> Dict[str, Any]:
+            if cohort_qc is None:
+                return {}
+            flags, acked = family_flags.get(fid, []), family_acked.get(fid, [])
+            return compact_qc_cell(
+                qc_cell(flags, acked, fid in qc_checked_families),
+                flags,
+                acked,
+                fid,
+                _QC_ACKED,
+            )
+
+        def qc_cell(
+            flags: List[Any], acked: List[Any], checked: bool
+        ) -> Dict[str, Any]:
+            """The Sample QC cell of an individual or a family."""
+            if not checked and not flags and not acked:
                 return {"QC": "", "_qc_cats": [_QC_UNCHECKED], "_qc_rank": -1}
             badges = category_badges(flags, show_qc_detail)
             if acked:
@@ -634,13 +741,16 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         # Workflow is absent, not disabled, with no parameters file (there is
         # no pipeline to describe).
         has_data: Dict[str, bool] = {
+            "Families": True,
             "Individuals": True,
             "Ancestry": probe_cohort_ancestry_data(cohort),
             "Polygenic Scores": probe_cohort_pgs_data(cohort),
             "ROH": probe_cohort_roh_data(cohort),
             "UPD": probe_cohort_upd_data(cohort),
             "STR": probe_cohort_eh_data(cohort),
-            "De novo": probe_cohort_denovo(cohort),
+            "De novo QC": probe_cohort_denovo(cohort),
+            "SNVs/Indels": probe_cohort_snvs(cohort),
+            "SVs": probe_cohort_svs(store, cohort),
             "Sample QC": probe_cohort_qc_data(cohort),
             "Workflow": cohort.params_file is not None,
         }
@@ -658,7 +768,50 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         qc_worst = qc_worst_by_individual(qc_active, has_data["UPD"])
         show_review = can_write()
 
+        # One row per family. The pedigree, Sample QC, UPD and diagnostics
+        # columns are filled now; ancestry, FROH and de novo come from the
+        # cohort tables, read off the loop once the page is drawn, and the
+        # STR flags with the tab badges.
+        qc_options = next(
+            (c["filter"]["options"] for c in columns if c["id"] == "QC"), []
+        )
+        family_cols = family_columns(
+            cohort_name,
+            qc_options=qc_options,
+            diag_options=[d for d in DIAG_ORDER if d in diag_values_raw],
+            with_ancestry=has_data["Ancestry"],
+            with_roh=has_data["ROH"],
+            with_denovo=has_data["De novo QC"],
+            curator=show_review,
+        )
+        upd_open_by_family: Dict[str, List[str]] = defaultdict(list)
+        for ind in all_individuals:
+            upd_open_by_family[ind["FID"]].extend(ind.get("_upd_open") or [])
+        family_data: Dict[str, Any] = {"facts": FamilyFacts(), "rows": []}
+
+        def build_family_rows() -> None:
+            str_open: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
+            for (fid, _sid), _locus, severity in state["str_flags"]:
+                str_open[fid][0] += 1
+                str_open[fid][1] += severity == "high"
+            family_data["rows"] = [
+                family_row(
+                    cohort.families[fid],
+                    family_data["facts"],
+                    qc=family_qc_fields(fid),
+                    upd_open=upd_open_by_family.get(fid, []),
+                    str_open=tuple(str_open.get(fid, (0, 0))),
+                    diagnostics=diagnostics_of(fid),
+                    curator=show_review,
+                    show_relationship=show_review,
+                )
+                for fid in sorted(cohort.families)
+            ]
+
+        n_families = len(cohort.families)
+
         linked_filters = _filters_from_link(link)
+        linked_family_filters = _filters_from_link(link, _FAMILY_FILTER_LINK)
         linked_slug = _linked_tab(link)
         initial = next(
             (
@@ -666,7 +819,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                 for label, slug, _tip in _TABS
                 if slug == linked_slug and has_data[label]
             ),
-            "Individuals",
+            "Families",
         )
         if "panel" in link.params or "view" in link.params:
             # An older link: its tab is now ``tab``.
@@ -682,11 +835,17 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         refreshers: List[Callable[[], None]] = []
         state: Dict[str, Any] = {
             "filters": {},
+            "family_filters": {},
+            "families": [],
+            # The table "Edit filters" goes back to: the last one filtered.
+            "filter_tab": "Families",
             "tab": initial,
             "str_flags": [],
             "denovo": ({}, []),
         }
-        dt_ref: Dict[str, Any] = {"dt": None}
+        build_family_rows()
+        state["families"] = list(family_data["rows"])
+        dt_ref: Dict[str, Any] = {"dt": None, "families": None}
 
         ui.run_javascript(_HEADER_HEIGHT_JS)
 
@@ -708,39 +867,111 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         .mark("cohort-workflow")
                     )
 
-            def apply_filters(filters: Dict[str, Any], to_table: bool = False) -> None:
-                """Show the individuals ``filters`` leave, on every tab.
+            def recompute(
+                to_individuals: bool = False, to_families: bool = False
+            ) -> None:
+                """Apply both tables' filters, to both tables and every tab.
 
-                ``to_table`` when the change comes from the filter bar: the
-                table's filter row is set to match.
+                The scope is the individuals the individuals filters leave, in
+                the families the families filters leave. A family is listed when
+                it passes its filters and, with individuals filters on, one of
+                its members passes them. ``to_*`` when the change comes from the
+                filter bar: that table's filter row is set to match.
                 """
-                state["filters"] = dict(filters)
-                _filters_to_link(filters, link)
-                link.push()
-                filtered = _filter_individuals(all_individuals, filters)
-                filtered_state["individuals"] = filtered
-                dt = dt_ref["dt"]
-                if dt is not None:
-                    if to_table:
-                        dt.set_filters(filters)
-                    dt.update_data(filtered)
+                ind_filters = state["filters"]
+                fam_filters = state["family_filters"]
+                by_individual = _filter_individuals(all_individuals, ind_filters)
+                families = filter_families(family_data["rows"], fam_filters, _QC_ANY)
+                if _filter_chips(fam_filters, family_cols):
+                    kept = {r["FID"] for r in families}
+                    individuals = [i for i in by_individual if i["FID"] in kept]
+                else:
+                    individuals = by_individual
+                if _filter_chips(ind_filters, columns):
+                    with_member = {i["FID"] for i in by_individual}
+                    families = [r for r in families if r["FID"] in with_member]
+                filtered_state["individuals"] = individuals
+                state["families"] = families
+                for key, rows, filters, push in (
+                    ("dt", individuals, ind_filters, to_individuals),
+                    ("families", families, fam_filters, to_families),
+                ):
+                    dt = dt_ref[key]
+                    if dt is not None:
+                        if push:
+                            dt.set_filters(filters)
+                        # The sort is Python's: keep the one the header shows.
+                        dt.update_data(dt.sort_rows(list(rows)))
+                remember_order()
                 filter_bar.refresh()
                 update_pills()
                 # Re-render the tabs that follow the filters
                 for refresher in refreshers:
                     refresher()
 
+            def remember_order() -> None:
+                """The family page's arrows walk the families shown, as sorted.
+
+                Forgotten while the table is neither filtered nor sorted: the
+                arrows then walk every family by ID, as they always did.
+                """
+                dt = dt_ref["families"]
+                rows = dt.rows if dt is not None else state["families"]
+                narrowed = _filter_chips(state["family_filters"], family_cols) or (
+                    _filter_chips(state["filters"], columns)
+                )
+                sorted_ = dt is not None and bool(dt.sorting)
+                save_family_order(
+                    app.storage.user,
+                    cohort_name,
+                    [r["FID"] for r in rows] if narrowed or sorted_ else None,
+                )
+
+            def apply_filters(filters: Dict[str, Any], to_table: bool = False) -> None:
+                """Set the individuals table's filters (from it, or the bar)."""
+                state["filters"] = dict(filters)
+                _filters_to_link(filters, link)
+                link.push()
+                recompute(to_individuals=to_table)
+
+            def apply_family_filters(
+                filters: Dict[str, Any], to_table: bool = False
+            ) -> None:
+                """Set the families table's filters (from it, or the bar)."""
+                state["family_filters"] = dict(filters)
+                _filters_to_link(filters, link, _FAMILY_FILTER_LINK)
+                link.push()
+                recompute(to_families=to_table)
+
             def on_filter(e: Dict[str, Any]) -> None:
+                state["filter_tab"] = "Individuals"
                 apply_filters(e.get("filters") or {})
 
-            def make_clear(col: str) -> Callable[[Any], None]:
+            def on_family_filter(e: Dict[str, Any]) -> None:
+                state["filter_tab"] = "Families"
+                apply_family_filters(e.get("filters") or {})
+
+            def clear_all() -> None:
+                state["filters"], state["family_filters"] = {}, {}
+                _filters_to_link({}, link)
+                _filters_to_link({}, link, _FAMILY_FILTER_LINK)
+                link.push()
+                recompute(to_individuals=True, to_families=True)
+
+            def make_clear(col: str, family: bool = False) -> Callable[[Any], None]:
+                spec = _FAMILY_FILTER_LINK if family else _FILTER_LINK
+
                 def handler(e: Any) -> None:
                     if e.value:
                         return
-                    filters = dict(state["filters"])
-                    empty = _FILTER_LINK[col][1]
+                    key = "family_filters" if family else "filters"
+                    filters = dict(state[key])
+                    empty = spec[col][1]
                     filters[col] = list(empty) if isinstance(empty, list) else empty
-                    apply_filters(filters, to_table=True)
+                    if family:
+                        apply_family_filters(filters, to_table=True)
+                    else:
+                        apply_filters(filters, to_table=True)
 
                 return handler
 
@@ -750,8 +981,24 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             @ui.refreshable
             def filter_bar() -> None:
                 """The count, a removable chip per filter, and a way to the filters."""
-                chips = _filter_chips(state["filters"], columns)
+                family_chips = _filter_chips(state["family_filters"], family_cols)
+                individual_chips = _filter_chips(state["filters"], columns)
+                chips = [(c, t, True) for c, t in family_chips] + [
+                    (c, t, False) for c, t in individual_chips
+                ]
                 shown = len(filtered_state["individuals"])
+                count = " · ".join(
+                    (
+                        _count_text(
+                            len(state["families"]),
+                            n_families,
+                            bool(chips),
+                            "family",
+                            "families",
+                        ),
+                        _count_text(shown, n_total, bool(chips)),
+                    )
+                )
                 with (
                     ui.row()
                     .classes(
@@ -761,31 +1008,30 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     .mark("cohort-filter-bar")
                 ):
                     ui.icon("filter_alt", size="18px").classes("text-blue-700")
-                    ui.label(_count_text(shown, n_total, bool(chips))).classes(
+                    ui.label(count).classes(
                         "text-sm font-semibold text-blue-900 whitespace-nowrap"
                     ).mark("cohort-count")
-                    for col, text in chips:
+                    for col, text, family in chips:
                         ui.chip(
                             text,
                             removable=True,
                             color="white",
                             text_color="blue-10",
-                            on_value_change=make_clear(col),
+                            on_value_change=make_clear(col, family),
                         ).props("dense").classes("text-xs border border-blue-200").mark(
                             "cohort-filter-chip"
                         )
                     if chips:
-                        ui.button(
-                            "Clear all", on_click=lambda: apply_filters({}, True)
-                        ).props("flat dense no-caps size=sm color=blue-8").mark(
-                            "cohort-clear-filters"
-                        )
+                        ui.button("Clear all", on_click=clear_all).props(
+                            "flat dense no-caps size=sm color=blue-8"
+                        ).mark("cohort-clear-filters")
                     ui.space()
-                    if state["tab"] != "Individuals":
+                    if state["tab"] not in _TABLE_TABS:
+                        target = state["filter_tab"]
                         ui.button(
-                            "Edit filters" if chips else "Filter individuals",
+                            "Edit filters" if chips else f"Filter {target.lower()}",
                             icon="tune",
-                            on_click=lambda: show_tab("Individuals"),
+                            on_click=lambda: show_tab(target),
                         ).props("flat dense no-caps size=sm color=blue-8").mark(
                             "cohort-edit-filters"
                         )
@@ -821,7 +1067,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
 
                 # Badges: the filter for everyone, as Sample QC and the run;
                 # UPD and STR count what only a curator settles.
-                pill_tabs = ["Individuals", "Sample QC", "De novo"]
+                pill_tabs = ["Families", "Individuals", "Sample QC", "De novo QC"]
                 if show_review:
                     pill_tabs += ["UPD", "STR"]
                 pills: Dict[str, TabPills] = {
@@ -841,8 +1087,19 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             def update_pills() -> None:
                 rows = filtered_state["individuals"]
                 keys = {(r["FID"], r["Sample ID"]) for r in rows}
-                n_filters = len(_filter_chips(state["filters"], columns))
+                n_filters = len(_filter_chips(state["filters"], columns)) + len(
+                    _filter_chips(state["family_filters"], family_cols)
+                )
                 pills["Individuals"].set(filter_pills(len(rows), n_total, n_filters))
+                pills["Families"].set(
+                    filter_pills(
+                        len(state["families"]),
+                        n_families,
+                        n_filters,
+                        "family",
+                        "families",
+                    )
+                )
                 if "Sample QC" in pills:
                     pills["Sample QC"].set(
                         qc_cohort_pills(qc_worst, keys, has_data["UPD"])
@@ -855,9 +1112,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     )
                 if "STR" in pills:
                     pills["STR"].set(str_cohort_pills(state["str_flags"], keys))
-                if "De novo" in pills:
+                if "De novo QC" in pills:
                     verdicts, issues = state["denovo"]
-                    pills["De novo"].set(denovo_cohort_pills(verdicts, issues, keys))
+                    pills["De novo QC"].set(denovo_cohort_pills(verdicts, issues, keys))
 
             async def load_badges() -> None:
                 """The STR flags and the run record, read once off the loop."""
@@ -868,7 +1125,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         )
                     except Exception:
                         logger.warning("Failed to count STR flags", exc_info=True)
-                if "De novo" in pills:
+                if "De novo QC" in pills:
                     try:
                         state["denovo"] = await asyncio.to_thread(
                             denovo_cohort_status, cohort, store.data_dir, show_review
@@ -884,7 +1141,23 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         )
                     except Exception:
                         logger.warning("Failed to read the run record", exc_info=True)
-                update_pills()
+                if state["str_flags"]:
+                    build_family_rows()
+                    recompute()
+                else:
+                    update_pills()
+
+            async def load_families() -> None:
+                """The Families table's ancestry, FROH and de novo columns."""
+                try:
+                    family_data["facts"] = await asyncio.to_thread(
+                        load_family_facts, cohort, store.data_dir, show_review
+                    )
+                except Exception:
+                    logger.warning("Failed to read the family facts", exc_info=True)
+                    return
+                build_family_rows()
+                recompute()
 
             # Each tab reads its files on first view, not on first paint.
             openers: Dict[str, Callable[[], None]] = {}
@@ -951,6 +1224,16 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             # of their own and the chrome is not doubled.
             panel_classes = "w-full px-0 pt-3 pb-0"
             with ui.tab_panels(tabs, value=initial).classes("w-full"):
+                with ui.tab_panel(tab_objects["Families"]).classes(panel_classes):
+                    dt_ref["families"] = DataTable(
+                        columns=family_cols,
+                        rows=family_data["rows"],
+                        row_key="FID",
+                        pagination={"rowsPerPage": 20},
+                        on_filter=on_family_filter,
+                        initial_filters=linked_family_filters,
+                        on_state_change=lambda: remember_order(),
+                    )
                 with ui.tab_panel(tab_objects["Individuals"]).classes(panel_classes):
                     dt_ref["dt"] = DataTable(
                         columns=columns,
@@ -961,9 +1244,15 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         initial_filters=linked_filters,
                     )
                 # A shared link's filters apply before the tabs are built, so
-                # they open on the filtered individuals.
-                if linked_filters:
-                    apply_filters(linked_filters)
+                # they open on the filtered families and individuals.
+                if linked_filters or linked_family_filters:
+                    state["filters"] = dict(linked_filters)
+                    state["family_filters"] = dict(linked_family_filters)
+                    if linked_family_filters:
+                        state["filter_tab"] = "Families"
+                    elif linked_filters:
+                        state["filter_tab"] = "Individuals"
+                    recompute()
 
                 for label, render, what, loading in (
                     ("Ancestry", render_cohort_ancestry_tab, "ancestry", "ancestry"),
@@ -975,7 +1264,14 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     ),
                     ("ROH", render_cohort_roh_tab, "ROH", "runs of homozygosity"),
                     ("UPD", render_cohort_upd_tab, "UPD", "uniparental disomy"),
-                    ("De novo", render_cohort_denovo_tab, "de novo", "de novo calls"),
+                    ("De novo QC", render_cohort_denovo_tab, "de novo", "de novo QC"),
+                    (
+                        "SNVs/Indels",
+                        render_cohort_snvs_tab,
+                        "de novo",
+                        "de novo candidates",
+                    ),
+                    ("SVs", render_cohort_svs_tab, "SV", "copy-number calls"),
                     ("STR", render_cohort_str_tab, "STR", "short tandem repeats"),
                     (
                         "Sample QC",
@@ -1025,6 +1321,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                 openers[initial]()
             update_pills()
             ui.timer(0.2, load_badges, once=True)
+            ui.timer(0.2, load_families, once=True)
+            # A bare page forgets an order left by an earlier, filtered visit.
+            remember_order()
 
     except RuntimeError as e:
         ui.label(f"Error: {e}").classes("text-red-500")

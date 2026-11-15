@@ -7,11 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A Families tab, the cohort page's default view**: one row per family, to pick the next one to review. Columns:
+  - Family ID (link), structure (singleton, duo, trio, quartet, extended, no parents; dummies do not count), complete trios (children with both parents sequenced), affected / sequenced members;
+  - family ancestry (the founders' regions, `EUR / AFR` when they differ) and the strongest FROH grade, from the cohort's ancestry and ROH tables;
+  - Sample QC as one badge (worst unacknowledged severity, members flagged, the categories on hover) and a "Cell line" badge, acknowledged or not;
+  - the worst de novo QC verdict among the children;
+  - for curators, **To review**: strict de novo candidates of HIGH or MODERATE impact not validated (from the cohort de novo table, so a Wombat row the step did not assess is not counted), unsettled UPD candidates and open STR flags; and **Conclusion**, the date of the family's curator conclusion (its text on hover);
+  - diagnostics: the strongest verdict and how many.
+
+  Each column filters (structure, has a trio, 2+ affected, ancestry, FROH grade, QC category, de novo verdict, waiting for review, diagnostic verdict, no conclusion yet), and the filters are in the link (`fstruct=Trio`, `frev=1`…). **One scope for both tables**: the families filters keep their members, the individuals filters keep the families with a member left, and every analysis tab follows. The filter bar counts both ("1 of 3 families · 3 of 6 individuals"), and "Edit filters" goes back to the table last filtered. The ancestry, FROH and de novo columns are read off the event loop once the page is drawn.
+- **The family page's previous / next arrows follow the Families tab**: once the table is filtered or sorted, they walk the families it shows, in its order, and the position sits between them ("3 of 52"). A family opened from elsewhere (Search, a gene page, a link), or a cohort page opened without filter or sort, keeps the old walk through every family by ID.
+
+- **A cohort SNVs/Indels tab** (Variants): the denovo step's candidates of the children the filters leave, strict and of HIGH or MODERATE impact by default (switch and filters for strictness, impact and validation status), with gene badges, flags, origin, VAF, recurrence and the curators' validation and diagnostic; above them, **the genes hit in two or more families**. Each family links to its De novo sub-tab. A "Search inherited variants" button opens the Search page. Downloads: candidates, recurrent genes.
+- **A cohort SVs tab** (Variants), from the cohort's WisecondorX table: the calls of the individuals shown (robust and 1 Mb or more by default; size from 100 kb to 10 Mb, permissive calls on request) with exonic genes and the curators' validation; **whole-chromosome gains and losses**, by the family report's rule; and **regions where same-direction calls of two or more families overlap**. The table is scanned lazily, keeping only calls past the permissive thresholds and 100 kb, so a cohort table of several GB is not read whole. Vedette has no cohort table yet, so it is not there.
+
 ### Changed
+- **The cohort De novo tab is now De novo QC** (still `tab=denovo`): the per-child rates, the literature comparison, the flags and the curation check. Its candidates download moved to the SNVs/Indels tab.
 - **The cohort and family tabs are grouped, without icons.** A small caption over each group says what its tabs are for; the icons for ROH, UPD, STR or Polygenic Scores said nothing. Same groups, same order on both pages:
   - Browse (cohort page only): Individuals;
-  - Checks: Sample QC, then De novo on the cohort page;
-  - Variants: SNVs/Indels and SVs (family pages), STR, UPD;
+  - Checks: Sample QC, then De novo QC on the cohort page;
+  - Variants: SNVs/Indels, SVs, STR, UPD;
   - Background: Ancestry, ROH, Polygenic Scores.
 
   The family pages put Sample QC first, the order a family is checked in, but still open on SNVs/Indels. The General tab lost its icon too. The family review badges now sit in line after their label, as the cohort page's do: floating, they covered the end of the shorter tabs' labels.

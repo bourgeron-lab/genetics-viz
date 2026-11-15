@@ -4,7 +4,7 @@ import asyncio
 
 import datagen
 from nicegui import ui
-from ui_helpers import badge_text, capture_tables, login
+from ui_helpers import badge_text, capture_tables, login, open_tab
 
 
 def _explain_not_parent(data_dir):
@@ -162,10 +162,10 @@ async def test_cohort_tab_disabled_without_tables(user, data_dir):
     await login(user, "curator")
     await user.open("/cohort/DEMO")
     await user.should_see("Individuals", retries=10)
-    tab = next(
-        t for t in user.find(ui.tab).elements if t.props.get("name") == "De novo"
-    )
-    assert tab.props.get("disable") is True
+    # De novo QC and the SNVs/Indels candidates both read the step's tables.
+    tabs = {t.props.get("name"): t for t in user.find(ui.tab).elements}
+    assert tabs["De novo QC"].props.get("disable") is True
+    assert tabs["SNVs/Indels"].props.get("disable") is True
 
 
 async def test_cell_line_child_gets_the_banner(user, data_dir, monkeypatch):
@@ -208,3 +208,27 @@ async def test_cohort_tab_leaves_cell_lines_out_of_the_literature(
     )
     assert chart.options["series"][0]["data"][0]["itemStyle"]["color"] == "#880e4f"
     assert "purple: cell lines" in chart.options["title"]["subtext"]
+
+
+async def test_cohort_snvs_tab_lists_strict_candidates(user, data_dir, monkeypatch):
+    datagen.add_denovo_calls(data_dir)
+    await login(user, "curator")
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "SNVs/Indels")
+    await user.should_see(marker="snvs-note", retries=30)
+    candidates = next(t for t in tables if "Variant" in t["columns"])
+    # SHANK3 is strict and missense; PLAIN is flagged, so not strict.
+    assert [r["genes"] for r in candidates["rows"]] == ["SHANK3"]
+    assert candidates["rows"][0]["Validation"] == "TODO"
+    await user.should_see("No gene is hit in two families with these filters")
+
+    switch = user.find(marker="snvs-strict").elements.pop()
+    with user.client:
+        switch.set_value(False)
+    await user.should_see("2 candidates in 1 family", retries=30)
+    latest = [t for t in tables if "Variant" in t["columns"]][-1]
+    plain = next(r for r in latest["rows"] if r["genes"] == "PLAIN")
+    # PLAIN is validated de novo in datagen.
+    assert plain["Validation"] == "present"

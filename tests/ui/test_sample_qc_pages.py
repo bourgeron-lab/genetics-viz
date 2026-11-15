@@ -167,7 +167,7 @@ async def test_cohort_qc_panel_follows_the_filters(user, monkeypatch):
     await user.should_see("3 acknowledged flag(s) not counted")
     await user.should_see("2 related pair(s) across families", retries=10)
 
-    individuals = tables[0]
+    individuals = next(t for t in tables if "Sample ID" in t["columns"])
     with user.client:
         individuals["on_filter"]({"filters": {"FID": "AU"}})
     await user.should_see("2 of 2 shown individuals checked", retries=30)
@@ -196,7 +196,7 @@ async def test_cohort_table_qc_column_filters(user, monkeypatch):
     tables = capture_tables(monkeypatch)
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
-    individuals = tables[0]
+    individuals = next(t for t in tables if "Sample ID" in t["columns"])
     assert "QC" in individuals["columns"]
     by_sample = {r["Sample ID"]: r for r in individuals["rows"]}
     assert by_sample["S4"]["_qc_cats"] == ["Not checked"]

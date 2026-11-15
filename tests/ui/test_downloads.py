@@ -79,10 +79,14 @@ async def test_cohort_tabs_download_what_they_show(user):
     assert {n.split(".")[2] for n in names} == {"flags", "samples", "pairs"}
 
 
+def _individuals(tables):
+    return next(t for t in tables if "Sample ID" in t["columns"])
+
+
 async def test_cohort_downloads_follow_the_filter_and_the_role(user, monkeypatch):
     tables = await _open_cohort(user, "reader", monkeypatch)
     with user.client:
-        tables[0]["on_filter"]({"filters": {"FID": "AU"}})
+        _individuals(tables)["on_filter"]({"filters": {"FID": "AU"}})
 
     open_tab(user, "cohort-tabs", "ROH")
     columns, rows = _rows(await _download(user, "download-roh"))
@@ -155,7 +159,7 @@ async def test_family_tabs_download_what_they_show(user):
 async def test_an_empty_export_downloads_nothing(user, monkeypatch):
     tables = await _open_cohort(user, "curator", monkeypatch)
     with user.client:
-        tables[0]["on_filter"]({"filters": {"FID": "1002"}})
+        _individuals(tables)["on_filter"]({"filters": {"FID": "1002"}})
     open_tab(user, "cohort-tabs", "STR")
     await user.should_see("No flagged genotype among the individuals shown", retries=30)
     user.find(marker="download-str").click()
