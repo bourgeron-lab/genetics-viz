@@ -302,17 +302,23 @@ def _severity_pills(
     ]
 
 
-def filter_pills(shown: int, total: int, n_filters: int) -> List[Pill]:
-    """The Individuals tab's badge: how many individuals the filters leave."""
+def filter_pills(
+    shown: int,
+    total: int,
+    n_filters: int,
+    one: str = "individual",
+    many: str = "individuals",
+) -> List[Pill]:
+    """The Families or Individuals tab's badge: how many the filters leave."""
     if not n_filters:
         return []
     return [
         Pill(
             f"{shown:,}",
             FILTER_COLOR,
-            f"{shown:,} of {_plural(total, 'individual', 'individuals')} shown"
+            f"{shown:,} of {_plural(total, one, many)} shown"
             f" ({_plural(n_filters, 'filter', 'filters')}). Every tab but"
-            " Workflow shows these only.",
+            " Workflow follows the filters.",
         )
     ]
 

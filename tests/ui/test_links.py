@@ -117,6 +117,8 @@ async def test_cohort_tab_follows_the_address_bar(user, monkeypatch):
     open_tab(user, "cohort-tabs", "Sample QC")
     await wait_for(lambda: pushed and pushed[-1].endswith("?tab=qc"))
     open_tab(user, "cohort-tabs", "Individuals")
+    await wait_for(lambda: pushed[-1].endswith("?tab=individuals"))
+    open_tab(user, "cohort-tabs", "Families")
     await wait_for(lambda: pushed[-1] == "/cohort/DEMO")
 
 

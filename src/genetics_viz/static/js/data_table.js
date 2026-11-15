@@ -391,6 +391,9 @@ class DataTable {
             input.type = 'text';
             input.className = 'dt-filter-text';
             input.placeholder = filter.placeholder || 'Filter...';
+            // An input is about 20 characters wide by default, which sets the
+            // column's floor; ``size`` lets a narrow column shrink.
+            if (filter.size) input.size = filter.size;
             input.value = this._filterValues[colId] || '';
 
             var clearBtn = document.createElement('button');

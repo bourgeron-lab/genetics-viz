@@ -281,7 +281,7 @@ async def test_cohort_str_panel_follows_the_filters(user, monkeypatch):
         for r in flagged["rows"]
     )
 
-    individuals = tables[0]
+    individuals = next(t for t in tables if "Sample ID" in t["columns"])
     with user.client:
         individuals["on_filter"]({"filters": {"FID": "1002"}})
     await user.should_see("No flagged genotype among the individuals shown", retries=30)

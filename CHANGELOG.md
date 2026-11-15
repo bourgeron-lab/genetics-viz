@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A Families tab, the cohort page's default view**: one row per family, to pick the next one to review. Columns:
+  - Family ID (link), structure (singleton, duo, trio, quartet, extended, no parents; dummies do not count), complete trios (children with both parents sequenced), affected / sequenced members;
+  - family ancestry (the founders' regions, `EUR / AFR` when they differ) and the strongest FROH grade, from the cohort's ancestry and ROH tables;
+  - Sample QC as one badge (worst unacknowledged severity, members flagged, the categories on hover) and a "Cell line" badge, acknowledged or not;
+  - the worst de novo QC verdict among the children;
+  - for curators, **To review**: strict de novo candidates of HIGH or MODERATE impact not validated (from the cohort de novo table, so a Wombat row the step did not assess is not counted), unsettled UPD candidates and open STR flags; and **Conclusion**, the date of the family's curator conclusion (its text on hover);
+  - diagnostics: the strongest verdict and how many.
+
+  Each column filters (structure, has a trio, 2+ affected, ancestry, FROH grade, QC category, de novo verdict, waiting for review, diagnostic verdict, no conclusion yet), and the filters are in the link (`fstruct=Trio`, `frev=1`…). **One scope for both tables**: the families filters keep their members, the individuals filters keep the families with a member left, and every analysis tab follows. The filter bar counts both ("1 of 3 families · 3 of 6 individuals"), and "Edit filters" goes back to the table last filtered. The ancestry, FROH and de novo columns are read off the event loop once the page is drawn.
+
 ### Changed
 - **The cohort and family tabs are grouped, without icons.** A small caption over each group says what its tabs are for; the icons for ROH, UPD, STR or Polygenic Scores said nothing. Same groups, same order on both pages:
   - Browse (cohort page only): Individuals;
