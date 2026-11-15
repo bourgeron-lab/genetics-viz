@@ -71,7 +71,7 @@ from genetics_viz.utils.str_eh import (
     get_cohort_eh_dir,
     read_eh_table,
 )
-from genetics_viz.utils.tsv import read_tsv_or_none
+from genetics_viz.utils.tsv import collect_streaming, read_tsv_or_none
 from genetics_viz.utils.wisecondorx import infer_sv_type, parse_wisecondorx_bed
 
 logger = logging.getLogger(__name__)
@@ -316,14 +316,6 @@ def _family_from_pedigree(df: pl.DataFrame, cohort: Cohort) -> pl.DataFrame:
     )
 
 
-def _collect(lf: pl.LazyFrame) -> pl.DataFrame:
-    """Collect with the streaming engine (polars 2.x name, then 1.x)."""
-    try:
-        return lf.collect(engine="streaming")
-    except (TypeError, ValueError):
-        return lf.collect(streaming=True)
-
-
 def _snv_frame(source: Source, data_dir: Path, cohort: Cohort) -> pl.DataFrame:
     wombat_config = source.label
     vep_config = re.match(
@@ -347,7 +339,7 @@ def _snv_frame(source: Source, data_dir: Path, cohort: Cohort) -> pl.DataFrame:
     # Wombat writes a row per transcript: one per variant, sample and gene is
     # kept, the gene's consequences joined. Grouped before anything else, so
     # the streaming engine never holds a whole table.
-    df = _collect(
+    df = collect_streaming(
         lf.with_columns(
             pl.col("VEP_SYMBOL")
             .fill_null("")
@@ -807,7 +799,7 @@ def _counts_to_file(files: List[Path], path: Path) -> int:
     """
     gt = pl.col("sample_gt")
     if files:
-        frame = _collect(
+        frame = collect_streaming(
             pl.scan_parquet(files)
             .select("variant", "cohort", "family_id", "sample", "sample_gt")
             .filter(gt.is_null() | gt.str.contains("[1-9]"))
