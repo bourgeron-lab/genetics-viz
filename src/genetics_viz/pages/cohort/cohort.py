@@ -10,6 +10,7 @@ from fastapi import Request
 from nicegui import ui
 
 from genetics_viz.components.header import create_header
+from genetics_viz.components.tab_groups import GROUPED_TABS_PROPS, tab_group
 from genetics_viz.components.page_link import PageLink
 from genetics_viz.components.tab_badge import TabPills
 from genetics_viz.components.tanstack_table import DataTable
@@ -48,7 +49,6 @@ from genetics_viz.pages.cohort.components.cohort_upd_tab import (
 )
 from genetics_viz.pages.cohort.components.docs_panel import render_params_doc_panel
 from genetics_viz.pages.cohort.components.params_panel import render_params_panel
-from genetics_viz.pages.cohort.components.stats_panel import render_stats_panel
 from genetics_viz.pages.cohort.components.status_panel import (
     render_status_panel,
     status_headline,
@@ -154,30 +154,51 @@ _FILTER_LINK = {
     "Mother": ("mother", False),
 }
 
-#: The page's tabs, in order: label, link value (``tab=``), icon, tooltip.
-_TABS: List[Tuple[str, str, str, str]] = [
-    ("Individuals", "individuals", "groups", ""),
-    ("Statistics", "stats", "bar_chart", "Carriers per geneset"),
-    ("Ancestry", "ancestry", "public", ""),
-    ("Polygenic Scores", "pgs", "functions", ""),
-    ("ROH", "roh", "linear_scale", "Runs of homozygosity"),
-    ("UPD", "upd", "content_copy", "Uniparental disomy"),
+#: The page's tab row by group: label, link value (``tab=``), tooltip. The
+#: groups follow a curator's work: browse the cohort, run the checks, then
+#: the views by variant type and the genetic background.
+_TAB_GROUPS: List[Tuple[str, List[Tuple[str, str, str]]]] = [
+    ("Browse", [("Individuals", "individuals", "")]),
     (
-        "De novo",
-        "denovo",
-        "new_releases",
-        "De novo SNVs and indels: per-child QC, flags, literature (denovo step)",
+        "Checks",
+        [
+            (
+                "Sample QC",
+                "qc",
+                "Relatedness, sex and contamination (somalier); DNA source and library",
+            ),
+            (
+                "De novo",
+                "denovo",
+                "De novo SNVs and indels: per-child QC, flags, literature"
+                " (denovo step)",
+            ),
+        ],
     ),
-    ("STR", "str", "repeat", "Short tandem repeats"),
     (
-        "Sample QC",
-        "qc",
-        "fact_check",
-        "Relatedness, sex and contamination (somalier); DNA source and library",
+        "Variants",
+        [
+            ("STR", "str", "Short tandem repeats"),
+            ("UPD", "upd", "Uniparental disomy"),
+        ],
     ),
-    ("Workflow", "workflow", "account_tree", "Pipeline run status and parameters"),
+    (
+        "Background",
+        [
+            ("Ancestry", "ancestry", ""),
+            ("ROH", "roh", "Runs of homozygosity"),
+            ("Polygenic Scores", "pgs", ""),
+        ],
+    ),
 ]
-_SLUGS = {label: slug for label, slug, _icon, _tip in _TABS}
+#: Workflow is about the run, not the cohort: a button on the title line, not
+#: a tab, though its panel and its ``tab=workflow`` link work as a tab's.
+_WORKFLOW = ("Workflow", "workflow", "Pipeline run status and parameters")
+#: Every tab, the row's then Workflow: label, link value, tooltip.
+_TABS: List[Tuple[str, str, str]] = [
+    tab for _caption, tabs in _TAB_GROUPS for tab in tabs
+] + [_WORKFLOW]
+_SLUGS = {label: slug for label, slug, _tip in _TABS}
 _DEFAULT_TAB = "individuals"
 
 #: Values a filter chip lists before ``+N``.
@@ -195,12 +216,6 @@ _HEADER_HEIGHT_JS = """
     new ResizeObserver(set).observe(header);
 })();
 """
-
-
-#: Ten tabs with icons and badges fit a 1280 px window only with Quasar's
-#: 16 px tab padding cut to 10 (and mixed-case labels): about 1,150 px with
-#: the De novo and Workflow pills, of the 1,185 px the row gets.
-_TABS_CSS = ".cohort-tabs .q-tab { padding: 0 10px; }"
 
 
 def _linked_tab(link: PageLink) -> Optional[str]:
@@ -620,7 +635,6 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         # no pipeline to describe).
         has_data: Dict[str, bool] = {
             "Individuals": True,
-            "Statistics": True,
             "Ancestry": probe_cohort_ancestry_data(cohort),
             "Polygenic Scores": probe_cohort_pgs_data(cohort),
             "ROH": probe_cohort_roh_data(cohort),
@@ -649,7 +663,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         initial = next(
             (
                 label
-                for label, slug, _icon, _tip in _TABS
+                for label, slug, _tip in _TABS
                 if slug == linked_slug and has_data[label]
             ),
             "Individuals",
@@ -675,16 +689,24 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         dt_ref: Dict[str, Any] = {"dt": None}
 
         ui.run_javascript(_HEADER_HEIGHT_JS)
-        ui.add_css(_TABS_CSS)
 
         with ui.column().classes("w-full px-6 pt-4 pb-6 gap-0"):
             # Cohort header
-            with ui.row().classes("items-center gap-4 mb-3"):
+            with ui.row().classes("w-full items-center gap-4 mb-3"):
                 ui.label(f"🧬 {cohort_name}").classes(
                     "text-3xl font-bold text-blue-900"
                 )
                 ui.badge(f"{cohort.num_families} families").props("color=blue")
                 ui.badge(f"{cohort.num_samples} samples").props("color=teal")
+                ui.space()
+                workflow_button: Optional[ui.button] = None
+                if has_data["Workflow"]:
+                    workflow_button = (
+                        ui.button("Workflow", on_click=lambda: show_tab("Workflow"))
+                        .props("outline no-caps color=blue-8")
+                        .tooltip(_WORKFLOW[2])
+                        .mark("cohort-workflow")
+                    )
 
             def apply_filters(filters: Dict[str, Any], to_table: bool = False) -> None:
                 """Show the individuals ``filters`` leave, on every tab.
@@ -782,31 +804,33 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             ):
                 with (
                     ui.tabs(value=initial)
-                    .props("inline-label no-caps align=left")
-                    .classes("w-full border-b border-gray-200 cohort-tabs")
+                    .props(GROUPED_TABS_PROPS)
+                    .classes("w-full border-b border-gray-200")
                     .mark("cohort-tabs") as tabs
                 ):
                     tab_objects: Dict[str, Any] = {}
-                    for label, _slug, icon, tip in _TABS:
-                        if label == "Workflow" and not has_data["Workflow"]:
-                            continue
-                        tab = ui.tab(label, icon=icon)
-                        if tip:
-                            tab.tooltip(tip)
-                        if not has_data[label]:
-                            tab.props("disable")
-                        tab_objects[label] = tab
+                    for index, (caption, group) in enumerate(_TAB_GROUPS):
+                        with tab_group(caption, first=index == 0):
+                            for label, _slug, tip in group:
+                                tab = ui.tab(label)
+                                if tip:
+                                    tab.tooltip(tip)
+                                if not has_data[label]:
+                                    tab.props("disable")
+                                tab_objects[label] = tab
 
                 # Badges: the filter for everyone, as Sample QC and the run;
                 # UPD and STR count what only a curator settles.
-                pill_tabs = ["Individuals", "Sample QC", "De novo", "Workflow"]
+                pill_tabs = ["Individuals", "Sample QC", "De novo"]
                 if show_review:
                     pill_tabs += ["UPD", "STR"]
                 pills: Dict[str, TabPills] = {
                     label: TabPills(tab_objects[label], f"{_SLUGS[label]}-tab-pills")
                     for label in pill_tabs
-                    if label in tab_objects and has_data[label]
+                    if has_data[label]
                 }
+                if workflow_button is not None:
+                    pills["Workflow"] = TabPills(workflow_button, "workflow-tab-pills")
 
                 with (
                     ui.element("div").classes("w-full").mark("cohort-filter-box")
@@ -941,9 +965,6 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                 if linked_filters:
                     apply_filters(linked_filters)
 
-                with ui.tab_panel(tab_objects["Statistics"]).classes(panel_classes):
-                    render_stats_panel(store, cohort, filtered_state)
-
                 for label, render, what, loading in (
                     ("Ancestry", render_cohort_ancestry_tab, "ancestry", "ancestry"),
                     (
@@ -971,8 +992,8 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                             f"Loading {loading}...",
                         )
 
-                if "Workflow" in tab_objects:
-                    with ui.tab_panel(tab_objects["Workflow"]).classes("w-full p-0"):
+                if workflow_button is not None:
+                    with ui.tab_panel("Workflow").classes("w-full p-0"):
                         workflow_content()
 
             def on_tab_change(e: Any) -> None:
@@ -983,12 +1004,23 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                 link.set("tab", _SLUGS.get(label), default=_DEFAULT_TAB)
                 link.push()
                 filter_bar_box.set_visibility(label != "Workflow")
+                mark_workflow(label == "Workflow")
                 filter_bar.refresh()
                 opener = openers.get(label)
                 if opener is not None:
                     opener()
 
+            def mark_workflow(shown: bool) -> None:
+                """The Workflow button looks pressed while its panel is shown."""
+                if workflow_button is None:
+                    return
+                if shown:
+                    workflow_button.props(remove="outline", add="unelevated")
+                else:
+                    workflow_button.props(remove="unelevated", add="outline")
+
             tabs.on_value_change(on_tab_change)
+            mark_workflow(initial == "Workflow")
             if initial in openers:
                 openers[initial]()
             update_pills()

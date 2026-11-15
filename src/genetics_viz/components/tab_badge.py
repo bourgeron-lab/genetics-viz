@@ -52,10 +52,14 @@ class TabBadge:
         count = self._count
         if count is None or not count.shown:
             return
+        # In line after the label, as the cohort page's pills: a floating
+        # badge overlaps the label of a dense tab.
         ui.badge(
             "!" if count.held else str(count.n),
             color=severity_info(count.worst)["color"],
-        ).props("floating").tooltip(count.tooltip).mark(self._mark)
+        ).classes("ml-1 text-[11px] leading-none").tooltip(count.tooltip).mark(
+            self._mark
+        )
 
     async def update(self) -> None:
         """Recompute the count in a thread, then redraw."""

@@ -150,11 +150,9 @@ async def test_diagnostic_pages_list_upd(user, monkeypatch, data_dir):
 
 
 def _tab_labels(user):
-    """The family tab bar's labels, in order (its tooltips sit between them)."""
+    """The family tab bar's labels, in order (the tabs sit inside their groups)."""
     bar = user.find(marker="family-tabs").elements.pop()
-    return [
-        c.props.get("label") for c in bar.default_slot.children if isinstance(c, ui.tab)
-    ]
+    return [c.props.get("label") for c in bar.descendants() if isinstance(c, ui.tab)]
 
 
 def _candidates(tables):
@@ -168,12 +166,12 @@ async def _open_upd_tab(user, monkeypatch, username="curator"):
     return tables
 
 
-async def test_upd_tab_sits_between_roh_and_str(user, monkeypatch, data_dir):
+async def test_upd_tab_closes_the_variants_group(user, monkeypatch, data_dir):
     datagen.add_upd_calls(data_dir)
     await _open_family(user, monkeypatch, "curator")
     labels = _tab_labels(user)
-    assert labels[labels.index("ROH") + 1] == "UPD"
-    assert labels[labels.index("UPD") + 1] == "STR"
+    assert labels[labels.index("STR") + 1] == "UPD"
+    assert labels[labels.index("UPD") + 1] == "Ancestry"
     # S2's medium and S3's high event wait for a curator.
     assert await badge_text(user, "upd-tab-count") == "2"
 
@@ -191,13 +189,17 @@ async def test_standalone_family_has_the_upd_tab(user, data_dir):
     await user.open("/family/1001")
     await user.should_see("1001", retries=10)
     labels = _tab_labels(user)
-    assert labels[labels.index("ROH") + 1] == "UPD"
+    assert labels[labels.index("STR") + 1] == "UPD"
 
 
 async def test_upd_tab_without_any_upd_data_is_disabled(user, monkeypatch, data_dir):
     await _open_family(user, monkeypatch, "reader")
     bar = user.find(marker="family-tabs").elements.pop()
-    upd = next(c for c in bar.default_slot.children if c.props.get("label") == "UPD")
+    upd = next(
+        c
+        for c in bar.descendants()
+        if isinstance(c, ui.tab) and c.props.get("label") == "UPD"
+    )
     assert "disable" in upd.props
 
 

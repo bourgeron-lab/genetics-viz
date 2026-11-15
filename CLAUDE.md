@@ -6,7 +6,7 @@ Project-level instructions for Claude Code.
 
 NiceGUI-based web application for genetics cohort data visualization. Uses TanStack tables for dataframes, Polars for data processing, and ECharts for plots. Managed with `uv`.
 
-Deliberate exceptions to "ECharts for plots": `stats_panel.py`, the cohort PGS violins in `cohort_pgs_tab.py` and the cohort ROH violins in `cohort_roh_tab.py` use Plotly. ECharts has no violin or box series, and all three live as sibling tabs on the cohort page. The family report draws static SVG built in Python (`utils/report_svg.py`): it is printed, and a JS chart can miss the print.
+Deliberate exceptions to "ECharts for plots": the cohort PGS violins in `cohort_pgs_tab.py` and the cohort ROH violins in `cohort_roh_tab.py` use Plotly. ECharts has no violin or box series, and both live as sibling tabs on the cohort page. The family report draws static SVG built in Python (`utils/report_svg.py`): it is printed, and a JS chart can miss the print.
 
 ## Commands
 
@@ -63,7 +63,8 @@ src/genetics_viz/
     vedette_details.py            # SV dialog for a Vedette call: details card, own call, SVSource
     offthread_panel.py            # Container loaded off-thread, superseded by newer refreshes
     download_button.py            # Tab Download button: one TSV, or a menu + "All tables (.zip)"
-    family_tabs.py                # Family pages' tab bar: link value, label, icon, tooltip per tab, older link values
+    tab_groups.py                 # Tab rows in captioned groups, no icons (cohort and family pages)
+    family_tabs.py                # Family pages' tab bar: groups, link value, label, tooltip per tab, older link values
     denovo_evidence.py            # Variant dialog: the denovo step's evidence card for one candidate
     tab_badge.py                  # Counts on tabs: the family page's review badges (TabBadge), the cohort page's (TabPills)
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
@@ -132,7 +133,6 @@ src/genetics_viz/
         dnm_tab.py                # DNM analysis tab (per-family)
         svs_tab.py                # SV analysis tab (per-family): WisecondorX + Vedette sub-tabs
         vedette_tab.py            # SVs tab, Vedette sub-tab: carrier rows, presets, filters
-        stats_panel.py            # Carrier stats box/bar plots
     validation/
       file.py                     # Per-file validation page
       all.py                      # Aggregated validation page
@@ -435,9 +435,10 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - Test data: `datagen.add_gene_case(data_dir)` adds cohort OTHER sharing DEMO's SHANK3 de novo, with validations and diagnostics; `datagen.build_second_data_dir(root)` gives a second data directory. Both opt-in.
 
 ### Family Page Tabs
-- **Both family pages draw their analysis tabs through `components/family_tabs.family_tab_bar`.** `FAMILY_TABS` holds each tab's link value (`tab=`), label, icon and tooltip; `TAB_LABELS` / `TAB_SLUGS` derive from it, and a tab mapped to false in the availability dict is disabled. A new tab is one entry there plus its panel and lazy loader on each page.
+- **Both family pages draw their analysis tabs through `components/family_tabs.family_tab_bar`.** `FAMILY_TAB_GROUPS` holds each group's caption and its tabs' link value (`tab=`), label and tooltip; `FAMILY_TABS`, `TAB_LABELS` and `TAB_SLUGS` derive from it, and a tab mapped to false in the availability dict is disabled. A new tab is one entry there plus its panel and lazy loader on each page.
 - **The Wombat tab is SNVs/Indels** (`snvs`). A renamed tab's old link value goes in `TAB_ALIASES` (`wombat` → `snvs`), and the pages read `tab=` through `canonical_tab`.
-- **The row matches the cohort page's**: icon left of the label, mixed case, from the left (`TABS_PROPS`, `inline-label no-caps align=left`), and a tab the cohort page also has takes its icon. Eight tabs take about 900 of the 1,185 px a 1,280 px window leaves, so Quasar's 16 px padding stays; the floating review badges sit at the top right of the label, as before.
+- **The row matches the cohort page's** (`components/tab_groups.py`): no icons, a small caption over each group (`tab_group`), mixed case, dense tabs from the left (`GROUPED_TABS_PROPS`). The groups and their order are the cohort page's: Checks (Sample QC), Variants (SNVs/Indels, SVs, STR, UPD), Background (Ancestry, ROH, Polygenic Scores). Sample QC is first, but the page still opens on SNVs/Indels (`default_tab_name`). The icons were dropped in v0.39.0: an icon for ROH or STR said nothing.
+- **A `ui.tab` inside a group is still a tab of the bar**: it registers with the nearest `q-tabs` through the group's `div`s, so the bar's value, `update:modelValue` and the panels work unchanged.
 - **A tooltip is text `should_see` matches.** The ROH tab's "Runs of homozygosity" is also the panel's title, so a test waiting for the panel waits for something only the panel draws.
 
 ### Family Page Review Badges
@@ -523,14 +524,14 @@ Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: 
 - `config/pipeline_steps.yaml` holds step labels, display order and status chip colours only. A step the pipeline reports but the file does not know is appended under its raw name.
 
 ### Cohort Page Tabs
-One row of tabs, each with an icon (`_TABS` in `cohort.py`: label, `tab=` link value, icon, tooltip): `Individuals` (the table), `Statistics`, `Ancestry`, `Polygenic Scores`, `ROH`, `UPD`, `De novo`, `STR`, `Sample QC`, `Workflow`. Up to v0.34.0 the analyses sat in a column beside the table; once the table had nine columns (1,366 px) that column was 138 px wide in a 1,600 px window.
+One row of tabs in captioned groups, without icons (`_TAB_GROUPS` in `cohort.py`: caption, then each tab's label, `tab=` link value, tooltip; drawn through `components/tab_groups.py`): Browse (`Individuals`, the table), Checks (`Sample QC`, `De novo`), Variants (`STR`, `UPD`), Background (`Ancestry`, `ROH`, `Polygenic Scores`). Up to v0.34.0 the analyses sat in a column beside the table; once the table had nine columns (1,366 px) that column was 138 px wide in a 1,600 px window. The Statistics tab (carriers per geneset) was removed in v0.39.0; `tab=stats` falls back to Individuals.
+- **Workflow is a button on the title line** (`cohort-workflow`, `_WORKFLOW`), not a tab: it is about the run, not the cohort. Its panel is `ui.tab_panel("Workflow")` with no `ui.tab`, opened by `show_tab("Workflow")`, so `tab=workflow` links and `open_tab(..., "Workflow")` still work; the row then shows no tab selected, and the button turns `unelevated` (`mark_workflow`).
 - **The tab row and the filter bar are one sticky block** under the fixed page header. The header's height changes when its menus wrap, so `_HEADER_HEIGHT_JS` keeps `--gv-header-height` up to date (ResizeObserver) and the block's `top` reads it.
-- **Ten tabs with icons and badges fit 1,280 px only with `no-caps` labels and 10 px tab padding** (`_TABS_CSS`): about 1,150 px of the 1,185 px the row gets; at 12 px the De novo tab pushed Workflow off the row (measured 1,189 px).
 - **The filter bar** shows the count and one removable chip per filter (`_filter_chips`, worded from the column definitions). A chip's cross, or "Clear all", calls `apply_filters(..., to_table=True)`, which sets the table's filter row through `DataTable.set_filters` (no filter event follows, so the page applies them itself). The filters stay in the table header; "Edit filters" switches to Individuals. Workflow hides the bar: it is about the cohort, not the filter.
-- **Every tab but Individuals, Statistics and Workflow loads on first view** through `lazy_content(label, render, ...)`, which registers an opener in `openers`; `Workflow`'s opener is its own, `async` one, because it warms the run-record and document caches off-thread. Tabs without data are disabled; `Workflow` is *created only when the cohort has a params file* — absent, not disabled.
+- **Every tab but Individuals and Workflow loads on first view** through `lazy_content(label, render, ...)`, which registers an opener in `openers`; `Workflow`'s opener is its own, `async` one, because it warms the run-record and document caches off-thread. Tabs without data are disabled; `Workflow` is *created only when the cohort has a params file* — absent, not disabled.
 - **The tab change is `tabs.on_value_change`**, so `tabs.set_value(label)` from Python (Edit filters) runs the same handler as a click. Tab values are labels (`ui.tab_panels(tabs, value=<label>)`), never `ui.tab` objects.
 - **Links**: `tab=<slug>`. Older links named the tab `panel=<slug>` (the right-hand panel) or `view=workflow`; `_linked_tab` still reads them and the page rewrites the address to `tab=`.
-- **Badges** (`TabPills`, counts in `utils/review_counts.py`) follow the filters, so they are rebuilt in memory by `update_pills` at each filter change; only the STR flags and the run record are read, once, off-thread (`load_badges`). Individuals: how many the filters leave. Sample QC: individuals by worst unacknowledged flag (`qc_worst_by_individual`, `UPD_CANDIDATE` left to UPD when the cohort has that tab), high and medium apart. UPD: High/Medium candidate chromosomes no curator validated present or absent (the rows' `_upd_open`, from `upd_column_fields`). STR: open flagged genotypes of the newest catalog, from the cohort `flags.tsv` (else the genotype table). Workflow: the last run's status icon and colour (`workflow_pills`; nothing without a record or for an unknown status). UPD and STR are for `can_write()` only. Colours are the Sample QC severities', as on the family page.
+- **Badges** (`TabPills`, counts in `utils/review_counts.py`) follow the filters, so they are rebuilt in memory by `update_pills` at each filter change; only the STR flags and the run record are read, once, off-thread (`load_badges`). Individuals: how many the filters leave. Sample QC: individuals by worst unacknowledged flag (`qc_worst_by_individual`, `UPD_CANDIDATE` left to UPD when the cohort has that tab), high and medium apart. UPD: High/Medium candidate chromosomes no curator validated present or absent (the rows' `_upd_open`, from `upd_column_fields`). STR: open flagged genotypes of the newest catalog, from the cohort `flags.tsv` (else the genotype table). Workflow (on its button): the last run's status icon and colour (`workflow_pills`; nothing without a record or for an unknown status). UPD and STR are for `can_write()` only. Colours are the Sample QC severities', as on the family page.
 - `render_status_panel(cohort, title=None)` suppresses the panel's own heading, because the Workflow tab's expansion header already carries the title, status chip and step summary.
 
 ### ghfc-ngs Documentation
@@ -575,7 +576,7 @@ The Wombat and WisecondorX Stats dialogs chart each selected member's count in t
 - Counts load off-thread and are cached on `(path, mtime, size)`. The comparison sits outside the dialog's refreshable section, so the SNV/Indel toggle does not recount.
 
 ### Tab Downloads (TSV exports)
-Every cohort tab but Individuals, Statistics and Workflow, and every family tab, has a `Download` button (`components/download_button.py`, marked `download-<tab>`; menu entries `download-<tab>-<key>`, zip `download-<tab>-zip`).
+Every cohort tab but Individuals and Workflow, and every family tab, has a `Download` button (`components/download_button.py`, marked `download-<tab>`; menu entries `download-<tab>-<key>`, zip `download-<tab>-zip`).
 - **Scope is what is shown**: the cohort table's filtered individuals plus the tab's own selectors (PGS regions, ROH reference groups, bundle/tag, catalog), or the family's selected members. Columns are all of them, not just the plotted one.
 - **Built from explicit column lists, never by dumping row dicts.** Badge columns hold `""`, and the row dicts carry fields readers must not see. The builders sit next to their data (`ancestry_export`/`pgs_export`, `froh_export`/`kinship_export`/`segments_export`, `genotypes_export`, `sample_qc_export`) and serve both levels, so a family file and a cohort file of one kind have the same columns.
 - **Role-aware, as the tabs**: readers get `reader_label`, the neutral ROH grade, no evidence, no observed relationship, no `froh_category`/parents' kinship, an "Atypical" karyotype, declared pairs only, and an ack note only for `reader_note` categories.

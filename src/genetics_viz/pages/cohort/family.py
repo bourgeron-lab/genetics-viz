@@ -11,7 +11,6 @@ from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.header import create_header
 from genetics_viz.components.family_tabs import (
-    GENERAL_ICON,
     TAB_LABELS,
     TAB_SLUGS,
     TABS_PROPS,
@@ -258,7 +257,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 # ---- Right column: tabbed info panel ----
                 with ui.column().classes("flex-1").style("gap: 0.5rem; min-width: 0"):
                     with ui.tabs().props(TABS_PROPS).classes("w-full") as info_tabs:
-                        general_tab = ui.tab("General", icon=GENERAL_ICON)
+                        general_tab = ui.tab("General")
 
                     with ui.tab_panels(info_tabs, value=general_tab).classes("w-full"):
                         with ui.tab_panel(general_tab).classes(

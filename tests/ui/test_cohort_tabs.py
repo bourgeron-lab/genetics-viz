@@ -1,4 +1,4 @@
-"""The cohort page's tab row: one level of tabs, the filter bar, the tab badges."""
+"""The cohort page's tab row: grouped tabs, the Workflow button, the filter bar, the badges."""
 
 import asyncio
 
@@ -36,25 +36,37 @@ async def _open(user, monkeypatch, username: str = "reader"):
     return next(t for t in tables if "Sample ID" in t["columns"])
 
 
-async def test_one_tab_row_with_icons(user, monkeypatch):
+async def test_one_row_of_grouped_tabs_without_icons(user, monkeypatch):
     await _open(user, monkeypatch)
-    tabs = sorted(
-        (t for t in user.find(ui.tab).elements if t.props.get("icon")),
-        key=lambda t: t.id,
-    )
+    bar = user.find(marker="cohort-tabs").elements.pop()
+    tabs = [t for t in bar.descendants() if isinstance(t, ui.tab)]
     assert [t.props["name"] for t in tabs] == [
         "Individuals",
-        "Statistics",
-        "Ancestry",
-        "Polygenic Scores",
-        "ROH",
-        "UPD",
+        "Sample QC",
         "De novo",
         "STR",
-        "Sample QC",
-        "Workflow",
+        "UPD",
+        "Ancestry",
+        "ROH",
+        "Polygenic Scores",
     ]
+    captions = [
+        c.text
+        for c in bar.descendants()
+        if isinstance(c, ui.label) and "text-[11px]" in c.classes
+    ]
+    assert captions == ["Browse", "Checks", "Variants", "Background"]
+    assert not any(t.props.get("icon") for t in tabs)
+    assert bar.value == "Individuals"
+
+
+async def test_statistics_tab_is_gone(user, monkeypatch):
+    """An older ``tab=stats`` link opens the individuals."""
+    await login(user, "reader")
+    await user.open("/cohort/DEMO?tab=stats")
+    await user.should_see("6 samples", retries=10)
     assert user.find(marker="cohort-tabs").elements.pop().value == "Individuals"
+    await user.should_not_see("Carriers per geneset")
 
 
 async def test_filter_bar_chips_clear_the_table_filters(user, monkeypatch):
@@ -99,11 +111,19 @@ async def test_workflow_tab_hides_the_filter_bar(user, monkeypatch):
     )
     await _open(user, monkeypatch)
     box = user.find(marker="cohort-filter-box").elements.pop()
-    assert box.visible
-    open_tab(user, "cohort-tabs", "Workflow")
-    await wait_for(lambda: not box.visible)
-    open_tab(user, "cohort-tabs", "Statistics")
-    await wait_for(lambda: box.visible)
+    tabs = user.find(marker="cohort-tabs").elements.pop()
+    button = user.find(marker="cohort-workflow").elements.pop()
+    assert box.visible and "outline" in button.props
+    # Workflow is a button on the title line, not a tab of the row.
+    assert "Workflow" not in [
+        t.props["name"] for t in tabs.descendants() if isinstance(t, ui.tab)
+    ]
+    user.find(marker="cohort-workflow").click()
+    await wait_for(lambda: tabs.value == "Workflow" and not box.visible)
+    assert "unelevated" in button.props and "outline" not in button.props
+    await user.should_see("Pipeline status", retries=30)
+    open_tab(user, "cohort-tabs", "ROH")
+    await wait_for(lambda: box.visible and "outline" in button.props)
 
 
 async def test_tab_badges_follow_the_filters(user, monkeypatch, data_dir):
