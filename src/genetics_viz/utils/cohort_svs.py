@@ -20,6 +20,7 @@ from typing import Any, Collection, Dict, List, Optional, Tuple
 
 import polars as pl
 
+from .tsv import collect_streaming
 from .wisecondorx import WISECONDORX_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ def scan_calls(path: Path, min_kb: int = SIZE_OPTIONS_KB[0]) -> pl.DataFrame:
         "chr", "start", "end", "ratio", "zscore", "sample", "family_id",
         "exonic_symbol", "direction", "strength",
     )  # fmt: skip
-    calls = lazy.collect(engine="streaming")
+    calls = collect_streaming(lazy)
     _cache.clear()  # one cohort table at a time: they can be large
     _cache[key] = calls
     return calls

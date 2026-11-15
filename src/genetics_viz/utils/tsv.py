@@ -247,3 +247,16 @@ def find_labels(
             if inputs_step(directory / f"{prefix}.{label}.inputs.tsv") in (None, step)
         ]
     return [label for _, label in sorted(found, key=lambda t: (-t[0], t[1]))]
+
+
+def collect_streaming(lf: pl.LazyFrame) -> pl.DataFrame:
+    """Collect with the streaming engine, under either polars name for it.
+
+    ``collect(engine="streaming")`` is the current name; polars before about
+    1.23 (the project allows 1.17) refuses it and takes ``streaming=True``.
+    Production installs with ``uvx``, which may resolve any allowed version.
+    """
+    try:
+        return lf.collect(engine="streaming")
+    except (TypeError, ValueError):
+        return lf.collect(streaming=True)
