@@ -6,7 +6,7 @@ Project-level instructions for Claude Code.
 
 NiceGUI-based web application for genetics cohort data visualization. Uses TanStack tables for dataframes, Polars for data processing, and ECharts for plots. Managed with `uv`.
 
-Deliberate exceptions to "ECharts for plots": the cohort PGS violins in `cohort_pgs_tab.py` and the cohort ROH violins in `cohort_roh_tab.py` use Plotly. ECharts has no violin or box series, and both live as sibling tabs on the cohort page. The family report draws static SVG built in Python (`utils/report_svg.py`): it is printed, and a JS chart can miss the print.
+Deliberate exceptions to "ECharts for plots": the cohort PGS violins in `cohort_pgs_tab.py` and the cohort ROH violins in `cohort_roh_tab.py` use Plotly. ECharts has no violin or box series, and both live as sibling tabs on the cohort page. The family report draws static SVG built in Python (`utils/report_svg.py`, and the pedigree through pypedigree in `utils/pedigree_svg.py`): it is printed, and a JS chart can miss the print.
 
 ## Commands
 
@@ -176,6 +176,7 @@ src/genetics_viz/
     family_report.py              # Family report sections (pure, off-thread): pedigree … diagnostics, methods
     report_html.py                # Family report as one self-contained HTML document (Jinja2)
     report_svg.py                 # Static SVG plots for the report: PGS normal curves, PCA scatter
+    pedigree_svg.py               # Pedigree drawing (pypedigree): members -> PED text -> static SVG
     report_summaries.py           # reports/family_summaries.tsv: curator conclusions (role-guarded)
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
@@ -414,6 +415,12 @@ Config files (YAML) are loaded once at module level.
 Curators send it to the referring clinician of each centre, who decides whether to recontact the family; it is not addressed to patients. "See report" and "PDF" sit at the right end of the title row of both family pages (`render_report_buttons`), for `can_write()` only, so it always uses the curator wording.
 - **One HTML string, two uses.** `build_family_report` (pure, blocking, `asyncio.to_thread`) → `render_report_html`. The dialog shows it in an `<iframe srcdoc>`, which keeps Quasar and Tailwind out, so the screen looks like the print. PDF writes it into a hidden iframe and calls the browser's print. The document `<title>` (`<cohort>_<family>_report_<date>`) is the PDF's default name. No server-side PDF library: the VM installs with `uvx`.
 - **Plots are SVG strings from `report_svg.py`**, escaped there and marked safe only in `render_report_html` (`svg_of`). `@page` margin boxes give the footer and page numbers (Chrome 131+).
+- **The pedigree is drawn by pypedigree** (`utils/pedigree_svg.py`, Alex's library, `bourgeron-lab/pypedigree`; plan in the vault's `Pedigree drawing` note). `render_svg(id_prefix=, responsive=True)`: no script, ids prefixed, CSS scoped under `.pypedigree`. Three workarounds of 0.5.2, each worth an upstream request:
+  - **the text parser, not `PedigreeBuilder`**: the builder leaves a child with one declared parent unconnected;
+  - **a parent named but absent is written as a `not_sampled` row** before parsing: the parser would warn, and `warnings.catch_warnings` is not thread-safe (the report runs in `asyncio.to_thread`);
+  - **spacing from the longest label** (`_style`): the layout spaces symbols only, so long dummy IDs overlapped.
+
+  The report sizes it in mm from the `viewBox` (`pedigree_drawing` in `report.yaml`) through `Plot.width`, and writes the observed karyotype under an ID when atypical or not the declared sex's. Tests check structure (`data-id`, `Not sampled`, prefixes), never pixels: figures change between pypedigree minors.
 - **Order is the one asked for:** pedigree, ancestry, Sample QC, ROH, PGS, aneuploidy, UPD, diagnostics, with the curator conclusion and "Results at a glance" (`Section.glance`, else `note`) under the pedigree. Each `Section` is available with rows, or missing with a reason.
 - **Aneuploidy** is two sources: the QC karyotype for sex chromosomes; for autosomes, same-direction WisecondorX segments covering `aneuploidy_min_fraction` of a chromosome's assessable span (the q arm of an acrocentric one). The pipeline has no aneuploidy step.
 - **PGS percentile = Φ(z)**: the pipeline's z is already ancestry-matched (k-NN SD in PC space). The traits shown are `pgs_traits` in `report.yaml`.

@@ -63,6 +63,7 @@ from .diagnostic_labels import describe_str, describe_upd
 from .diagnostic_snapshot import has_snapshot
 from .export import person
 from .pedigree_labels import PHENO_COLORS, normalize_pheno, normalize_sex
+from .pedigree_svg import PedigreePerson, pedigree_svg
 from .pipeline_params import load_params
 from .report_summaries import FamilySummary, latest_family_summary
 from .report_svg import Marker, ordinal, pca_svg, percentile, pgs_distribution_svg
@@ -111,6 +112,8 @@ class Plot:
     caption: str
     svg: str
     note: str = ""
+    #: CSS width of the plot's box, for an SVG drawn at ``width="100%"``.
+    width: str = ""
 
 
 @dataclass
@@ -272,17 +275,78 @@ def _parent_cells(m: _Member) -> Dict[str, str]:
     return cells
 
 
+_SEX_KARYOTYPE = {"1": "XY", "2": "XX"}
+
+
+def _karyotype_note(sex: str, karyotype: Optional[str]) -> str:
+    """The observed karyotype, when atypical or not the declared sex's."""
+    if not karyotype or karyotype in ("—", "unknown"):
+        return ""
+    if not qc_utils.is_typical_karyotype(karyotype):
+        return karyotype
+    expected = _SEX_KARYOTYPE.get(sex)
+    return karyotype if expected and karyotype != expected else ""
+
+
+def _pedigree_plot(
+    family_id: str,
+    members: List[_Member],
+    dummies: Sequence[_Member],
+    karyotypes: Dict[str, str],
+) -> Optional[Plot]:
+    """The drawing above the family table, sized from its layout."""
+    people = [
+        PedigreePerson(
+            m.iid, m.father, m.mother, m.sex, m.phenotype,
+            note=_karyotype_note(m.sex, karyotypes.get(m.iid)),
+        )
+        for m in members
+    ] + [
+        PedigreePerson(d.iid, d.father, d.mother, d.sex, d.phenotype, dummy=True)
+        for d in dummies
+    ]  # fmt: skip
+    drawing = pedigree_svg(family_id, people, id_prefix="pedigree-")
+    if drawing is None or not drawing.width or not drawing.height:
+        return None
+    conf = CONFIG.get("pedigree_drawing", {})
+    scale = float(conf.get("mm_per_unit", 15))
+    width = min(
+        drawing.width * scale,
+        float(conf.get("max_width_mm", 160)),
+        float(conf.get("max_height_mm", 100)) * drawing.width / drawing.height,
+    )
+    key = conf.get("key", {})
+    parts = [key.get("shapes", "")]
+    if drawing.has_unsampled:
+        parts.append(key.get("unsampled", ""))
+    if drawing.has_notes:
+        parts.append(key.get("notes", ""))
+    return Plot(
+        caption="",
+        svg=drawing.svg,
+        note=" ".join(p for p in parts if p),
+        width=f"{width:.0f}mm",
+    )
+
+
 def _pedigree(
     members: List[_Member],
     qc: Optional[qc_utils.QcData],
     dummies: Sequence[_Member] = (),
+    family_id: str = "",
 ) -> Section:
-    """The family table: the sequenced members, then the dummies, muted.
+    """The family drawing and table: the sequenced members, then the dummies, muted.
 
     A dummy has no status and no data: its status and sex chromosomes are
     blank, never "Unknown", which would read as an untested person.
     """
     karyotype = {r.get("sample"): r for r in (qc.sample_rows() if qc else [])}
+    plot = _pedigree_plot(
+        family_id,
+        members,
+        dummies,
+        {iid: str(r.get("karyotype") or "") for iid, r in karyotype.items()},
+    )
     rows = []
     for m in members:
         k = karyotype.get(m.iid) or {}
@@ -321,6 +385,7 @@ def _pedigree(
             ("karyotype", "Sex chromosomes (observed)"),
         ],
         rows=rows,
+        plots=[plot] if plot else [],
         footnotes=[DUMMY_REPORT_FOOTNOTE] if dummies else [],
     )
 
@@ -1349,7 +1414,7 @@ def build_family_report(
 
     roh_section, froh = _roh(data_dir, members, family_id)
     sections = [
-        _pedigree(members, family_qc, dummies),
+        _pedigree(members, family_qc, dummies, family_id),
         _ancestry(files, members, family_id),
         _sample_qc(data_dir, family_id, family_qc, cohort),
         roh_section,

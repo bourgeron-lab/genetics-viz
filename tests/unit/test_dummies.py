@@ -237,6 +237,12 @@ def test_report_lists_dummies_muted_and_reads_real_members_only(
     html = render_report_html(report)
     assert html.count('class="muted dummy ') == 4
     assert "dummy, not sequenced" in html
+    # The drawing: every member and dummy, the dummies dashed (not sampled).
+    (plot,) = pedigree.plots
+    for row in pedigree.rows:
+        assert f'data-id="{row["iid"]}"' in plot.svg
+    assert plot.svg.count("Not sampled") == 4
+    assert "Dashed outline: not sequenced." in plot.note
 
 
 def test_report_of_a_family_without_dummies_is_unchanged(cohort, data_dir, app_config):
