@@ -35,6 +35,10 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from nicegui import ui
 
 from genetics_viz.components.download_button import Download, download_button
+from genetics_viz.components.pedigree_editor import (
+    open_pedigree_editor,
+    render_pedigree_status,
+)
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.upd_dialog import show_upd_dialog
 from genetics_viz.utils.auth import can_write, get_current_user
@@ -1037,6 +1041,12 @@ def render_sample_qc_tab(
             state["show_acked"] = bool(e.value)
             render_content.refresh()
 
+        if show_detail:
+            ui.button(
+                "Edit pedigree", icon="edit", on_click=lambda: edit_pedigree()
+            ).props("outline dense size=sm").tooltip(
+                "Correct the family's pedigree: parents, dummies, sex, swaps"
+            ).mark("pedigree-edit")
         ui.switch("Show acknowledged", value=True, on_change=on_show_acked).props(
             "dense"
         ).tooltip("Flags a curator reviewed and acknowledged, greyed").mark(
@@ -1069,6 +1079,33 @@ def render_sample_qc_tab(
     # Outside the refreshable section: a save refreshes it, which would
     # otherwise delete the dialog that sent it.
     dialog_anchor = ui.element("div")
+    pedigree_anchor = ui.element("div")
+    if show_detail:
+        render_pedigree_status(store, family_id)
+
+    async def pedigree_saved(_record: Any) -> None:
+        # Every view of the family reads the pedigree: reload the cohorts,
+        # then the page (its link keeps this tab open).
+        await asyncio.to_thread(store.reload)
+        ui.navigate.reload()
+
+    async def edit_pedigree() -> None:
+        acks = load_acks(store.data_dir)
+        open_flags = [
+            f
+            for f in family_flags_with_cohort(
+                state["qc"], state["cohort_qc"], family_id
+            )
+            + state["genome_flags"]
+            if f not in acks
+        ]
+        await open_pedigree_editor(
+            pedigree_anchor,
+            store,
+            family_id,
+            flags=flags_by_sample(open_flags),
+            on_saved=pedigree_saved,
+        )
 
     def acks_saved() -> None:
         render_content.refresh()

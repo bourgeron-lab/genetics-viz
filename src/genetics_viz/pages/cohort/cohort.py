@@ -185,6 +185,7 @@ _FAMILY_FILTER_LINK = {
     "Review": ("frev", False),
     "Diagnostics": ("fdiag", []),
     "Conclusion": ("fconc", False),
+    "Pedigree": ("fped", False),
 }
 
 #: The page's tab row by group: label, link value (``tab=``), tooltip. The
