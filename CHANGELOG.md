@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The changes are listed as the ghfc-ngs run summary words them (`S3: father S1 -> DUMMY_S3_F`), with the rerun they need. Errors block the save: a father recorded as female, a cycle, a dummy ID already in another family, a change of sequenced members (not supported yet). Warnings do not: children whose sibship is undecided, a parent with no row, a parent written `0.0`, which ghfc-ngs reads as an ID.
 
   Saving needs a comment. It writes every cohort pedigree that lists the family (other families' lines untouched) and the family's own pedigree file, so ghfc-ngs reruns the family's Sample QC, SNVs/Indels, de novo, UPD, STR and genome QC at its next normal run. It is refused while a ghfc-ngs run of the cohort is in progress, or if the file changed since the editor opened. Each edit keeps who, when, why, what, and the family's rows before and after, in the family directory. A history lists the earlier edits with their trees, and can restore the rows before one as a new edit.
+- **The pedigree editor suggests what Sample QC supports.** It reads the family's observed relationships against the pedigree as ghfc-ngs's Sample QC does, and says how many contradict it now and with your changes. Each suggestion shows its evidence and its effect ("contradictions 1 → 0"), and Apply puts it in the draft:
+  - a dummy for a declared parent who is not one;
+  - a dummy of their own for half sibs declared full; the shared parent for full sibs declared half;
+  - shared dummy parents for full sibs whose parent is missing, one each for half sibs (a father written 0 leaves this undecided, and the pipeline flags nothing);
+  - the sex of an XX or XY karyotype, with a caution when the same sample's relationships fail too (more likely a sample swap);
+  - a swap of two members, when it explains the pairs.
+
+  Only changes that improve the agreement are offered (sibship ones when they do not worsen it). The flags a suggestion answers are recorded with the edit.
 - **The Sample QC tab says which results still read an older pedigree** (curators): the steps whose inputs differ from the current pedigree, and the last edit.
 - **A Pedigree column in the cohort's Families tab** (curators): the date of the family's last edit, amber while no ghfc-ngs run has started since. Its "To rerun" filter keeps those families. With it, a curator's Families table scrolls a little in a 1,280 px window.
 

@@ -39,6 +39,7 @@ from genetics_viz.components.pedigree_editor import (
     open_pedigree_editor,
     render_pedigree_status,
 )
+from genetics_viz.utils.pedigree_qc import QcContext
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.upd_dialog import show_upd_dialog
 from genetics_viz.utils.auth import can_write, get_current_user
@@ -1091,19 +1092,25 @@ def render_sample_qc_tab(
 
     async def edit_pedigree() -> None:
         acks = load_acks(store.data_dir)
-        open_flags = [
-            f
-            for f in family_flags_with_cohort(
-                state["qc"], state["cohort_qc"], family_id
-            )
+        all_flags = (
+            family_flags_with_cohort(state["qc"], state["cohort_qc"], family_id)
             + state["genome_flags"]
-            if f not in acks
-        ]
+        )
+        open_flags = [f for f in all_flags if f not in acks]
+        qc: QcData = state["qc"]
         await open_pedigree_editor(
             pedigree_anchor,
             store,
             family_id,
             flags=flags_by_sample(open_flags),
+            # The family's own tables: the pairs within it, as the pipeline
+            # compares them with the pedigree.
+            qc=QcContext(
+                pairs=[p for p in pair_rows(qc.pairs) if not p.cross_family],
+                samples=qc.sample_rows(),
+                # Acknowledged ones too: a UPD_CANDIDATE still explains its pair.
+                flags=all_flags,
+            ),
             on_saved=pedigree_saved,
         )
 

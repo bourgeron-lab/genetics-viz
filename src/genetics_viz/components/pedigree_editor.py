@@ -46,6 +46,7 @@ from genetics_viz.utils.pedigree_edit import (
     save_pedigree_edit_async,
 )
 from genetics_viz.utils.pedigree_labels import normalize_pheno, normalize_sex
+from genetics_viz.utils.pedigree_qc import Fit, QcContext, Suggestion
 from genetics_viz.utils.pedigree_svg import PedigreePerson, pedigree_svg
 from genetics_viz.utils.sample_qc import FlagRow
 
@@ -161,11 +162,14 @@ async def open_pedigree_editor(
     family_id: str,
     *,
     flags: Optional[Dict[str, List[FlagRow]]] = None,
+    qc: Optional[QcContext] = None,
     on_saved: Optional[Callable[[EditRecord], Any]] = None,
 ) -> None:
     """Read the family's pedigree off the loop, then open the editor in ``anchor``.
 
     ``flags`` are the open Sample QC flags by member, for the trees' outlines.
+    ``qc`` holds the family's pairs, samples and flags: the draft's fit and the
+    suggestions.
     ``on_saved`` gets the edit's record once the files are written.
     """
     files = family_cohort_files(store, family_id)
@@ -182,18 +186,20 @@ async def open_pedigree_editor(
         return
     anchor.clear()  # an earlier editor's dialog
     with anchor:
-        _editor_dialog(source, history, flags or {}, on_saved).open()
+        _editor_dialog(source, history, flags or {}, qc or QcContext(), on_saved).open()
 
 
 def _editor_dialog(
     source: FamilySource,
     history: List[EditRecord],
     flags: Dict[str, List[FlagRow]],
+    qc: QcContext,
     on_saved: Optional[Callable[[EditRecord], Any]],
 ) -> ui.dialog:
     family_id = source.family_id
     original = source.original
-    state: Dict[str, Any] = {"draft": source.draft(), "undo": []}
+    state: Dict[str, Any] = {"draft": source.draft(), "undo": [], "answered": set()}
+    has_qc = bool(qc.pairs or qc.samples)
 
     def draft() -> PedigreeDraft:
         return state["draft"]
@@ -256,6 +262,28 @@ def _editor_dialog(
 
         trees()
 
+        @ui.refreshable
+        def suggestions() -> None:
+            if not has_qc:
+                return
+            found = qc.suggest(draft())
+            with (
+                ui.column()
+                .classes("w-full gap-1 border rounded p-2 bg-blue-50")
+                .mark("ped-suggestions")
+            ):
+                ui.label("Suggestions from Sample QC").classes(
+                    "text-sm font-semibold text-blue-900"
+                )
+                if not found:
+                    ui.label(
+                        "None: Sample QC suggests no other change for this pedigree."
+                    ).classes("text-sm text-gray-600 italic")
+                for s in found:
+                    _suggestion_row(s, lambda s=s: take(s))
+
+        suggestions()
+
         with ui.row().classes("w-full items-center gap-2"):
             ui.label("Rows").classes("text-sm font-semibold text-gray-700")
             ui.space()
@@ -297,6 +325,10 @@ def _editor_dialog(
                         ui.label(RERUN_TEXT[rerun_needed(original, d)]).classes(
                             "text-xs text-blue-800"
                         )
+                    if qc.pairs:
+                        ui.label(
+                            fit_text(qc.fit(original), qc.fit(d), bool(changes))
+                        ).classes("text-xs text-gray-700").mark("ped-fit")
                 with ui.column().classes("flex-1 min-w-0 gap-1").mark("ped-problems"):
                     ui.label("Problems").classes("text-sm font-semibold text-gray-700")
                     if not found:
@@ -350,8 +382,13 @@ def _editor_dialog(
 
     def refresh() -> None:
         trees.refresh()
+        suggestions.refresh()
         rows.refresh()
         summary.refresh()
+
+    def take(s: Suggestion) -> None:
+        state["answered"].update(s.flags)
+        apply(s.apply)
 
     def undo() -> None:
         if state["undo"]:
@@ -362,6 +399,7 @@ def _editor_dialog(
         if draft().members != original.members:
             state["undo"].append(draft().copy())
             state["draft"] = source.draft()
+            state["answered"].clear()
             refresh()
 
     def restore(text: str) -> None:
@@ -380,6 +418,7 @@ def _editor_dialog(
                 draft(),
                 user=get_current_user(),
                 comment=comment.value or "",
+                flags=sorted(state["answered"]),
             )
         except (PermissionError, PedigreeEditError) as e:
             ui.notify(str(e), type="negative", multi_line=True)
@@ -696,3 +735,51 @@ def render_pedigree_status(store: Any, family_id: str) -> None:
                     label.tooltip("; ".join(last.changes))
 
     ui.timer(0.05, load, once=True)
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def fit_text(now: Optional[Fit], after: Optional[Fit], changed: bool) -> str:
+    """The Sample QC pairs against the pedigree now and with the changes."""
+    if now is None:
+        return ""
+
+    def words(f: Fit) -> str:
+        text = _plural(f.contradictions, "contradiction", "contradictions")
+        if f.unexplained:
+            text += ", " + _plural(
+                f.unexplained, "pair related beyond it", "pairs related beyond it"
+            )
+        return text
+
+    text = f"Sample QC against this pedigree: {words(now)} now"
+    if changed:
+        text += "; " + (words(after) if after else "cannot tell") + " with your changes"
+    return text + "."
+
+
+def _suggestion_row(s: Suggestion, take: Callable[[], None]) -> None:
+    with ui.row().classes("w-full items-start no-wrap gap-2"):
+        with ui.column().classes("flex-1 min-w-0 gap-0"):
+            with ui.row().classes("items-center gap-2"):
+                ui.label(s.title).classes("text-sm font-semibold")
+                if s.before is not None and s.after is not None:
+                    if s.after.contradictions < s.before.contradictions:
+                        effect = (
+                            f"contradictions {s.before.contradictions}"
+                            f" → {s.after.contradictions}"
+                        )
+                    elif s.after.unexplained < s.before.unexplained:
+                        effect = "joins relatives the pedigree does not"
+                    else:
+                        effect = "settles the sibship"
+                    ui.badge(effect, color="blue-1").props("text-color=blue-10")
+            for line in s.why:
+                ui.label(line).classes("text-xs text-gray-600")
+            if s.caution:
+                ui.label(s.caution).classes("text-xs text-amber-800")
+        ui.button("Apply", on_click=take).props("outline dense size=sm").mark(
+            f"ped-apply-{s.key}"
+        )
