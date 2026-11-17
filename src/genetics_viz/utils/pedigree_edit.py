@@ -22,6 +22,7 @@ the cohort page. The plan is the vault note ``Pedigree editor``.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import fcntl
 import hashlib
@@ -788,9 +789,41 @@ def save_pedigree_edit(
     3. rename them over the cohort pedigrees, then the family pedigree;
     4. keep the rows before and after, and append the log and index lines.
     """
+    _check_role()
+    return _write_edit(source, draft, user=user, comment=comment, flags=flags, now=now)
+
+
+async def save_pedigree_edit_async(
+    source: FamilySource,
+    draft: PedigreeDraft,
+    *,
+    user: str,
+    comment: str,
+    flags: Sequence[str] = (),
+) -> EditRecord:
+    """:func:`save_pedigree_edit` for a page: the role is checked on the event
+    loop (it reads the session), the files are written in a thread."""
+    _check_role()
+    return await asyncio.to_thread(
+        _write_edit, source, draft, user=user, comment=comment, flags=flags
+    )
+
+
+def _check_role() -> None:
     # Checked here as well as on the button: an event can be crafted.
     if not can_write():
         raise PermissionError("Only curators and administrators can edit a pedigree")
+
+
+def _write_edit(
+    source: FamilySource,
+    draft: PedigreeDraft,
+    *,
+    user: str,
+    comment: str,
+    flags: Sequence[str] = (),
+    now: Optional[datetime] = None,
+) -> EditRecord:
     if not user:
         raise ValueError("No user to record the edit under")
     comment = comment.strip()
@@ -918,6 +951,76 @@ def read_family_edits(data_dir: Path, family_id: str) -> List[EditRecord]:
 def last_edits(data_dir: Path) -> Dict[str, EditRecord]:
     """The last edit of each family, from the data directory's index."""
     return {r.family_id: r for r in _records(index_file(data_dir))}
+
+
+@dataclass(frozen=True)
+class EditStatus:
+    """A family's last pedigree edit, and whether a ghfc-ngs run followed it."""
+
+    last: EditRecord
+    #: An edit that changes what the steps read (not a phenotype alone) was
+    #: saved after the last run started, or the cohort has no run record.
+    awaiting_rerun: bool
+
+
+def _as_aware(timestamp: str) -> Optional[datetime]:
+    try:
+        moment = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.astimezone()
+
+
+def edit_statuses(
+    records: Iterable[EditRecord], last_run_started: Optional[datetime]
+) -> Dict[str, EditStatus]:
+    """Per family: its last edit, and whether one still waits for a run.
+
+    The run record says when the cohort's last ghfc-ngs run started; an edit
+    saved after it (or with no record at all) is not in any step's outputs yet.
+    """
+    out: Dict[str, EditStatus] = {}
+    for record in records:
+        moment = _as_aware(record.timestamp)
+        waits = record.rerun != RERUN_NONE and (
+            last_run_started is None or moment is None or moment > last_run_started
+        )
+        earlier = out.get(record.family_id)
+        out[record.family_id] = EditStatus(
+            record, waits or (earlier is not None and earlier.awaiting_rerun)
+        )
+    return out
+
+
+def read_edit_index(data_dir: Path) -> List[EditRecord]:
+    """Every edit of the data directory, oldest first, from its index."""
+    return _records(index_file(data_dir))
+
+
+def draft_from_text(text: str, family_id: str) -> PedigreeDraft:
+    """The family's rows in a kept ``before``/``after`` file, as a draft."""
+    lines = text.splitlines(keepends=True)
+    draft = PedigreeDraft(family_id)
+    for index, line in enumerate(lines):
+        if line.startswith("#") or not line.strip():
+            continue
+        cells = _split(line)
+        if index == 0 and cells[0].strip() == "FID":
+            continue
+        if len(cells) >= 6 and cells[0].strip() == family_id:
+            cells = [c.strip() for c in cells[:6]] + cells[6:]
+            if cells[1] not in draft:
+                draft.members.append(
+                    Member(
+                        cells[1],
+                        cells[2],
+                        cells[3],
+                        cells[4],
+                        cells[5],
+                        tuple(cells[6:]),
+                    )
+                )
+    return draft
 
 
 def edit_rows(data_dir: Path, family_id: str, edit_id: str, which: str) -> str:

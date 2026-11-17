@@ -5,6 +5,21 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **A pedigree editor for curators**, from **Edit pedigree** on the family's Sample QC tab. It shows the pedigree now and after the changes side by side (changed members outlined in orange), with one row per member:
+  - set a father or mother, or give a member a new dummy parent;
+  - give several children shared dummy parents (full sibs), or one each (half sibs), when a parent is missing;
+  - correct a sex or a phenotype;
+  - swap two members (a sample swap): their rows and every parent reference.
+
+  The changes are listed as the ghfc-ngs run summary words them (`S3: father S1 -> DUMMY_S3_F`), with the rerun they need. Errors block the save: a father recorded as female, a cycle, a dummy ID already in another family, a change of sequenced members (not supported yet). Warnings do not: children whose sibship is undecided, a parent with no row, a parent written `0.0`, which ghfc-ngs reads as an ID.
+
+  Saving needs a comment. It writes every cohort pedigree that lists the family (other families' lines untouched) and the family's own pedigree file, so ghfc-ngs reruns the family's Sample QC, SNVs/Indels, de novo, UPD, STR and genome QC at its next normal run. It is refused while a ghfc-ngs run of the cohort is in progress, or if the file changed since the editor opened. Each edit keeps who, when, why, what, and the family's rows before and after, in the family directory. A history lists the earlier edits with their trees, and can restore the rows before one as a new edit.
+- **The Sample QC tab says which results still read an older pedigree** (curators): the steps whose inputs differ from the current pedigree, and the last edit.
+- **A Pedigree column in the cohort's Families tab** (curators): the date of the family's last edit, amber while no ghfc-ngs run has started since. Its "To rerun" filter keeps those families. With it, a curator's Families table scrolls a little in a 1,280 px window.
+
 ## [0.40.0] - 2026-11-17
 
 ### Added

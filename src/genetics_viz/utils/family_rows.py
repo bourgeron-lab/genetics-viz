@@ -16,6 +16,8 @@ import polars as pl
 
 from . import denovo
 from .ancestry import ID_COLUMNS, NULL_VALUES, find_cohort_ancestry_files
+from .cohort_state import read_cohort_state
+from .pedigree_edit import EditStatus, edit_statuses, read_edit_index
 from .pedigree_labels import normalize_pheno
 from .report_summaries import FamilySummary, read_family_summaries
 from .roh import GRADES, find_cohort_roh_files, read_roh_table
@@ -46,6 +48,8 @@ class FamilyFacts:
     dn_open: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     #: FID -> standing curator conclusion. Curators only.
     summaries: Dict[str, FamilySummary] = field(default_factory=dict)
+    #: FID -> its last pedigree edit and whether it awaits a run. Curators only.
+    pedigree: Dict[str, EditStatus] = field(default_factory=dict)
     #: Which tables were found: ``ancestry``, ``roh``, ``denovo``.
     found: Set[str] = field(default_factory=set)
 
@@ -155,6 +159,15 @@ def load_family_facts(cohort: Any, data_dir: Path, curator: bool) -> FamilyFacts
             facts.summaries = read_family_summaries(data_dir)
         except Exception:
             logger.warning("Failed to read the family conclusions", exc_info=True)
+        try:
+            state = read_cohort_state(cohort.pedigree_file.parent)
+            last_run = state.last_run if state is not None else None
+            facts.pedigree = edit_statuses(
+                read_edit_index(data_dir),
+                last_run.started_at if last_run is not None else None,
+            )
+        except Exception:
+            logger.warning("Failed to read the pedigree edits", exc_info=True)
     return facts
 
 
@@ -373,6 +386,15 @@ def family_row(
     row["Review_badges"] = review
     row["_review_n"] = total
 
+    status = facts.pedigree.get(fid)
+    row["Pedigree"] = status.last.timestamp[:10] if status else ""
+    row["Pedigree_badges"] = pedigree_badges(status)
+    row["_ped_cats"] = (
+        [PED_EDITED] + ([PED_AWAITING] if status.awaiting_rerun else [])
+        if status
+        else []
+    )
+
     summary = facts.summaries.get(fid)
     row["Conclusion"] = summary.date if summary else ""
     row["Conclusion_badges"] = (
@@ -392,6 +414,31 @@ def family_row(
 # ---------------------------------------------------------------------------
 # Columns and filters
 # ---------------------------------------------------------------------------
+
+
+#: The Pedigree column's filter options.
+PED_EDITED = "Edited"
+PED_AWAITING = "Awaiting a rerun"
+
+
+def pedigree_badges(status: Optional[EditStatus]) -> List[Dict[str, str]]:
+    """The last edit's date; amber while ghfc-ngs has not run since."""
+    if status is None:
+        return []
+    last = status.last
+    date = last.timestamp[:10]
+    tooltip = f"{last.user}, {date}: {last.comment}"
+    if last.changes:
+        tooltip += "\n" + "\n".join(last.changes)
+    if status.awaiting_rerun:
+        tooltip += "\nNo ghfc-ngs run since: results still read the older pedigree."
+    return [
+        {
+            "label": date,
+            "color": "#b45309" if status.awaiting_rerun else "#546e7a",
+            "tooltip": tooltip,
+        }
+    ]
 
 
 def _badges(column_id: str, header: str, sort_field: str, **extra: Any) -> Dict:
@@ -509,6 +556,16 @@ def family_columns(
     if curator:
         columns.append(
             {
+                "id": "Pedigree",
+                "header": "Pedigree",
+                "cellType": "badge_list",
+                "sortable": True,
+                # A checkbox, not a select: the column must stay narrow.
+                "filter": {"type": "checkbox", "label": "To rerun"},
+            }
+        )
+        columns.append(
+            {
                 "id": "Conclusion",
                 "header": "Conclusion",
                 "cellType": "badge_list",
@@ -558,6 +615,8 @@ def filter_families(
         out = [r for r in out if r.get("_review_n", 0) > 0]
     if filters.get("Conclusion"):
         out = [r for r in out if not r.get("Conclusion")]
+    if filters.get("Pedigree"):
+        out = [r for r in out if PED_AWAITING in (r.get("_ped_cats") or [])]
     return out
 
 
