@@ -14,13 +14,14 @@ member with one parent (pypedigree's phantom).
 Things pypedigree 0.5.2 does not do, worked around here:
 - **The text parser, not ``PedigreeBuilder``.** The builder leaves a child
   with one declared parent unconnected; the parser gives it a phantom
-  second parent.
+  second parent (bourgeron-lab/pypedigree#40).
 - **A parent named but absent from the list is written as a dashed row**,
   rather than left to the parser, which would draw the same phantom but warn,
   and ``warnings.catch_warnings`` is not thread-safe (the report is built in
   ``asyncio.to_thread``).
 - **The spacing follows the longest label.** The layout spaces symbols, not
-  labels, so ``DUMMY_<barcode>_MF`` beside its partner's overlapped.
+  labels, so ``DUMMY_<barcode>_MF`` beside its partner's overlapped
+  (bourgeron-lab/pypedigree#41).
 
 Pure and fast (about 1 ms for a trio); ``import pypedigree`` does not load
 matplotlib.
