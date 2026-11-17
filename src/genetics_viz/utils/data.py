@@ -60,7 +60,7 @@ def init_all_data_stores(configs: list[DataDirectoryConfig]) -> None:
 
 #: What ``app.storage.user`` raises outside a request (the poller, a thread
 #: started without the context, the unit tests).
-_NO_CONTEXT = (RuntimeError, AssertionError, KeyError)
+NO_CONTEXT = (RuntimeError, AssertionError, KeyError)
 
 
 def _norm(path: str) -> str:
@@ -85,7 +85,7 @@ def user_data_dirs() -> list[str]:
 
     try:
         granted = granted_data_dirs()
-    except _NO_CONTEXT:
+    except NO_CONTEXT:
         granted = None
     return dirs_for(granted)
 
@@ -101,7 +101,7 @@ def current_data_dir() -> Optional[str]:
         from nicegui import app
 
         chosen = app.storage.user.get("data_dir")
-    except _NO_CONTEXT:
+    except NO_CONTEXT:
         chosen = None
     if chosen in allowed:
         return chosen

@@ -4,11 +4,18 @@ import re
 import warnings
 import xml.etree.ElementTree as ET
 
+from genetics_viz.components.pedigree_tree import (
+    tree_html,
+    tree_key,
+    tree_people,
+    worst_severity,
+)
 from genetics_viz.utils.pedigree_svg import (
     PedigreePerson as P,
     pedigree_svg,
     pedigree_text,
 )
+from genetics_viz.utils.sample_qc import FlagRow
 
 SVG = "{http://www.w3.org/2000/svg}"
 
@@ -89,7 +96,8 @@ def test_whitespace_in_a_cell_cannot_shift_the_columns():
     text = pedigree_text("F A", [P("a\tb", note="two words")])
     header, row = text.splitlines()
     assert len(row.split("\t")) == len(header.split("\t"))
-    assert row.startswith("F_A\ta_b\t") and row.endswith("two_words")
+    cells = dict(zip(header.split("\t"), row.split("\t")))
+    assert (cells["FID"], cells["IID"], cells["a_Note"]) == ("F_A", "a_b", "two_words")
 
 
 def test_long_ids_widen_the_layout():
@@ -112,3 +120,52 @@ def test_long_ids_widen_the_layout():
 
 def test_nobody_gives_no_drawing():
     assert pedigree_svg("F", []) is None
+
+
+# --- The member card's Tree view (components/pedigree_tree.py) ----------------
+
+
+def _flag(sample: str, severity: str) -> FlagRow:
+    return FlagRow("family", "F", sample, None, "CODE", severity, "")
+
+
+def test_classes_reach_the_nodes_and_bad_names_are_dropped():
+    drawing = pedigree_svg(
+        "F", [P("A", sex="1", classes=("deselected", "qc-high", "bad name", "<x>"))]
+    )
+    assert _nodes(drawing.svg)["A"]["class"] == "node deselected qc-high"
+
+
+def test_tree_people_fade_the_unselected_and_outline_open_flags():
+    members = [
+        {"Sample ID": "S1", "Father": "-", "Mother": "-", "Sex": "1", "Phenotype": "1"},
+        {"Sample ID": "S2", "Father": "-", "Mother": "-", "Sex": "2.0", "Phenotype": "1"},
+        {"Sample ID": "S3", "Father": "S1", "Mother": "S2", "Sex": "1", "Phenotype": "2"},
+        {"Sample ID": "DUMMY_S3_F", "Father": "0", "Mother": "-9", "Sex": "1",
+         "Phenotype": "0", "Dummy": True},
+    ]  # fmt: skip
+    flags = {"S1": [_flag("S1", "info")], "S2": [_flag("S2", "medium"),
+             _flag("S2", "high")], "DUMMY_S3_F": [_flag("DUMMY_S3_F", "high")]}  # fmt: skip
+    people = {p.iid: p for p in tree_people(members, ["S1", "S3"], flags)}
+    assert people["S1"].classes == ()  # info is not outlined
+    assert people["S2"].classes == ("deselected", "qc-high")  # the worst
+    assert people["S3"].classes == ()
+    assert people["DUMMY_S3_F"].classes == () and people["DUMMY_S3_F"].dummy
+    assert (people["S2"].sex, people["S3"].father, people["DUMMY_S3_F"].mother) == (
+        "2", "S1", "",
+    )  # fmt: skip
+    drawing = pedigree_svg("F", list(people.values()))
+    assert tree_key(list(people.values()), drawing) == [
+        "Faded: not selected",
+        "Dashed: not sequenced",
+        "Coloured outline: open Sample QC issue (high)",
+    ]
+    assert worst_severity([]) is None
+
+
+def test_tree_box_is_capped_by_card_natural_size_and_height():
+    drawing = pedigree_svg("1001", TRIO)
+    html = tree_html(drawing, 55, "300px")
+    assert "<?xml" not in html and html.count("<svg") == 1
+    natural = f"{drawing.width * 55:.0f}px"
+    assert f"width: min(100%, {natural}, calc(300px * " in html

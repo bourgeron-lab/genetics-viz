@@ -71,6 +71,7 @@ src/genetics_viz/
     diagnostic_dialog.py          # Diagnostic review dialog
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
     upd_dialog.py                 # UPD review: evidence, chromosome view, validation, diagnostic (UPD, ROH, Sample QC tabs)
+    pedigree_tree.py              # Member card's Tree view: pypedigree drawing, selection faded, QC outline, Enlarge
     family_report_dialog.py       # Family report: "See report"/"PDF" buttons, dialog, conclusion, print
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
@@ -445,6 +446,13 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - **Rows of another data directory link through `/goto/<n>?next=<path>`** (`_dir`, `_next`; `n` from the `/data-N` prefix, never a path), which sets `app.storage.user["data_dir"]` and follows `safe_next`.
 - The pages only read. Their diagnostic column is a `badge_list` (`DiagnosticBadges`), not the `diagnostic` cell, which would offer a "+" that opens nothing.
 - Test data: `datagen.add_gene_case(data_dir)` adds cohort OTHER sharing DEMO's SHANK3 de novo, with validations and diagnostics; `datagen.build_second_data_dir(root)` gives a second data directory. Both opt-in.
+
+### Family Member Card (Table | Tree)
+- **The member card has a Table | Tree switch** (`member-view`, `member_selector.py`); the view is `app.storage.user["member_view"]`, a preference, not a link key. The tree is built on first showing (`components/pedigree_tree.py`).
+- **Selection stays in the table.** The tree only shows it: every change (checkbox, only, All `members-all`, None `members-none`) and every QC review (`update_qc_icons`) redraws the whole SVG (about 1 ms). Nothing is looked up by `data-id` in JavaScript, and `ui.html` would run no script anyway.
+- **Classes on the nodes, styled by the tree's own `<style>`**: `deselected` (faded; `dimmed` is pypedigree's own), `qc-high` / `qc-medium` (the worst open flag, the table icon's colour). They go through `PedigreePerson.classes`, the PED `css_class` column.
+- The page's tree and the Enlarge dialog's (`member-tree-enlarge`, `member-tree-big`) are two drawings, id prefixes `member-tree-` and `member-tree-big-`. Each box is sized from the `viewBox`: the card's width, `PX_PER_UNIT` per layout unit and `MAX_HEIGHT_PX` high, whichever is smallest.
+- In tests, `user.find` sees visible elements only: assert a hidden tree with `should_not_see(marker="member-tree")`, and match `node deselected`, not `deselected`, which the CSS holds too.
 
 ### Family Page Tabs
 - **Both family pages draw their analysis tabs through `components/family_tabs.family_tab_bar`.** `FAMILY_TAB_GROUPS` holds each group's caption and its tabs' link value (`tab=`), label and tooltip; `FAMILY_TABS`, `TAB_LABELS` and `TAB_SLUGS` derive from it, and a tab mapped to false in the availability dict is disabled. A new tab is one entry there plus its panel and lazy loader on each page.

@@ -59,9 +59,12 @@ _HEADER = (
     "Phenotype",
     "not_sampled",
     "a_Note",
+    "css_class",
 )
 _VIEWBOX = re.compile(r'viewBox="([-\d.]+) ([-\d.]+) ([\d.]+) ([\d.]+)"')
 _SPACE = re.compile(r"\s+")
+#: A class name pypedigree accepts on a node (it validates them).
+_CLASS = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 
 @dataclass
@@ -79,6 +82,9 @@ class PedigreePerson:
     dummy: bool = False
     #: A line written under the ID (for instance an atypical karyotype).
     note: str = ""
+    #: Classes on the person's ``<g class="node …">``, for the host's CSS.
+    #: pypedigree reserves ``node`` and ``dimmed``.
+    classes: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -126,11 +132,12 @@ def pedigree_text(family_id: str, people: Sequence[PedigreePerson]) -> str:
                     "0" if p.dummy else _PHENOTYPE.get(p.phenotype, "0"),
                     "1" if p.dummy else "0",
                     _cell(p.note),
+                    ",".join(c for c in p.classes if _CLASS.match(c)),
                 ]
             )
         )
     for parent, sex in _absent_parents(people):
-        lines.append("\t".join([fid, _cell(parent), "0", "0", sex, "0", "1", ""]))
+        lines.append("\t".join([fid, _cell(parent), "0", "0", sex, "0", "1", "", ""]))
     return "\n".join(lines) + "\n"
 
 

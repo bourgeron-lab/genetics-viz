@@ -2,9 +2,11 @@
 
 from typing import Any, Callable, Dict, List, Optional
 
-from nicegui import ui
+from nicegui import app, ui
 
+from genetics_viz.components.pedigree_tree import render_pedigree_tree
 from genetics_viz.models import is_dummy_id
+from genetics_viz.utils.data import NO_CONTEXT
 from genetics_viz.utils.pedigree_labels import (
     DUMMY_BACKGROUND,
     DUMMY_COLOR,
@@ -43,6 +45,19 @@ _CONTROL_CELL_STYLE = "display: flex; align-items: center"
 
 # A dummy's cells: muted, italic, and a dashed rule under the row.
 _DUMMY_CELL = "italic border-dashed"
+
+#: ``app.storage.user`` key: the member card's view, ``table`` or ``tree``. A
+#: preference, not a link key: it changes nothing about what is shown.
+VIEW_KEY = "member_view"
+VIEWS = {"table": "Table", "tree": "Tree"}
+
+
+def _saved_view() -> str:
+    try:
+        view = app.storage.user.get(VIEW_KEY, "table")
+    except NO_CONTEXT:
+        return "table"
+    return view if view in VIEWS else "table"
 
 
 def sequenced_ids(members_data: List[Dict[str, Any]]) -> List[str]:
@@ -88,6 +103,8 @@ def render_member_selector(
     """
     member_checkboxes: Dict[str, ui.checkbox] = {}
     qc_slots: Dict[str, ui.element] = {}
+    # The Tree view, drawn on first showing: ``redraw(flags=None)`` then.
+    tree: Dict[str, Any] = {"redraw": None, "flags": qc_flags or {}}
 
     def update_qc_icons(
         flags: Dict[str, List[FlagRow]], acked: Dict[str, List[FlagRow]]
@@ -96,8 +113,13 @@ def render_member_selector(
             slot.clear()
             with slot:
                 _qc_icon(flags.get(sid, []), acked.get(sid, []), show_qc_detail)
+        tree["flags"] = flags
+        if tree["redraw"] is not None:
+            tree["redraw"](flags)
 
     def refresh_all() -> None:
+        if tree["redraw"] is not None:
+            tree["redraw"]()
         for refresher in data_table_refreshers:
             refresher()
 
@@ -140,18 +162,28 @@ def render_member_selector(
             .classes("w-full p-3 bg-blue-50")
             .style("gap: 0.5rem; overflow-x: auto")
         ):
-            with ui.row().classes("items-center gap-2"):
+            with ui.row().classes("w-full items-center gap-2"):
                 ui.label("Select Members to Display:").classes(
                     "font-semibold text-blue-800"
                 )
                 ui.button("All", on_click=select_all_members).props(
                     "size=sm flat dense"
-                ).classes("text-xs")
+                ).classes("text-xs").mark("members-all")
                 ui.button("None", on_click=select_none_members).props(
                     "size=sm flat dense"
-                ).classes("text-xs")
+                ).classes("text-xs").mark("members-none")
+                ui.space()
+                view_toggle = (
+                    ui.toggle(VIEWS, value=_saved_view())
+                    .props("dense no-caps size=sm toggle-color=blue-8")
+                    .classes("text-xs")
+                    .tooltip("Show the members as a table or as a pedigree")
+                    .mark("member-view")
+                )
 
-            with ui.element("div").classes("w-full text-sm").style(_GRID_STYLE):
+            tree_slot = ui.element("div").classes("w-full")
+            grid = ui.element("div").classes("w-full text-sm").style(_GRID_STYLE)
+            with grid:
                 for header in _HEADERS:
                     ui.label(header).classes(f"{_CELL} bg-blue-100 font-semibold")
 
@@ -196,6 +228,24 @@ def render_member_selector(
                             f"{cell} text-gray-600"
                         )
 
+    def show_view(view: str) -> None:
+        if view == "tree" and tree["redraw"] is None:
+            with tree_slot:
+                tree["redraw"] = render_pedigree_tree(
+                    members_data, selected_members, tree["flags"]
+                )
+        grid.set_visibility(view != "tree")
+        tree_slot.set_visibility(view == "tree")
+
+    def on_view(e) -> None:
+        try:
+            app.storage.user[VIEW_KEY] = e.value
+        except NO_CONTEXT:
+            pass
+        show_view(e.value)
+
+    view_toggle.on_value_change(on_view)
+    show_view(view_toggle.value)
     update_qc_icons(qc_flags or {}, qc_acked or {})
     return update_qc_icons
 
