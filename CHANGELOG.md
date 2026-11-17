@@ -5,12 +5,15 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.40.0] - 2026-11-17
 
 ### Added
 - **The family report draws the pedigree** above the family table (section 1), with Alex Mathieu's [pypedigree](https://github.com/bourgeron-lab/pypedigree) ([#42](https://github.com/bourgeron-lab/genetics-viz/issues/42)). Black and white, standard notation: square, circle, diamond, affected filled. Dummy members and the missing parent of a one-parent child are dashed ("not sequenced"), MZ twins' dummy parents included. The observed sex chromosomes are written under an ID when they are atypical or differ from the declared sex. A key under the drawing names only what it uses. The drawing is sized from the family's layout (15 mm per unit, within the page width and 100 mm high), so a trio is about 5 cm wide. A pedigree pypedigree cannot draw leaves the table alone, as before.
 - **A Tree view of the family members**, on both family pages: a **Table | Tree** switch in the member card's header draws the family with pypedigree in place of the table. Selection stays in the table (All and None work in both views): the tree fades the members not selected, colours the outline of a member with an open high or medium Sample QC flag (as the table's warning icon), and dashes the dummies and a missing parent. A key under it names only what it shows; **Enlarge** opens it full size. The view is remembered per browser, not put in the link: it changes nothing about what is shown.
 - New dependency: `pypedigree>=0.5.2,<0.6` (it brings matplotlib, which the app never imports: parsing, layout and SVG do not load it).
+
+### Changed
+- **NiceGUI 4.0** (4.0.0) is now locked; the requirement is unchanged at `>=2.0.0`, so production's `uvx` install had already resolved it, and the weekly unlocked test passed on it. Leaving a cohort ROH or Polygenic Scores tab now logs one harmless console error from NiceGUI's Plotly resize code ("Resize must be passed a displayed plot div element"); the chart redraws normally on return. Typer 0.29, pytest-asyncio 1.5 and ruff 0.17.5 also come from Dependabot.
 
 ## [0.39.0] - 2026-11-15
 
