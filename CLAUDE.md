@@ -178,6 +178,7 @@ src/genetics_viz/
     report_html.py                # Family report as one self-contained HTML document (Jinja2)
     report_svg.py                 # Static SVG plots for the report: PGS normal curves, PCA scatter
     pedigree_svg.py               # Pedigree drawing (pypedigree): members -> PED text -> static SVG
+    pedigree_edit.py              # Curator pedigree edits: draft, checks, cohort + family files, history, steps awaiting a rerun
     report_summaries.py           # reports/family_summaries.tsv: curator conclusions (role-guarded)
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
@@ -453,6 +454,14 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - **Classes on the nodes, styled by the tree's own `<style>`**: `deselected` (faded; `dimmed` is pypedigree's own), `qc-high` / `qc-medium` (the worst open flag, the table icon's colour). They go through `PedigreePerson.classes`, the PED `css_class` column.
 - The page's tree and the Enlarge dialog's (`member-tree-enlarge`, `member-tree-big`) are two drawings, id prefixes `member-tree-` and `member-tree-big-`. Each box is sized from the `viewBox`: the card's width, `PX_PER_UNIT` per layout unit and `MAX_HEIGHT_PX` high, whichever is smallest.
 - In tests, `user.find` sees visible elements only: assert a hidden tree with `should_not_see(marker="member-tree")`, and match `node deselected`, not `deselected`, which the CSS holds too.
+
+### Pedigree Edits (curators)
+`utils/pedigree_edit.py`, the model and writer of the planned pedigree editor (vault note `Pedigree editor`; no UI yet).
+- **ghfc-ngs reads only the cohort pedigree** and writes `<FID>.pedigree.tsv` from it (`FAMILIAL_PEDIGREE`: the cohort's header line, then the family's rows, first per member). A family file edited alone is overwritten at the next run. So an edit rewrites the family's lines in **every cohort pedigree listing the family** (`family_cohort_files`; they must read alike), leaves every other line byte for byte, puts new rows after the family's last line, then writes the family file as the pipeline would (`family_file_text`).
+- **Reruns**: each pedigree-reading step keeps `<prefix>.inputs.tsv`, the family's rows normalised (`fid sample father mother sex`: unknown parent `''`/`0`/`-9`/`.` → `0`, sex `1`/`2` else `0`, no phenotype) and reruns when they differ. So a parent, sex or dummy edit needs a normal run; a phenotype edit reruns nothing; a change of sequenced members needs `--clean-stale-families` and is refused for now (`rerun_needed`). `pending_steps` compares every `*.inputs.tsv` of the family directory with the current rows, by member (Wombat's are sorted; the STR snapshot has no dummies). `0.0`/`-9.0` are missing for the app (`models.MISSING_PARENT`) but an ID for the pipeline: `problems` warns.
+- **`save_pedigree_edit`** checks `can_write()` itself, needs a comment, refuses an error from `problems` (father not male, cycle, a new dummy not `DUMMY_<child>_<F|M…>` or already in another family…), a live run (`.ghfc-ngs.progress.json`) and a cohort file changed since `load_family` (sha256). Under `validations/.pedigree_edit.lock` it writes every file beside its target first (a permission error stops it before any change), renames them over (mode kept), then keeps `families/…/<FID>/pedigree_edits/<FID>.<EditId>.{before,after}.tsv` and appends the family log and `validations/pedigree_edits.tsv` (the cohort page's index). An empty phenotype is written `0`: ghfc-ngs drops trailing empty fields and stops on a five-column row.
+- **Changes are worded as the pipeline's run summary** (`FamilyPedigree.describe`): `S3: father S1 -> DUMMY_S3_F`, `DUMMY_S3_F: added`.
+- Test data: `datagen.snapshot_rows(members, *extra)` writes a step's rows by the pipeline's rule; the sampleqc, genomeqc and denovo family snapshots now hold them, so nothing waits for a rerun in the default data.
 
 ### Family Page Tabs
 - **Both family pages draw their analysis tabs through `components/family_tabs.family_tab_bar`.** `FAMILY_TAB_GROUPS` holds each group's caption and its tabs' link value (`tab=`), label and tooltip; `FAMILY_TABS`, `TAB_LABELS` and `TAB_SLUGS` derive from it, and a tab mapped to false in the availability dict is disabled. A new tab is one entry there plus its panel and lazy loader on each page.

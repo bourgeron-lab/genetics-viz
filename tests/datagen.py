@@ -1202,6 +1202,28 @@ def _qc_pair_row(fa, a, fb, b, phi, ratio, exp_phi, expected, observed, po, stat
     ]  # fmt: skip
 
 
+def snapshot_rows(members: Sequence[Sequence[str]], *extra: str) -> str:
+    """A family's rows in a step's ``inputs.tsv``, as ``InputsSnapshot`` writes them.
+
+    ``fid sample father mother sex``: an unknown parent (``''``, ``0``, ``-9``,
+    ``.``) is ``0``, the sex ``1`` or ``2`` (a trailing ``.0`` dropped) else
+    ``0``; then the step's own columns. Written out by hand here, so the app's
+    mirror of the rule (``pedigree_edit.snapshot_row``) is checked against it.
+    """
+
+    def parent(code: str) -> str:
+        return "0" if code.strip() in ("", "0", "-9", ".") else code.strip()
+
+    def sex(code: str) -> str:
+        code = code.strip().removesuffix(".0")
+        return code if code in ("1", "2") else "0"
+
+    return "".join(
+        "\t".join([m[0], m[1], parent(m[2]), parent(m[3]), sex(m[4]), *extra]) + "\n"
+        for m in members
+    )
+
+
 def build_qc_results(
     data: Path, fid: str, members: Sequence[Sequence[str]]
 ) -> Dict[str, List[List]]:
@@ -1234,6 +1256,7 @@ def build_qc_results(
     write_tsv(qc / f"{fid}.{QC_LABEL}.flags.tsv", QC_FLAG_COLUMNS, flags)
     (qc / f"{fid}.{QC_LABEL}.inputs.tsv").write_text(
         f"#inputs\tv1\n#step\tsampleqc\n#label\t{QC_LABEL}\n#family\t{fid}\n"
+        + snapshot_rows(members, "yes", "-")
     )
     return {"samples": samples, "pairs": pairs, "flags": flags}
 
@@ -1335,9 +1358,12 @@ def _gqc_variants(fid: str, sid: str) -> List:
             "0.0090", 587299, "0.9408", "0.5469", "0.0184", "0.6654"]  # fmt: skip
 
 
-def _gqc_inputs(path: Path, level: str, name: str) -> Path:
+def _gqc_inputs(
+    path: Path, level: str, name: str, members: Sequence[Sequence[str]] = ()
+) -> Path:
     path.write_text(
         f"#inputs\tv1\n#step\tgenomeqc\n#label\t{GQC_LABEL}\n#{level}\t{name}\n"
+        + snapshot_rows(members)
     )
     return path
 
@@ -1369,7 +1395,12 @@ def add_genomeqc_tables(data: Path, cohort: Optional[str] = "DEMO") -> None:
             )
         )
         written.append(
-            _gqc_inputs(fam_qc / f"{fid}.{GQC_LABEL}.inputs.tsv", "family", fid)
+            _gqc_inputs(
+                fam_qc / f"{fid}.{GQC_LABEL}.inputs.tsv",
+                "family",
+                fid,
+                [r for r in DEMO_PEDIGREE if r[0] == fid],
+            )
         )
         for sid in sids:
             sample_qc_dir = sample_dir(data, sid) / "qc" / "genomeqc"
@@ -2286,8 +2317,12 @@ def _inputs(path: Path, wombat_config: str, cohort: str = "") -> None:
     ]  # fmt: skip
     if cohort:
         lines.append(f"#cohort\t{cohort}")
+        rows = "1001\tS3\tS1\tS2\t1\tyes\tyes\n"
+    else:
+        lines.append("#family\t1001")
+        rows = snapshot_rows([r for r in DEMO_PEDIGREE if r[0] == "1001"], "yes", "yes")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n1001\tS3\tS1\tS2\t1\tyes\tyes\n")
+    path.write_text("\n".join(lines) + "\n" + rows)
 
 
 def add_denovo_calls(
