@@ -1,6 +1,7 @@
 """The family report: its sections on the synthetic data, the HTML, the SVGs,
 and the curator conclusion file."""
 
+import re
 import xml.etree.ElementTree as ET
 
 import datagen
@@ -62,6 +63,26 @@ def test_pedigree_and_ancestry(store):
     assert ancestry.rows[0]["admixture"] == "EUR 80% · CSA 20%"
     assert ancestry.glance == "EUR (3 individuals)"
     assert len(ancestry.plots) == 2  # the whole panel, and zoomed
+
+
+def test_pedigree_drawing_above_the_table(store):
+    (plot,) = _report(store).section("pedigree").plots
+    assert "<script" not in plot.svg and 'id="pedigree-main-group"' in plot.svg
+    for iid in ("S1", "S2", "S3"):
+        assert f'data-id="{iid}"' in plot.svg
+    # Sized in mm from its layout; a trio is narrower than the page.
+    assert plot.width.endswith("mm") and 30 < float(plot.width[:-2]) < 100
+    # A full trio, typical karyotypes: only the shapes in the key.
+    assert "Dashed" not in plot.note and "Under an ID" not in plot.note
+    assert 'class="annotation"' not in plot.svg
+
+
+def test_pedigree_drawing_notes_atypical_karyotypes(store):
+    # S5 is XXY; S6 is XY, declared female. S6 has no mother: dashed partner.
+    (plot,) = _report(store, "AU-X-1").section("pedigree").plots
+    notes = re.findall(r'class="annotation">([^<]*)<', plot.svg)
+    assert sorted(notes) == ["XXY", "XY"]
+    assert "Dashed outline" in plot.note and "Under an ID" in plot.note
 
 
 def test_sample_qc_uses_curator_wording_and_keeps_reviews(store):
@@ -265,7 +286,7 @@ def test_html_is_escaped_and_svgs_parse(store, data_dir, curator):
     for section in report.sections:
         for plot in section.plots:
             ET.fromstring(plot.svg)
-    assert html.count("<svg") == 6
+    assert html.count("<svg") == 7  # the pedigree, then six plots
 
 
 def test_svg_builders_escape_labels():

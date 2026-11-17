@@ -44,7 +44,8 @@
   /* A heading never ends a page: it travels with its note and the first
      rows of its table (Chrome honours break-after only on block siblings). */
   h2, section .head { break-after: avoid; break-inside: avoid; }
-  section .head + table, section .head + .plots { break-before: avoid; }
+  section .head + table, section .head + .plots,
+  section .head + .pedigree-drawing { break-before: avoid; }
   .note { margin: 2px 0 4px; color: #374151; }
   .missing { color: #6b7280; font-style: italic; }
   table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 8.5pt; }
@@ -70,6 +71,13 @@
   .plot { break-inside: avoid; }
   .plot .caption { font-weight: 600; font-size: 8.5pt; }
   .plot .source { color: #6b7280; font-size: 7pt; max-width: 340px; }
+  /* The pedigree drawing: an SVG at width 100% of a box sized in mm from its
+     layout (family_report._pedigree_plot), centred above the family table. */
+  .pedigree-drawing { margin: 4px 0 6px; break-inside: avoid;
+                      display: flex; flex-direction: column; align-items: center; }
+  .pedigree-drawing svg { display: block; width: 100%; height: auto; }
+  .pedigree-drawing .source { color: #6b7280; font-size: 7.5pt; text-align: center;
+                              margin-top: 2px; }
   .footnote { color: #4b5563; font-size: 8pt; margin: 2px 0; }
   .glance { width: 100%; border-collapse: collapse; margin: 4px 0 6px; }
   .glance td { border-bottom: 1px dotted #e5e7eb; padding: 2px 4px; }
@@ -130,6 +138,12 @@
 {% set pedigree = report.section('pedigree') %}
 <section>
   <div class="head"><h2>1. {{ pedigree.title }}</h2></div>
+  {% for plot in pedigree.plots %}
+  <figure class="pedigree-drawing">
+    <div style="width: {{ plot.width }}">{{ svg_of(plot) }}</div>
+    {% if plot.note %}<figcaption class="source">{{ plot.note }}</figcaption>{% endif %}
+  </figure>
+  {% endfor %}
   {% if pedigree.rows %}{{ table(pedigree) }}{% else %}<p class="missing">No pedigree for this family.</p>{% endif %}
   {% for f in pedigree.footnotes %}<p class="footnote">{{ f }}</p>{% endfor %}
 </section>

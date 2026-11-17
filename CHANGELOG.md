@@ -5,6 +5,12 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **The family report draws the pedigree** above the family table (section 1), with Alex Mathieu's [pypedigree](https://github.com/bourgeron-lab/pypedigree) ([#42](https://github.com/bourgeron-lab/genetics-viz/issues/42)). Black and white, standard notation: square, circle, diamond, affected filled. Dummy members and the missing parent of a one-parent child are dashed ("not sequenced"), MZ twins' dummy parents included. The observed sex chromosomes are written under an ID when they are atypical or differ from the declared sex. A key under the drawing names only what it uses. The drawing is sized from the family's layout (15 mm per unit, within the page width and 100 mm high), so a trio is about 5 cm wide. A pedigree pypedigree cannot draw leaves the table alone, as before.
+- New dependency: `pypedigree>=0.5.2,<0.6` (it brings matplotlib, which the app never imports: parsing, layout and SVG do not load it).
+
 ## [0.39.0] - 2026-11-15
 
 ### Added

@@ -55,6 +55,22 @@ diagnostic_details:
     inheritance in GeneTrek. For a structural variant, the genes it overlaps
     and the copy number.
 
+# The pedigree drawing above the family table (utils/pedigree_svg.py, drawn by
+# pypedigree). Its size follows the family: `mm_per_unit` millimetres per
+# layout unit (a symbol is 0.8 unit, so 12 mm; labels about 7.5 pt), within
+# the page width and a height cap that keeps the table on the first page for
+# most families. The key is built from the parts the drawing uses.
+pedigree_drawing:
+  mm_per_unit: 15
+  max_width_mm: 160
+  max_height_mm: 100
+  key:
+    shapes: "Square: male. Circle: female. Diamond: sex not declared. Filled: affected."
+    unsampled: "Dashed outline: not sequenced."
+    notes: >-
+      Under an ID: the sex chromosomes observed, when they are atypical or
+      differ from the declared sex.
+
 # Polygenic scores shown, in this order. `id` is the column of the pipeline's
 # pgs_zscore table.
 pgs_traits:
