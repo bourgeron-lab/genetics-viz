@@ -13,12 +13,12 @@ This is the main entry point for the application. All pages are modular:
 """
 
 import os
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from nicegui import app as nicegui_app
 from nicegui import ui
 
+from genetics_viz import __version__
 from genetics_viz.config_model import load_config
 from genetics_viz.utils.change_monitor import start_polling, stop_polling
 from genetics_viz.utils.data import (
@@ -49,11 +49,7 @@ def health() -> dict:
     Deliberately unauthenticated so the F5 pool monitor and CI can reach it.
     Reports nothing beyond liveness and the running release.
     """
-    try:
-        running = version("genetics-viz")
-    except PackageNotFoundError:
-        running = "unknown"
-    return {"status": "ok", "version": running}
+    return {"status": "ok", "version": __version__}
 
 
 def run_app(
