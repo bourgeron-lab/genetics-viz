@@ -182,3 +182,37 @@ async def test_readers_get_no_pedigree_column(user, monkeypatch):
     await user.should_see("6 samples", retries=10)
     families = next(t for t in tables if "Structure" in t["columns"])
     assert "Pedigree" not in families["columns"]
+
+
+async def test_sample_qc_suggests_a_dummy_father_and_the_edit_records_the_flag(
+    user, data_dir
+):
+    """1001: S1 is observed unrelated to S3, its declared son (NOT_PARENT)."""
+    await open_qc(user, "curator")
+    await open_editor(user)
+    await user.should_see("Suggestions from Sample QC", retries=10)
+    await user.should_see("Sample QC against this pedigree: 1 contradiction now.")
+    await user.should_see("S1 – S3: expected parent-offspring, observed unrelated")
+    await user.should_see("contradictions 1 → 0")
+    user.find(marker="ped-apply-notparent:S3:father").click()
+    await user.should_see("S3: father S1 -> DUMMY_S3_F", retries=10)
+    await user.should_see(
+        "Sample QC against this pedigree: 1 contradiction now; 0 contradictions,"
+        " 1 pair related beyond it with your changes."
+    )
+    user.find(marker="ped-comment").type("Non-paternity, confirmed by the centre")
+    await wait_for(lambda: _one(user, "ped-save").enabled)
+    user.find(marker="ped-save").click()
+    await wait_for(lambda: pe.read_family_edits(data_dir, "1001") != [])
+    (record,) = pe.read_family_edits(data_dir, "1001")
+    assert record.flags == ("NOT_PARENT",)
+
+
+async def test_sample_qc_suggests_the_karyotypes_sex(user):
+    """AU-X-1: S6 is recorded female, its karyotype is XY (SEX_MISMATCH)."""
+    await open_qc(user, "curator", "AU-X-1")
+    await open_editor(user)
+    await user.should_see("Record S6 as male", retries=10)
+    await user.should_see("S6: karyotype XY")
+    user.find(marker="ped-apply-sex:S6").click()
+    await user.should_see("S6: sex 2 -> 1", retries=10)
