@@ -216,11 +216,31 @@ def _person(row: Dict[str, Any], dirs: Dict[str, DirInfo]) -> DirInfo | None:
     return info
 
 
+def distinct_families(rows: List[Dict[str, Any]]) -> int:
+    """Carrier rows' families, each counted once.
+
+    One family listed by two cohorts, or under two family IDs (cohort-specific
+    codes), shares its carriers' barcodes, which have no aliases. Each carrier
+    takes the smallest ``(cohort, FID)`` it is listed under in its data
+    directory; the distinct ones are counted (as the gene index's
+    ``dir_families``).
+    """
+    first: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for r in rows:
+        if not r.get("FID"):
+            continue
+        key = (r["data_dir"], r["Sample"])
+        family = (r["Cohort"], r["FID"])
+        if key not in first or family < first[key]:
+            first[key] = family
+    return len({(d, f) for (d, _), f in first.items()})
+
+
 def seen_summary(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     """Individuals, families, cohorts and data directories among carrier rows."""
     return {
         "individuals": len({(r["data_dir"], r["Sample"]) for r in rows}),
-        "families": len({(r["data_dir"], r["Cohort"], r["FID"]) for r in rows}),
+        "families": distinct_families(rows),
         "cohorts": len({(r["data_dir"], r["Cohort"]) for r in rows}),
         "data_dirs": len({r["data_dir"] for r in rows}),
     }

@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every role sees, under the family's title, where else it is listed, with links. Curators also see what differs, and can mark a finding as explained with a note: a later change of the rows raises it again. Curators also get a warning on the home page with a list of every finding, the cohort's findings on its Workflow tab, a badge in the Families tab's Pedigree column, and "Check" on the family status for a high finding.
 - **The pedigree editor opens a family whose cohorts disagree.** It shows each cohort's rows side by side and asks which to edit; saving writes them into every cohort, so ghfc-ngs builds the family alike. A cohort's own phenotypes are kept unless the edit changes one. The edit lists what changes in each cohort (`NOHEAD: S3: father 0 -> S1, mother 0 -> S2`). Before, the editor refused such a family, even when only the phenotype differed.
 
+### Fixed
+- **"Seen in N families" counted a family once per cohort listing it.** A family listed by two cohorts, under the same ID or another (a cohort's own code), was counted twice on the SNVs/Indels tables and on the gene and variant pages. On GHFC-GRCh38, 25,876 variants were over-counted, 21,959 of them seen in at most three families, so a private variant could read as recurrent: most were families listed in both GHFC-NT and dataset_paper_20251010. A family now counts once per data directory, recognised by its members' barcodes. The variant counts are rebuilt once, at the first refresh after the update; until then the tables show the old figures.
+
 ### Changed
 - **The home page reads the diagnostics off the event loop**: the per-phenotype table read every diagnostic file once per cohort while the page was built.
 

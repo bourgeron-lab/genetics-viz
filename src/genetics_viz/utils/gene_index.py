@@ -785,6 +785,9 @@ _COUNTS_SCHEMA = {
     "cohort": pl.Utf8,
     "carriers": pl.UInt32,
     "families": pl.UInt32,
+    # Distinct families carrying the variant in the whole data directory, the
+    # same on each of its cohort rows (see _counts_to_file).
+    "dir_families": pl.UInt32,
 }
 #: Data directory path -> ((mtime, size), counts frame). Replaced whole.
 _counts: Dict[str, Tuple[Tuple[float, int], pl.DataFrame]] = {}
@@ -796,21 +799,44 @@ def _counts_to_file(files: List[Path], path: Path) -> int:
     A carrier is a sample whose genotype holds an alternate allele (or that
     has none written: the row then is the carrier's). Streamed, sorted by
     variant.
+
+    ``dir_families`` counts the data directory's families once each: one
+    family listed by two cohorts, or known by two family IDs (cohort-specific
+    codes), shares its carriers' barcodes, which have no aliases. Each carrier
+    takes the smallest ``(cohort, family)`` it is listed under, and the
+    distinct ones are counted. Exact for a family listed twice, under one ID
+    or two, and for one family's members listed alone under another ID; two
+    families that only overlap stay two.
     """
     gt = pl.col("sample_gt")
     if files:
-        frame = collect_streaming(
+        carriers = (
             pl.scan_parquet(files)
             .select("variant", "cohort", "family_id", "sample", "sample_gt")
             .filter(gt.is_null() | gt.str.contains("[1-9]"))
             .unique(["variant", "cohort", "sample"])
-            .group_by("variant", "cohort")
+        )
+        per_cohort = carriers.group_by("variant", "cohort").agg(
+            pl.len().cast(pl.UInt32).alias("carriers"),
+            pl.col("family_id").drop_nulls().n_unique().cast(pl.UInt32)
+            .alias("families"),
+        )  # fmt: skip
+        per_dir = (
+            carriers.filter(pl.col("family_id").is_not_null())
+            .group_by("variant", "sample")
             .agg(
-                pl.len().cast(pl.UInt32).alias("carriers"),
-                pl.col("family_id").drop_nulls().n_unique().cast(pl.UInt32)
-                .alias("families"),
+                pl.concat_str(["cohort", "family_id"], separator="\t")
+                .min()
+                .alias("_family")
             )
-        ).sort("variant", "cohort")  # fmt: skip
+            .group_by("variant")
+            .agg(pl.col("_family").n_unique().cast(pl.UInt32).alias("dir_families"))
+        )
+        frame = (
+            collect_streaming(per_cohort.join(per_dir, on="variant", how="left"))
+            .with_columns(pl.col("dir_families").fill_null(0))
+            .sort("variant", "cohort")
+        )
     else:
         frame = pl.DataFrame(schema=_COUNTS_SCHEMA)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
@@ -829,7 +855,7 @@ def _refresh_counts(
 ) -> None:
     """Rebuild a directory's counts when an snv file changed (or there are none)."""
     path = root / _COUNTS
-    if rebuild or not path.exists():
+    if rebuild or not path.exists() or not _counts_current(path):
         files = [
             root / e["file"]
             for e in entries.values()
@@ -843,6 +869,14 @@ def _refresh_counts(
             logger.warning("Gene index: cannot count variants in %s: %s", root, e)
             return
     _load_counts(data_dir)
+
+
+def _counts_current(path: Path) -> bool:
+    """Whether a counts file has every column (an older one lacks ``dir_families``)."""
+    try:
+        return set(_COUNTS_SCHEMA) <= set(pl.read_parquet_schema(path))
+    except (OSError, pl.exceptions.PolarsError):
+        return False
 
 
 def _load_counts(data_dir: str) -> Optional[pl.DataFrame]:
@@ -863,6 +897,9 @@ def _load_counts(data_dir: str) -> Optional[pl.DataFrame]:
     except (OSError, pl.exceptions.PolarsError) as e:
         logger.warning("Gene index: cannot read %s: %s", path, e)
         return cached[1] if cached else None
+    if "dir_families" not in frame.columns:
+        # Written before the column: served (null) until the refresh rebuilds it.
+        frame = frame.with_columns(pl.lit(None, dtype=pl.UInt32).alias("dir_families"))
     _counts[data_dir] = (stat, frame)
     return frame
 
@@ -874,7 +911,9 @@ def variant_counts(
 
     Only what is in memory unless ``load`` (blocking: it may read the files):
     the refresh loads every directory's counts, so the event loop never waits.
-    Columns: ``variant``, ``data_dir``, ``cohort``, ``carriers``, ``families``.
+    Columns: ``variant``, ``data_dir``, ``cohort``, ``carriers``, ``families``,
+    ``dir_families`` (the directory's distinct families, null in a counts file
+    written before it).
     """
     keys = sorted({v for v in variants if v})
     frames: List[pl.DataFrame] = []

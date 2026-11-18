@@ -428,6 +428,87 @@ def test_add_variant_counts():
     assert rows == [{"Variant": "v1"}]
 
 
+def test_counts_count_a_family_once_per_directory(tmp_path: Path):
+    """One family in two cohorts, under one ID or two (CANDY_mpx 88181200001
+    is dataset_paper C0733-011-001), counts once; two families stay two."""
+    rows = [
+        # v1: F1 in cohort A, the same people as X9 in B, and F1 again in C.
+        ("v1", "A", "F1", "S1", "0/1"), ("v1", "A", "F1", "S2", "0/1"),
+        ("v1", "B", "X9", "S1", "0/1"), ("v1", "B", "X9", "S2", "0/1"),
+        ("v1", "C", "F1", "S1", "0/1"),
+        # ... and an unrelated family in B.
+        ("v1", "B", "G2", "S7", "1/1"),
+        # v2: K alone (part of F1) in B, F1 in A: one family.
+        ("v2", "A", "F1", "S2", "0/1"), ("v2", "B", "K", "S2", "0/1"),
+        # A non-carrier row does not count.
+        ("v2", "A", "F1", "S1", "0/0"),
+    ]  # fmt: skip
+    snv = tmp_path / "snv.parquet"
+    pl.DataFrame(
+        rows,
+        schema=["variant", "cohort", "family_id", "sample", "sample_gt"],
+        orient="row",
+    ).write_parquet(snv)
+    out = tmp_path / "variant_counts.parquet"
+    gene_index._counts_to_file([snv], out)
+    got = {
+        (r["variant"], r["cohort"]): (r["families"], r["dir_families"])
+        for r in pl.read_parquet(out).iter_rows(named=True)
+    }
+    assert got == {
+        ("v1", "A"): (1, 2), ("v1", "B"): (2, 2), ("v1", "C"): (1, 2),
+        ("v2", "A"): (1, 1), ("v2", "B"): (1, 1),
+    }  # fmt: skip
+    assert gene_index._counts_current(out)
+
+
+def test_an_older_counts_file_is_rebuilt(indexed: Path):
+    here = str(indexed)
+    path = gene_index._store_root(here) / "variant_counts.parquet"
+    pl.read_parquet(path).drop("dir_families").write_parquet(path)
+    assert not gene_index._counts_current(path)
+    gene_index.clear_gene_index()
+    old = gene_index.variant_counts([SHANK3_DE_NOVO], [here], load=True)
+    assert old["dir_families"].is_null().all()
+    gene_index.refresh_all(wait=True)
+    assert gene_index._counts_current(path)
+
+
+def test_add_variant_counts_counts_a_family_once():
+    from genetics_viz.pages.cohort.components.wombat_rows import add_variant_counts
+
+    counts = pl.DataFrame(
+        {
+            "variant": ["v1", "v1", "v1"],
+            "cohort": ["A", "B", "B"],
+            "carriers": [3, 2, 1],
+            "families": [2, 2, 1],
+            # /d1: A's and B's families overlap: 3 distinct, not 4.
+            "dir_families": [3, 3, 1],
+            "data_dir": ["/d1", "/d1", "/d2"],
+        }
+    )
+    rows = [{"Variant": "v1"}]
+    add_variant_counts(rows, counts, "/d1", "A", 30, True)
+    assert rows[0]["seen_families"] == 4
+    assert rows[0]["seen_cohorts"] == "A (2), B (3)"
+    # Its cohort not indexed: the family adds one.
+    rows = [{"Variant": "v1"}]
+    add_variant_counts(rows, counts, "/d1", "C", 30, False)
+    assert rows[0]["seen_families"] == 5
+
+
+def test_distinct_families_on_the_gene_pages():
+    def row(cohort, fid, sample, data_dir="/d1"):
+        return {"data_dir": data_dir, "Cohort": cohort, "FID": fid, "Sample": sample}
+
+    rows = [
+        row("A", "F1", "S1"), row("B", "X9", "S1"), row("C", "F1", "S1"),
+        row("B", "G2", "S7"), row("A", "F1", "S1", "/d2"),
+    ]  # fmt: skip
+    assert gene_rows.seen_summary(rows)["families"] == 3
+
+
 def test_families_column_links_to_the_variant_page():
     from genetics_viz.pages.cohort.components.wombat_rows import (
         COUNT_COLUMNS,
