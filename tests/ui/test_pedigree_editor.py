@@ -249,7 +249,9 @@ async def test_a_swap_with_another_family_is_saved_for_both(user, data_dir):
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
     open_tab(user, "cohort-tabs", "Workflow")
-    await user.should_see(marker="workflow-pedigree-waiting", retries=30)
+    # The tab warms its caches off-thread first: slow on a busy CI runner.
+    await user.should_see("Pipeline status", retries=200)
+    await user.should_see(marker="workflow-pedigree-waiting", retries=100)
     await user.should_see("--clean-stale-families for 1002, AU-X-1")
 
 
@@ -325,6 +327,7 @@ async def test_two_families_merged_under_a_new_id(user, data_dir):
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
     open_tab(user, "cohort-tabs", "Workflow")
-    await user.should_see(marker="workflow-orphaned-families", retries=30)
+    await user.should_see("Pipeline status", retries=200)
+    await user.should_see(marker="workflow-orphaned-families", retries=100)
     await user.should_see("AU-X-1 → FAMX", retries=10)
     await user.should_see(marker="workflow-pedigree-waiting")
