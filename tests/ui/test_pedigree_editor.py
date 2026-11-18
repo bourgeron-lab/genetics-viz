@@ -68,6 +68,7 @@ async def test_a_curator_gives_a_child_a_dummy_father_and_saves(user, data_dir):
     assert not _one(user, "ped-save").enabled
     user.find(marker="ped-comment").type("S1 is not S3's father (Sample QC)")
     await wait_for(lambda: _one(user, "ped-save").enabled)
+    page = user.client
     user.find(marker="ped-save").click()
 
     await wait_for(lambda: "DUMMY_S3_F" in (data_dir / DEMO).read_text())
@@ -80,8 +81,13 @@ async def test_a_curator_gives_a_child_a_dummy_father_and_saves(user, data_dir):
     )
     assert record.cohorts == ("DEMO", "NOHEAD") and record.rerun == pe.RERUN_NORMAL
 
-    # The page reloads on the new pedigree: the member card has the dummy, and
-    # the Sample QC tab says which results still read the older one.
+    # The page reloads on the new pedigree once the cohorts are re-read (in a
+    # thread): wait for the new page, or the tab switch below reaches the old
+    # one. The simulated reload reopens the URL first opened (no address bar
+    # takes the link's tab=), so the new page opens on SNVs/Indels.
+    await wait_for(lambda: user.client is not page, tries=SLOW * 2)
+    # The member card has the dummy, and the Sample QC tab says which results
+    # still read the older pedigree.
     await user.should_see("Family: 1001", retries=SLOW)
     await user.should_see("DUMMY_S3_F", retries=SLOW)
     open_tab(user, "family-tabs", "Sample QC")
