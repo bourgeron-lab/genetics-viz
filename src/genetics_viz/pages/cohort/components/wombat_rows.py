@@ -135,6 +135,10 @@ def add_variant_counts(
     ``cohort_size`` (its pedigree); both stay empty when the cohort has no
     indexed table. Families count every cohort, this family included: it
     carries the variant, its row says so, even when its cohort is not indexed.
+    A family listed by two cohorts, or under two family IDs, counts once
+    (``dir_families``, per data directory); a counts file written before that
+    column sums the cohorts' families, as before. A family whose cohort is not
+    indexed adds one, even if another cohort lists it.
     """
     if counts is None:
         return
@@ -158,7 +162,20 @@ def add_variant_counts(
         by_cohort = {cohort: own_families}
         for c in others:
             by_cohort[c["cohort"]] = by_cohort.get(c["cohort"], 0) + c["families"]
-        row["seen_families"] = sum(by_cohort.values())
+        by_dir: Dict[str, int] = {}
+        for c in here:
+            if c.get("dir_families") is None:
+                by_dir = {}
+                break
+            by_dir[c["data_dir"]] = max(by_dir.get(c["data_dir"], 0), c["dir_families"])
+        if by_dir or not here:
+            if cohort_indexed:
+                by_dir[data_dir] = max(by_dir.get(data_dir, 0), 1)
+            else:
+                by_dir[data_dir] = by_dir.get(data_dir, 0) + 1
+            row["seen_families"] = sum(by_dir.values())
+        else:
+            row["seen_families"] = sum(by_cohort.values())
         row["seen_cohorts"] = ", ".join(
             f"{name} ({n})" for name, n in sorted(by_cohort.items())
         )
