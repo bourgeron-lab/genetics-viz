@@ -85,6 +85,9 @@ reasons:
     text: >-
       A high-severity QC flag is open, and the QC tables were written after
       the status.
+  pedigree_differs:
+    label: Pedigree differs
+    text: "Another cohort lists this family otherwise ({what}): its results may be rebuilt from the other rows."
   results_after:
     label: New results
     text: "Steps rerun for this family after the status: {steps}."

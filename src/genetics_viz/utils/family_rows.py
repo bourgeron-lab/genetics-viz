@@ -58,6 +58,12 @@ class FamilyFacts:
     status_diagnostics: Dict[str, fs.FamilyDiagnostics] = field(default_factory=dict)
     #: FID -> when the cohort QC tables holding an open high flag were written.
     qc_high_written: Dict[str, float] = field(default_factory=dict)
+    #: FID -> open high-severity pedigree disagreements with other cohorts, worded.
+    disagreements: Dict[str, List[str]] = field(default_factory=dict)
+    #: FID -> every pedigree finding about it (``pedigree_consistency``). Curators.
+    consistency: Dict[str, List[Any]] = field(default_factory=dict)
+    #: The explained findings' keys. Curators.
+    consistency_acks: Set[str] = field(default_factory=set)
     #: Which tables were found: ``ancestry``, ``roh``, ``denovo``; ``status``
     #: once the statuses are read.
     found: Set[str] = field(default_factory=set)
@@ -117,7 +123,9 @@ def _validated_snvs(data_dir: Path) -> Set[Key]:
     }
 
 
-def load_family_facts(cohort: Any, data_dir: Path, curator: bool) -> FamilyFacts:
+def load_family_facts(
+    cohort: Any, data_dir: Path, curator: bool, store: Any = None
+) -> FamilyFacts:
     """Blocking: the cohort's ancestry, FROH and de novo tables, per individual.
 
     Each table is optional; one that fails to read is left out and logged.
@@ -171,11 +179,24 @@ def load_family_facts(cohort: Any, data_dir: Path, curator: bool) -> FamilyFacts
         facts.statuses = fs.family_statuses(data_dir)
         facts.status_diagnostics = fs.diagnostics_by_family(data_dir)
         facts.qc_high_written = fs.cohort_qc_high_written(cohort, data_dir)
+        if store is not None:
+            facts.disagreements = fs.disagreements_by_family(store)
         facts.found.add("status")
     except Exception:
         logger.warning("Failed to read the family statuses", exc_info=True)
     if curator:
         facts.pedigree = facts.edits
+        if store is not None:
+            try:
+                from . import pedigree_consistency as pc
+
+                for f in pc.scan(store).findings:
+                    if cohort.name in f.cohorts:
+                        for fid in f.family_ids:
+                            facts.consistency.setdefault(fid, []).append(f)
+                facts.consistency_acks = set(pc.load_acks(data_dir))
+            except Exception:
+                logger.warning("Failed to compare the cohort pedigrees", exc_info=True)
         try:
             facts.summaries = read_family_summaries(data_dir)
         except Exception:
@@ -193,6 +214,7 @@ def family_state(family: Any, facts: FamilyFacts) -> fs.FamilyState:
         diagnostics=facts.status_diagnostics.get(fid),
         qc_high_written=facts.qc_high_written.get(fid),
         affected=any(is_affected(s.phenotype) for s in family.samples),
+        disagreements=facts.disagreements.get(fid, ()),
     )
 
 
@@ -286,6 +308,7 @@ def family_row(
     diagnostics: Tuple[int, str] = (0, ""),
     curator: bool = False,
     show_relationship: bool = False,
+    cohort_name: str = "",
 ) -> Dict[str, Any]:
     """The Families table's row of one family.
 
@@ -417,7 +440,9 @@ def family_row(
 
     status = facts.pedigree.get(fid)
     row["Pedigree"] = status.last.timestamp[:10] if status else ""
-    row["Pedigree_badges"] = pedigree_badges(status)
+    row["Pedigree_badges"] = pedigree_badges(status) + consistency_badges(
+        fid, cohort_name, facts.consistency.get(fid, []), facts.consistency_acks
+    )
     row["_ped_cats"] = (
         [PED_EDITED] + ([PED_AWAITING] if status.awaiting_rerun else [])
         if status
@@ -482,6 +507,37 @@ def pedigree_badges(status: Optional[EditStatus]) -> List[Dict[str, str]]:
             "tooltip": tooltip,
         }
     ]
+
+
+def consistency_badges(
+    family_id: str, cohort_name: str, findings: List[Any], acks: Set[str]
+) -> List[Dict[str, str]]:
+    """``Differs: NOHEAD``, ``Alias: AU-77``: the open pedigree findings, not info."""
+    from .sample_qc import severity_info
+
+    out: List[Dict[str, str]] = []
+    for f in findings:
+        if not f.acknowledgeable or f.key in acks:
+            continue
+        others = f.others(family_id, cohort_name)
+        if f.code.startswith("SAME_FID") or f.code == "FID_COLLISION":
+            # The other cohorts listing this ID.
+            names = sorted({c for c, g in others if g == family_id})
+        else:
+            # The other IDs the samples go by.
+            names = sorted({g for _, g in others if g != family_id})
+        out.append(
+            {
+                "label": f"{f.info.get('short', f.code)}: {', '.join(names)}",
+                "color": severity_info(f.severity)["color"],
+                "tooltip": "\n".join(
+                    [f.info.get("label", f.code)]
+                    + [f"{g} in {c}" for c, g in others]
+                    + list(f.details)
+                ),
+            }
+        )
+    return out
 
 
 def _badges(column_id: str, header: str, sort_field: str, **extra: Any) -> Dict:

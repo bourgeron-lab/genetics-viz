@@ -280,12 +280,45 @@ def test_a_rewritten_row_always_has_a_phenotype(data_dir):
     assert pe.family_file_text(text, "AU-X-1").startswith("AU-X-1\tS5")
 
 
-def test_a_family_in_two_cohorts_must_read_the_same(data_dir):
+def test_cohorts_that_disagree_are_made_to_agree(data_dir, curator):
+    """NOHEAD leaves S3's parents at 0 (PMS's C0733-011-021): editing from
+    DEMO's rows writes them into NOHEAD too, NOHEAD's phenotypes kept."""
     nohead = cohort_file(data_dir, "NOHEAD")  # DEMO's first three rows: 1001
-    assert source(data_dir, "1001", "DEMO", "NOHEAD").cohorts == ["DEMO", "NOHEAD"]
-    nohead.write_text(nohead.read_text().replace("S1\tS2\t1", "S1\t0\t1"))
-    with pytest.raises(pe.PedigreeEditError, match="differs between"):
-        source(data_dir, "1001", "DEMO", "NOHEAD")
+    assert not source(data_dir, "1001", "DEMO", "NOHEAD").differs
+    nohead.write_text(
+        nohead.read_text()
+        .replace("S1\tS2\t1\t2", "0\t0\t1\t2")
+        .replace("S2\t0\t0\t2\t1", "S2\t0\t0\t2\t2")
+    )
+    src = pe.load_family(
+        data_dir,
+        "1001",
+        [cohort_file(data_dir, "NOHEAD"), cohort_file(data_dir, "DEMO")],
+        reference=cohort_file(data_dir, "DEMO"),
+    )
+    assert src.differs and src.reference_cohort == "DEMO"
+    assert src.file_changes(src.draft()) == [
+        "NOHEAD: S3: father 0 -> S1, mother 0 -> S2"
+    ]
+    assert src.rerun(src.draft()) == pe.RERUN_NORMAL
+    (record,) = pe.save_cross_family_edit(
+        [(src, src.draft())], user="alice", comment="trio links", now=NOW
+    )
+    assert record.changes == ("NOHEAD: S3: father 0 -> S1, mother 0 -> S2",)
+    text = nohead.read_text()
+    assert "1001\tS3\tS1\tS2\t1\t2" in text
+    # NOHEAD says S2 is affected: a cohort's own phenotype stays.
+    assert "1001\tS2\t0\t0\t2\t2" in text
+    assert "1001\tS2\t0\t0\t2\t1" in cohort_file(data_dir, "DEMO").read_text()
+
+
+def test_a_phenotype_edit_reaches_every_cohort(data_dir, curator):
+    src = source(data_dir, "1001", "DEMO", "NOHEAD")
+    draft = src.draft()
+    draft.set_phenotype("S1", "2")
+    pe.save_pedigree_edit(src, draft, user="alice", comment="affected", now=NOW)
+    for name in ("DEMO", "NOHEAD"):
+        assert "1001\tS1\t0\t0\t1\t2" in cohort_file(data_dir, name).read_text()
 
 
 def test_the_cohorts_holding_a_family(data_dir):

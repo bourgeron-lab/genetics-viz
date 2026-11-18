@@ -1,0 +1,70 @@
+# Pedigree consistency across the cohorts of one data directory.
+#
+# The cohorts share one families/ tree, but each has its own pedigree.
+# ghfc-ngs builds a family from the rows of the cohort it runs, so two
+# cohorts listing one family with other rows overwrite each other's results.
+# Barcodes have no aliases: one barcode under two family IDs is one family
+# known by two codes. The app only finds and words these; it never changes a
+# pedigree by itself.
+#
+# severity: high, medium or info (Sample QC's colours). An info finding is
+# shown but never counted nor acknowledged.
+codes:
+  SAME_FID_ROWS_DIFFER:
+    severity: high
+    label: Rows differ between cohorts
+    short: Differs
+    text: >-
+      The cohorts list this family with other parents, sex or dummy members.
+      Each cohort's ghfc-ngs run rebuilds the family from its own rows, so its
+      results are those of the cohort that ran last.
+  SAME_FID_MEMBERS_DIFFER:
+    severity: high
+    label: Members differ between cohorts
+    short: Differs
+    text: >-
+      The cohorts list this family with other sequenced members: its joint
+      call no longer matches the pedigree after a run of the other cohort.
+  FID_COLLISION:
+    severity: high
+    label: One family ID, two families
+    short: ID collision
+    text: >-
+      Two cohorts use this family ID for families with no member in common,
+      yet they share one families/ directory.
+  SAME_FID_PHENOTYPE_DIFFERS:
+    severity: info
+    label: Phenotype differs between cohorts
+    short: Phenotype
+    text: >-
+      The cohorts agree on the family but not on who is affected, which a
+      cohort per phenotype can explain. ghfc-ngs reruns nothing for it.
+  ALIAS_SAME_MEMBERS:
+    severity: medium
+    label: Same family under another ID
+    short: Alias
+    text: >-
+      The same sequenced members are listed under another family ID: the
+      family is analysed twice, and its curation is split between the IDs.
+  ALIAS_SUBSET:
+    severity: medium
+    label: Part of a family under another ID
+    short: Alias
+    text: >-
+      Some of these members are listed under another family ID, with more
+      members there: the smaller family may lack parents or siblings the
+      other has (no trio analysis without both parents).
+  ALIAS_OVERLAP:
+    severity: high
+    label: Members shared with another family ID
+    short: Overlap
+    text: >-
+      Some members are listed under another family ID, and each family has
+      members the other lacks: a member may sit in the wrong family.
+  BARCODE_ROWS_DIFFER:
+    severity: high
+    label: One sample, two different rows
+    short: Sample differs
+    text: >-
+      A sample has another sex, or other sequenced parents, in another family:
+      one of the two rows is wrong (a swap or a typo).

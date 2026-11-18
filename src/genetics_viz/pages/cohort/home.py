@@ -17,7 +17,8 @@ from genetics_viz.pages.cohort.components.status_panel import (
     render_status_summary,
     status_headline,
 )
-from genetics_viz.utils.auth import check_auth
+from genetics_viz.utils import pedigree_consistency as pc
+from genetics_viz.utils.auth import can_write, check_auth
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.data_availability import (
     check_family_availability,
@@ -152,16 +153,49 @@ def _gather_cohort_stats(
 
 
 def _gather_status_counts(
-    cohorts: List[Cohort], data_dir: Path
+    cohorts: List[Cohort], data_dir: Path, store: Any = None
 ) -> Dict[str, StatusCounts]:
     """Every cohort's families by status, in one offloaded pass. Never raises."""
     out: Dict[str, StatusCounts] = {}
     for cohort in cohorts:
         try:
-            out[cohort.name] = cohort_status_counts(cohort, data_dir)
+            out[cohort.name] = cohort_status_counts(cohort, data_dir, store)
         except Exception:
             logger.warning("Failed to count %s's statuses", cohort.name, exc_info=True)
     return out
+
+
+def _open_disagreements(store: Any) -> List[pc.Finding]:
+    """The data directory's pedigree disagreements still to review. Never raises."""
+    try:
+        return pc.open_findings(pc.scan(store).findings, pc.load_acks(store.data_dir))
+    except Exception:
+        logger.warning("Failed to compare the cohort pedigrees", exc_info=True)
+        return []
+
+
+def _render_disagreements(findings: List[pc.Finding]) -> None:
+    """Curators: a warning linking to the list, when pedigrees disagree."""
+    if not findings:
+        return
+    families = {fid for f in findings for fid in f.family_ids}
+    high = sum(1 for f in findings if f.severity == "high")
+    with (
+        ui.card()
+        .classes(
+            "w-full p-3 mb-4 border-l-4 border-amber-500 bg-amber-50 cursor-pointer"
+        )
+        .on("click", lambda: ui.navigate.to("/pedigree-consistency"))
+        .mark("home-consistency")
+    ):
+        with ui.row().classes("items-center gap-2"):
+            ui.icon("warning", color="amber-9")
+            ui.label(
+                f"Pedigrees disagree across cohorts: {len(findings)} finding"
+                f"{'' if len(findings) == 1 else 's'} ({high} high) over"
+                f" {len(families)} famil{'y' if len(families) == 1 else 'ies'}."
+            ).classes("text-sm font-semibold text-amber-900")
+            ui.link("Review", "/pedigree-consistency").classes("text-sm")
 
 
 def _render_qc_summary(counts: Dict[str, int]) -> None:
@@ -522,8 +556,12 @@ async def home_page() -> None:
                 _gather_cohort_stats, cohorts, store.data_dir
             )
             status_counts = await asyncio.to_thread(
-                _gather_status_counts, cohorts, store.data_dir
+                _gather_status_counts, cohorts, store.data_dir, store
             )
+            if can_write():
+                _render_disagreements(
+                    await asyncio.to_thread(_open_disagreements, store)
+                )
 
             # Display cohorts as cards
             ui.label("Available Cohorts").classes(

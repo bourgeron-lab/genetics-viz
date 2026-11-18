@@ -823,20 +823,88 @@ def family_file_text(cohort_text: str, family_id: str) -> str:
     return "".join(out)
 
 
+#: Reruns from the least to the most work.
+_RERUN_ORDER = (RERUN_NONE, RERUN_NORMAL, RERUN_CLEAN)
+
+
+def _shape(draft: PedigreeDraft) -> Dict[str, Tuple[str, str, str]]:
+    """What ghfc-ngs's steps read of a family: members, parents and sex."""
+    return {m.iid: m.key()[:3] for m in draft.members}
+
+
 @dataclass
 class FamilySource:
     """A family's pedigree in every cohort file that lists it, as read for an edit.
 
     The save refuses to write a file whose content changed since this was read.
+    ``original`` is the reference file's rows, the ones edited. The cohorts may
+    disagree (``drafts`` holds each file's own rows): a save then writes the
+    reference rows, as edited, into every file, each keeping its own phenotypes
+    unless the edit changed one (a cohort per phenotype may legitimately say
+    otherwise).
     """
 
     data_dir: Path
     family_id: str
     files: List[PedigreeText]
     original: PedigreeDraft
+    #: Each file's own rows, as read (empty: all as ``original``).
+    drafts: List[PedigreeDraft] = field(default_factory=list)
+    #: The index of the file whose rows ``original`` holds.
+    reference: int = 0
 
     def draft(self) -> PedigreeDraft:
         return self.original.copy()
+
+    def file_draft(self, index: int) -> PedigreeDraft:
+        return self.drafts[index] if self.drafts else self.original
+
+    @property
+    def reference_cohort(self) -> str:
+        return _cohort_name(self.files[self.reference].path) if self.files else ""
+
+    def differing(self) -> List[int]:
+        """The files whose members, parents or sex differ from the reference's."""
+        ref = _shape(self.original)
+        return [i for i in range(len(self.files)) if _shape(self.file_draft(i)) != ref]
+
+    @property
+    def differs(self) -> bool:
+        return bool(self.differing())
+
+    def target(self, index: int, draft: PedigreeDraft) -> PedigreeDraft:
+        """The rows ``draft`` writes into file ``index``: its own phenotypes kept
+        where the edit left the reference's phenotype as it was."""
+        own = {m.iid: m for m in self.file_draft(index).members}
+        ref = {m.iid: m for m in self.original.members}
+        out = draft.copy()
+        out.members = [
+            replace(m, phenotype=own[m.iid].phenotype)
+            if m.iid in own
+            and m.iid in ref
+            and norm_phenotype(m.phenotype) == norm_phenotype(ref[m.iid].phenotype)
+            else m
+            for m in draft.members
+        ]
+        return out
+
+    def file_changes(self, draft: PedigreeDraft) -> List[str]:
+        """What the other cohorts' files change to agree with the reference."""
+        return [
+            f"{_cohort_name(self.files[i].path)}: {clause}"
+            for i in self.differing()
+            for clause in describe_changes(self.file_draft(i), self.target(i, draft))
+        ]
+
+    def rerun(self, draft: PedigreeDraft) -> str:
+        """The strongest rerun over every file."""
+        needed = [rerun_needed(self.original, draft)] + [
+            rerun_needed(self.file_draft(i), self.target(i, draft))
+            for i in self.differing()
+        ]
+        return max(
+            needed, key=lambda r: _RERUN_ORDER.index(r) if r in _RERUN_ORDER else 0
+        )
 
     @property
     def cohorts(self) -> List[str]:
@@ -852,27 +920,32 @@ def _cohort_name(path: Path) -> str:
 
 
 def load_family(
-    data_dir: Path, family_id: str, cohort_files: Sequence[Path]
+    data_dir: Path,
+    family_id: str,
+    cohort_files: Sequence[Path],
+    reference: Optional[Path] = None,
 ) -> FamilySource:
     """Read the family from each cohort pedigree that lists it.
 
-    The family must read the same in all of them (codes normalised): ghfc-ngs
-    would otherwise rewrite its family file back and forth, and one edit could
-    not be applied to both.
+    The cohorts may disagree: ghfc-ngs then rebuilds the family from whichever
+    cohort it runs. ``reference`` names the file whose rows are edited (the
+    first one by default); saving writes them into every file, which makes the
+    cohorts agree. Phenotypes may differ and stay per cohort.
     """
     files = [PedigreeText.read(Path(p), family_id) for p in cohort_files]
     files = [f for f in files if f.family_lines]
     if not files:
         raise PedigreeEditError(f"Family {family_id} is in no cohort pedigree")
     drafts = [f.family_draft(family_id) for f in files]
-    first = {m.iid: m.key() for m in drafts[0].members}
-    for f, d in zip(files[1:], drafts[1:]):
-        if {m.iid: m.key() for m in d.members} != first:
-            raise PedigreeEditError(
-                f"Family {family_id} differs between {files[0].path.name} and "
-                f"{f.path.name}; make them agree by hand first"
-            )
-    return FamilySource(Path(data_dir), family_id, files, drafts[0])
+    index = next(
+        (
+            i
+            for i, f in enumerate(files)
+            if reference is not None and f.path == Path(reference)
+        ),
+        0,
+    )
+    return FamilySource(Path(data_dir), family_id, files, drafts[index], drafts, index)
 
 
 def family_cohort_files(store, family_id: str) -> List[Path]:
@@ -1056,7 +1129,10 @@ def _write_edits(
                 f"{sources[0].family_id} and {s.family_id} are not in the same"
                 " cohort pedigrees: edit them one at a time"
             )
-    changes = {s.family_id: describe_changes(s.original, d) for s, d in parts}
+    changes = {
+        s.family_id: describe_changes(s.original, d) + s.file_changes(d)
+        for s, d in parts
+    }
     if not any(changes.values()):
         raise PedigreeEditError("Nothing changed")
     found = cross_problems(
@@ -1064,7 +1140,7 @@ def _write_edits(
     )
     if has_errors(found):
         raise PedigreeEditError("; ".join(p.message for p in found if p.level == ERROR))
-    reruns = {s.family_id: rerun_needed(s.original, d) for s, d in parts}
+    reruns = {s.family_id: s.rerun(d) for s, d in parts}
     now = now or datetime.now()
     data_dir = sources[0].data_dir
 
@@ -1093,7 +1169,9 @@ def _write_edits(
                 text = sources[0].files[index].text
                 for s, d in parts:
                     text = render_cohort_text(
-                        PedigreeText.from_text(path, text, s.family_id), s.original, d
+                        PedigreeText.from_text(path, text, s.family_id),
+                        s.file_draft(index),
+                        s.target(index, d),
                     )
                 new_texts.append(text)
             edit_id = max(
@@ -1105,13 +1183,17 @@ def _write_edits(
             for s in sources:
                 fid = s.family_id
                 history = edits_dir(data_dir, fid)
-                after = family_file_text(new_texts[0], fid)
+                after = family_file_text(new_texts[s.reference], fid)
                 targets += [
                     get_family_path(data_dir, fid) / f"{fid}.pedigree.tsv",
                     history / f"{fid}.{edit_id}.before.tsv",
                     history / f"{fid}.{edit_id}.after.tsv",
                 ]
-                texts += [after, family_file_text(s.files[0].text, fid), after]
+                texts += [
+                    after,
+                    family_file_text(s.files[s.reference].text, fid),
+                    after,
+                ]
             temps: List[Path] = []
             try:
                 for target, text in zip(targets, texts):

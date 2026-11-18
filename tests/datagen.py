@@ -1893,6 +1893,35 @@ def add_family_statuses(data: Path) -> None:
     )
 
 
+#: A third cohort knowing DEMO's families under its own codes: AU-77 is AU-X-1
+#: (same members), K3 is 1001's S3 alone (part of 1001).
+ALIAS_PEDIGREE: List[Sequence[str]] = [
+    ("AU-77", "S5", "0", "0", "1", "2"),
+    ("AU-77", "S6", "S5", "0", "2", "1"),
+    ("K3", "S3", "0", "0", "1", "2"),
+]
+
+
+def add_cohort_disagreements(data: Path) -> None:
+    """Pedigrees that disagree across cohorts, for the consistency checks.
+
+    - NOHEAD lists 1001 with S3's parents left at 0 (DEMO links the trio);
+    - cohort ALIAS knows AU-X-1 as AU-77 and 1001's S3 alone as K3.
+
+    Opt-in: a third cohort changes the home page and every cohort list.
+    """
+    rows = [list(r) for r in DEMO_PEDIGREE[:3]]
+    rows[2][2:4] = ["0", "0"]
+    (data / "cohorts" / "NOHEAD" / "NOHEAD.pedigree.tsv").write_text(
+        "".join("\t".join(r) + "\n" for r in rows)
+    )
+    write_tsv(
+        data / "cohorts" / "ALIAS" / "ALIAS.pedigree.tsv",
+        ["FID", "IID", "PAT", "MAT", "SEX", "PHENOTYPE"],
+        ALIAS_PEDIGREE,
+    )
+
+
 def add_gene_case(data: Path) -> None:
     """Cohort OTHER beside DEMO, and curation of the variant they share.
 
