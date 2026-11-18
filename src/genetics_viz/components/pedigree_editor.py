@@ -13,6 +13,7 @@ plan is the vault note ``Pedigree editor``.
 import asyncio
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from nicegui import ui
@@ -45,6 +46,7 @@ from genetics_viz.utils.pedigree_edit import (
     move_member,
     outside_ids,
     pending_steps,
+    read_edit_index,
     read_family_edits,
     WaitingFamily,
     rerun_needed,
@@ -54,18 +56,34 @@ from genetics_viz.utils.pedigree_edit import (
     waiting_families,
 )
 from genetics_viz.utils.pedigree_labels import normalize_pheno, normalize_sex
+from genetics_viz.utils.pedigree_merge import (
+    MergeSource,
+    Orphan,
+    orphaned_families,
+    curation_counts,
+    load_merge,
+    merge_changes,
+    merge_problems,
+    merge_rerun,
+    save_merge_async,
+)
 from genetics_viz.utils.pedigree_qc import (
     CrossSuggestion,
     Fit,
     QcContext,
     Suggestion,
     combined_draft,
+    merge_candidates,
+    merged_context,
     suggest_across,
 )
 from genetics_viz.utils.pedigree_svg import PedigreePerson, pedigree_svg
+from genetics_viz.utils.sample_qc_acks import load_acks
 from genetics_viz.utils.sample_qc import (
     FlagRow,
+    PairRow,
     flags_by_sample,
+    load_cohort_qc,
     load_family_qc,
     pair_rows,
 )
@@ -228,13 +246,15 @@ async def open_pedigree_editor(
     flags: Optional[Dict[str, List[FlagRow]]] = None,
     qc: Optional[QcContext] = None,
     on_saved: Optional[Callable[[EditRecord], Any]] = None,
+    on_merged: Optional[Callable[[str], Any]] = None,
 ) -> None:
     """Read the family's pedigree off the loop, then open the editor in ``anchor``.
 
     ``flags`` are the open Sample QC flags by member, for the trees' outlines.
     ``qc`` holds the family's pairs, samples, flags and cross-family pairs: the
     draft's fit and the suggestions. ``on_saved`` gets the (first family's)
-    edit record once the files are written.
+    edit record once the files are written; ``on_merged`` the merged family's
+    ID after a merge (without it, the editor offers none).
     """
     files = family_cohort_files(store, family_id)
     try:
@@ -261,6 +281,12 @@ async def open_pedigree_editor(
         return None
 
     qc = qc or QcContext()
+
+    async def start_merge(others: List[str]) -> None:
+        await open_merge_editor(
+            anchor, store, [family_id, *others], on_merged=on_merged
+        )
+
     anchor.clear()  # an earlier editor's dialog
     with anchor:
         _editor_dialog(
@@ -269,6 +295,7 @@ async def open_pedigree_editor(
             companions,
             load_other,
             on_saved,
+            start_merge=start_merge if on_merged is not None else None,
         ).open()
 
 
@@ -278,10 +305,19 @@ def _editor_dialog(
     companions: List[str],
     load_other: Callable[[str], Any],
     on_saved: Optional[Callable[[EditRecord], Any]],
+    *,
+    start_merge: Optional[Callable[[List[str]], Any]] = None,
+    merge: Optional[MergeSource] = None,
+    curation: Optional[Dict[Path, int]] = None,
+    on_merged: Optional[Callable[[str], Any]] = None,
 ) -> ui.dialog:
     family_id = main.family_id
     sides: List[Side] = [main]
-    state: Dict[str, Any] = {"undo": [], "answered": set()}
+    state: Dict[str, Any] = {
+        "undo": [],
+        "answered": set(),
+        "target": merge.target if merge is not None else family_id,
+    }
 
     def drafts() -> List[PedigreeDraft]:
         return [s.draft for s in sides]
@@ -338,11 +374,30 @@ def _editor_dialog(
             title = ui.label(f"Edit the pedigree of family {family_id}").classes(
                 "text-lg font-semibold text-blue-800"
             )
+            if merge is not None:
+
+                def on_target(e: Any) -> None:
+                    state["target"] = (e.value or "").strip()
+                    main.draft.family_id = state["target"]
+                    update_title()
+                    summary.refresh()
+
+                ui.input(
+                    "Merged family ID", value=merge.target, on_change=on_target
+                ).props("dense outlined").classes("w-64").mark("ped-merge-fid")
             writes = ui.label("").classes("text-xs text-gray-500")
             ui.space()
             ui.button(icon="close", on_click=dialog.close).props("flat round dense")
 
         def update_title() -> None:
+            if merge is not None:
+                title.set_text(f"Merge families {', '.join(merge.family_ids)}")
+                writes.set_text(
+                    "Writes "
+                    + ", ".join(f"{c}.pedigree.tsv" for c in merge.cohorts)
+                    + f" and {state['target']}.pedigree.tsv"
+                )
+                return
             fids = [s.family_id for s in sides]
             title.set_text(
                 f"Edit the pedigree of family {fids[0]}"
@@ -434,7 +489,7 @@ def _editor_dialog(
 
         @ui.refreshable
         def companion_picker() -> None:
-            if len(sides) > 1 or not companions:
+            if merge is not None or len(sides) > 1 or not companions:
                 return
             related = [f for f in main.qc.related_families() if f in companions]
             options = {f: f"{f} (related in Sample QC)" for f in related}
@@ -474,6 +529,37 @@ def _editor_dialog(
                 ui.label(
                     "To move a sample to it or swap one with it: both families"
                     " then need ghfc-ngs --clean-stale-families."
+                ).classes("text-xs text-gray-500")
+            if start_merge is None:
+                return
+            with ui.row().classes("w-full items-center gap-2"):
+                ui.label("Merge with:").classes("text-sm text-gray-700")
+                merging = (
+                    ui.select(
+                        options,
+                        value=related[:1],
+                        multiple=True,
+                        with_input=True,
+                    )
+                    .props("dense outlined options-dense use-chips")
+                    .classes("min-w-[14rem]")
+                    .mark("ped-merge-with")
+                )
+
+                async def begin_merge() -> None:
+                    chosen = list(merging.value or [])
+                    if not chosen:
+                        ui.notify("Choose the families to merge with", type="warning")
+                        return
+                    dialog.close()
+                    await start_merge(chosen)
+
+                ui.button("Merge…", icon="merge", on_click=begin_merge).props(
+                    "outline dense"
+                ).mark("ped-merge-start")
+                ui.label(
+                    "One family under a new ID (or one of theirs); their"
+                    " curation follows."
                 ).classes("text-xs text-gray-500")
 
         companion_picker()
@@ -533,13 +619,19 @@ def _editor_dialog(
         @ui.refreshable
         def summary() -> None:
             originals = [s.original for s in sides]
-            changes = {
-                s.family_id: describe_changes(s.original, s.draft) for s in sides
-            }
-            any_change = any(changes.values())
-            found = cross_problems(
-                originals, drafts(), outside_ids([s.source for s in sides])
-            )
+            if merge is not None:
+                target = state["target"]
+                changes = {main.family_id: merge_changes(merge, main.draft, target)}
+                any_change = True
+                found = merge_problems(merge, main.draft, target)
+            else:
+                changes = {
+                    s.family_id: describe_changes(s.original, s.draft) for s in sides
+                }
+                any_change = any(changes.values())
+                found = cross_problems(
+                    originals, drafts(), outside_ids([s.source for s in sides])
+                )
             with ui.row().classes("w-full no-wrap gap-4 items-start"):
                 with ui.column().classes("flex-1 min-w-0 gap-1").mark("ped-changes"):
                     ui.label("Changes").classes("text-sm font-semibold text-gray-700")
@@ -555,10 +647,22 @@ def _editor_dialog(
                             )
                         for clause in clauses:
                             ui.label(clause).classes("text-sm font-mono")
-                        rerun = rerun_needed(side.original, side.draft)
-                        ui.label(RERUN_TEXT[rerun]).classes(
-                            "text-xs text-blue-800"
-                        ).mark(f"ped-rerun-{side.family_id}")
+                        if merge is not None:
+                            text = merge_rerun_text(merge, state["target"])
+                        else:
+                            text = RERUN_TEXT[rerun_needed(side.original, side.draft)]
+                        ui.label(text).classes("text-xs text-blue-800").mark(
+                            f"ped-rerun-{side.family_id}"
+                        )
+                    if merge is not None and curation:
+                        ui.label(
+                            "Curation moved to the merged family: "
+                            + ", ".join(
+                                f"{n} in {p.relative_to(merge.data_dir)}"
+                                for p, n in curation.items()
+                            )
+                            + ". Each file is copied into its history first."
+                        ).classes("text-xs text-gray-700").mark("ped-merge-curation")
                     now, after = fit_of("all")
                     if now is not None:
                         ui.label(fit_text(now, after, any_change)).classes(
@@ -606,7 +710,7 @@ def _editor_dialog(
                 .mark("ped-save")
             )
 
-        if history:
+        if history and merge is None:
             _history(main.source, history, main.flags, lambda text: restore(text))
 
     def update_save() -> None:
@@ -652,6 +756,9 @@ def _editor_dialog(
 
     async def save() -> None:
         save_button.disable()
+        if merge is not None:
+            await save_merged()
+            return
         try:
             if len(sides) == 1:
                 records = [
@@ -693,8 +800,182 @@ def _editor_dialog(
             if asyncio.iscoroutine(result):
                 await result
 
+    async def save_merged() -> None:
+        target = state["target"]
+        try:
+            await save_merge_async(
+                merge,  # type: ignore[arg-type]
+                main.draft,
+                target,
+                user=get_current_user(),
+                comment=comment.value or "",
+                flags=sorted(state["answered"]),
+            )
+        except (PermissionError, PedigreeEditError) as e:
+            ui.notify(str(e), type="negative", multi_line=True)
+            update_save()
+            return
+        except Exception:
+            logger.exception("Failed to merge %s", ", ".join(merge.family_ids))  # type: ignore[union-attr]
+            ui.notify("The families could not be merged", type="negative")
+            update_save()
+            return
+        ui.notify(
+            f"Families merged into {target}. " + merge_rerun_text(merge, target),  # type: ignore[arg-type]
+            type="positive",
+            multi_line=True,
+        )
+        dialog.close()
+        if on_merged is not None:
+            result = on_merged(target)
+            if asyncio.iscoroutine(result):
+                await result
+
     update_save()
     return dialog
+
+
+def merge_rerun_text(merge: MergeSource, target: str) -> str:
+    """What the next ghfc-ngs run does for a merge, worded for the curator."""
+    if merge_rerun(merge, target) == RERUN_CLEAN:
+        return (
+            f"{target} gains members: ghfc-ngs needs --clean-stale-families. The"
+            " other families' directories stay, orphaned (listed on the Workflow"
+            " tab)."
+        )
+    return (
+        f"{target} is a new family for ghfc-ngs: a normal run builds it from the"
+        " members' gVCFs. The old families' directories stay, orphaned (listed on"
+        " the Workflow tab)."
+    )
+
+
+def _load_merge(
+    store: Any, family_ids: List[str]
+) -> Tuple[MergeSource, QcContext, Dict[Path, int], Dict[str, List[FlagRow]]]:
+    """Blocking: the families to merge, their QC as one, the curation to
+    re-key, and the open flags by member (for the trees' outlines)."""
+    files = [family_cohort_files(store, fid) for fid in family_ids]
+    merge = load_merge(store.data_dir, family_ids, files)
+    contexts: Dict[str, QcContext] = {}
+    label = None
+    for fid in family_ids:
+        data = load_family_qc(store.data_dir, fid)
+        if data is None:
+            contexts[fid] = QcContext()
+            continue
+        label = label or data.label
+        contexts[fid] = QcContext(
+            pairs=[p for p in pair_rows(data.pairs) if not p.cross_family],
+            samples=data.sample_rows(),
+            flags=list(data.flags),
+        )
+    cohort_pairs: List[PairRow] = []
+    for cohort in store.cohorts.values():
+        if cohort.pedigree_file in files[0]:
+            qc = load_cohort_qc(cohort, label)
+            if qc is not None:
+                cohort_pairs += pair_rows(qc.pairs)
+    qc = merged_context(contexts, cohort_pairs, merge.target)
+    acks = load_acks(store.data_dir)
+    open_flags = flags_by_sample(f for f in qc.flags if f not in acks)
+    return merge, qc, curation_counts(store.data_dir, family_ids), open_flags
+
+
+async def open_merge_editor(
+    anchor: ui.element,
+    store: Any,
+    family_ids: List[str],
+    *,
+    on_merged: Optional[Callable[[str], Any]] = None,
+) -> None:
+    """Read the families off the loop, then open the editor on them merged.
+
+    The merged family is one draft under the suggested ID (the IDs joined by
+    ``_``, editable), with the families' Sample QC read as one, so its members
+    can be linked before saving. ``on_merged`` gets the merged family's ID.
+    """
+    try:
+        merge, qc, curation, open_flags = await asyncio.to_thread(
+            _load_merge, store, family_ids
+        )
+    except PedigreeEditError as e:
+        ui.notify(str(e), type="negative", multi_line=True)
+        return
+    except Exception:
+        logger.exception("Failed to read the families %s", family_ids)
+        ui.notify("The families could not be read", type="negative")
+        return
+    source = merge.as_source()
+    anchor.clear()
+    with anchor:
+        _editor_dialog(
+            Side(source, source.draft(), qc, open_flags),
+            [],
+            [],
+            lambda fid: None,
+            None,
+            merge=merge,
+            curation=curation,
+            on_merged=on_merged,
+        ).open()
+
+
+def render_merge_candidates(
+    anchor: ui.element,
+    store: Any,
+    cross_pairs: List[PairRow],
+    on_merged: Callable[[str], Any],
+    limit: int = 20,
+) -> None:
+    """Curators, on the cohort's Sample QC tab: groups of families joined by
+    first- or second-degree relatives across them, each with Merge….
+
+    A group whose families are not in the same cohort pedigrees cannot be
+    merged in one edit: its button is disabled, with the reason.
+    """
+    groups = merge_candidates(cross_pairs)
+    if not groups:
+        ui.label(
+            "None: no first- or second-degree relatives across the families shown."
+        ).classes("text-xs text-gray-500")
+        return
+    ui.label(
+        f"{len(groups)} group(s) of families whose members are close relatives:"
+        " one family entered under several IDs, or families that should be one."
+    ).classes("text-xs text-gray-600")
+    with ui.column().classes("w-full gap-1").mark("merge-candidates"):
+        for group in groups[:limit]:
+            fids = list(group.families)
+            files = [family_cohort_files(store, f) for f in fids]
+            together = all(f == files[0] for f in files[1:])
+            with ui.row().classes("w-full items-start no-wrap gap-2 border-b py-1"):
+                with ui.column().classes("flex-1 min-w-0 gap-0"):
+                    ui.label(" + ".join(fids)).classes("text-sm font-semibold")
+                    for line in group.evidence()[:3]:
+                        ui.label(line).classes("text-xs text-gray-600")
+                    if len(group.pairs) > 3:
+                        ui.label(f"and {len(group.pairs) - 3} more pair(s)").classes(
+                            "text-xs text-gray-500"
+                        )
+                button = (
+                    ui.button(
+                        "Merge…",
+                        icon="merge",
+                        on_click=lambda f=fids: open_merge_editor(
+                            anchor, store, f, on_merged=on_merged
+                        ),
+                    )
+                    .props("outline dense size=sm")
+                    .mark(f"merge-candidate-{'+'.join(fids)}")
+                )
+                if not together:
+                    button.disable()
+                    button.tooltip("Not in the same cohort pedigrees: merge by hand")
+        if len(groups) > limit:
+            ui.label(f"… and {len(groups) - limit} more group(s)").classes(
+                "text-xs text-gray-500"
+            )
 
 
 def _member_row(
@@ -1065,19 +1346,21 @@ def _suggestion_row(
         )
 
 
-def _waiting(cohort: Any) -> List[WaitingFamily]:
-    """Blocking: the cohort's families edited since its last run started."""
+def _waiting(cohort: Any) -> Tuple[List[WaitingFamily], List[Orphan]]:
+    """Blocking: the cohort's families edited since its last run started, and
+    the directories of the families merged away from it."""
     state = read_cohort_state(cohort.pedigree_file.parent)
     last = state.last_run if state is not None else None
     members = {
         fid: [s.sample_id for s in family.samples]
         for fid, family in cohort.families.items()
     }
-    return waiting_families(
-        cohort.pedigree_file.parents[2],
-        members,
-        last.started_at if last is not None else None,
+    data_dir = cohort.pedigree_file.parents[2]
+    waiting = waiting_families(
+        data_dir, members, last.started_at if last is not None else None
     )
+    records = [r for r in read_edit_index(data_dir) if cohort.name in r.cohorts]
+    return waiting, orphaned_families(data_dir, records, cohort.families)
 
 
 def _drift_text(w: WaitingFamily) -> str:
@@ -1102,12 +1385,29 @@ def render_waiting_families(cohort: Any) -> None:
 
     async def load() -> None:
         try:
-            waiting = await asyncio.to_thread(_waiting, cohort)
+            waiting, orphans = await asyncio.to_thread(_waiting, cohort)
         except Exception:
             logger.warning(
                 "Failed to list the pedigree edits of %s", cohort.name, exc_info=True
             )
             return
+        if orphans:
+            with (
+                box,
+                ui.column()
+                .classes(
+                    "w-full gap-1 border border-gray-300 rounded-md p-3 bg-gray-50"
+                )
+                .mark("workflow-orphaned-families"),
+            ):
+                ui.label(
+                    f"Directories of merged families ({len(orphans)}): ghfc-ngs"
+                    " leaves them. Remove them once the merged family is built."
+                ).classes("text-sm font-semibold text-gray-800")
+                for o in orphans:
+                    ui.label(
+                        f"{o.family_id} → {o.into} (merged {o.timestamp[:10]}): {o.path}"
+                    ).classes("text-xs text-gray-700 font-mono")
         if not waiting:
             return
         clean = [w.family_id for w in waiting if w.needs_clean]

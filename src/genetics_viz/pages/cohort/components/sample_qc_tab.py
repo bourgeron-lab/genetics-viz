@@ -1090,6 +1090,16 @@ def render_sample_qc_tab(
         await asyncio.to_thread(store.reload)
         ui.navigate.reload()
 
+    async def pedigree_merged(target: str) -> None:
+        # This family is gone: open the merged one, on the reloaded cohorts.
+        await asyncio.to_thread(store.reload)
+        page = (
+            f"/cohort/{cohort_name}/family/{target}"
+            if cohort_name
+            else f"/family/{target}"
+        )
+        ui.navigate.to(f"{page}?tab=qc")
+
     async def edit_pedigree() -> None:
         acks = load_acks(store.data_dir)
         all_flags = (
@@ -1121,6 +1131,7 @@ def render_sample_qc_tab(
                 ],
             ),
             on_saved=pedigree_saved,
+            on_merged=pedigree_merged,
         )
 
     def acks_saved() -> None:

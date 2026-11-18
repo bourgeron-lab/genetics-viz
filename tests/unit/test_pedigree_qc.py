@@ -277,3 +277,49 @@ def test_a_move_places_the_sample_beside_its_relative():
     s = next(s for s in pq.suggest_across(a, b, both) if s.title.endswith("Q1's child"))
     # A then holds P1 and P2 only; C's pairs with Q2 still want a mother.
     assert s.after.contradictions == 0
+
+
+# --- Merging families ---------------------------------------------------------------
+
+
+def test_merge_candidates_join_families_through_close_relatives():
+    pairs = [
+        cross("F1", "A", "F2", "B", "parent-offspring"),
+        cross("F2", "B", "F3", "C", "full-sibs"),
+        cross("F4", "D", "F5", "E", "second-degree"),
+        cross("F6", "G", "F7", "H", "third-degree"),  # not close enough
+        cross("F8", "I", "F9", "J", "duplicate"),  # the same person twice
+    ]
+    groups = pq.merge_candidates(pairs)
+    assert [g.families for g in groups] == [("F1", "F2", "F3"), ("F4", "F5")]
+    assert groups[0].evidence()[0] == (
+        "A (F1) – B (F2): observed parent-offspring (kinship 0.250)"
+    )
+
+
+def test_one_member_per_family_merged_and_linked():
+    """Every member entered under its own family ID, as in one project."""
+    contexts = {
+        "F1": pq.QcContext(samples=[{"sample": "D", "karyotype": "XY"}]),
+        "F2": pq.QcContext(samples=[{"sample": "M", "karyotype": "XX"}]),
+        "F3": pq.QcContext(samples=[{"sample": "K", "karyotype": "XY"}]),
+    }
+    cohort = [
+        cross("F1", "D", "F3", "K", "parent-offspring"),
+        cross("F2", "M", "F3", "K", "parent-offspring"),
+    ]
+    merged = pq.merged_context(contexts, cohort, "TRIO")
+    assert {(p.family_a, p.family_b) for p in merged.pairs} == {("TRIO", "TRIO")}
+    draft = pe.PedigreeDraft(
+        "TRIO",
+        [pe.Member("D", "0", "0", "1", "1"), pe.Member("M", "0", "0", "2", "1"),
+         pe.Member("K", "0", "0", "1", "2")],
+    )  # fmt: skip
+    # As founders the three are related beyond the pedigree.
+    assert merged.fit(draft) == pq.Fit(0, 2)
+    found = titles(merged.suggest(draft))
+    assert "Make D K's father" in found and "Make M K's mother" in found
+    assert "Make K D's father" in found  # the other way round, as possible
+    draft.set_parent("K", "father", "D")
+    draft.set_parent("K", "mother", "M")
+    assert merged.fit(draft) == pq.Fit(0, 0)
