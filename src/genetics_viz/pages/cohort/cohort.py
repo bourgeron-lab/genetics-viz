@@ -12,6 +12,7 @@ from nicegui import app, ui
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tab_groups import GROUPED_TABS_PROPS, tab_group
 from genetics_viz.components.page_link import PageLink
+from genetics_viz.components.pedigree_editor import render_waiting_families
 from genetics_viz.components.tab_badge import TabPills
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.models import is_sequenced_parent
@@ -149,6 +150,9 @@ def _render_workflow_tab(cohort: Any) -> None:
             # The expansion header above already carries the title, the
             # status chip and the step summary.
             render_status_panel(cohort, title=None)
+
+        if can_write():
+            render_waiting_families(cohort)
 
         # flex-wrap so the two panels stack rather than crushing each other on a
         # narrow window; min-w-0 so each can actually shrink to its share.

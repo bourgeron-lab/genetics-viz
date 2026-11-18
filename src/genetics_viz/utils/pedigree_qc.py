@@ -19,7 +19,7 @@ what is offered is what the pipeline would agree with.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .pedigree_edit import (
@@ -30,7 +30,9 @@ from .pedigree_edit import (
     UNKNOWN,
     PedigreeDraft,
     PedigreeEditError,
+    move_member,
     norm_sex,
+    swap_across,
 )
 from .sample_qc import FlagRow, PairRow
 
@@ -657,6 +659,36 @@ class QcContext:
     pairs: List[PairRow] = field(default_factory=list)
     samples: List[Dict[str, object]] = field(default_factory=list)
     flags: List[FlagRow] = field(default_factory=list)
+    #: The cohort's pairs of a member with someone of another family: the
+    #: pipeline writes only those observed related.
+    cross_pairs: List[PairRow] = field(default_factory=list)
+
+    def related_families(self) -> List[str]:
+        """Other families with a member observed related to one of this one's."""
+        out: List[str] = []
+        for p in self.cross_pairs:
+            for fid in (p.family_a, p.family_b):
+                if fid not in out and fid not in {q.family_a for q in self.pairs}:
+                    out.append(fid)
+        return out
+
+    def with_family(self, other: "QcContext", a: str, b: str) -> "QcContext":
+        """Both families' QC as one: their pairs, and the cohort's pairs between
+        them read as within one family, so a draft over both can be checked."""
+        between = [
+            replace(p, family_a=a, family_b=a)
+            for p in self.cross_pairs
+            if {p.family_a, p.family_b} == {a, b}
+        ]
+        return QcContext(
+            pairs=[
+                *self.pairs,
+                *(replace(p, family_a=a, family_b=a) for p in other.pairs),
+                *between,
+            ],
+            samples=[*self.samples, *other.samples],
+            flags=[*self.flags, *other.flags],
+        )
 
     @property
     def upd_pairs(self) -> List[Tuple[str, str]]:
@@ -674,3 +706,153 @@ class QcContext:
 
     def suggest(self, draft: PedigreeDraft) -> List[Suggestion]:
         return suggest(draft, self.pairs, self.samples, self.flags)
+
+
+def combined_draft(drafts: Sequence[PedigreeDraft]) -> PedigreeDraft:
+    """Several families' members as one draft, for a fit over all of them."""
+    return PedigreeDraft(
+        "+".join(d.family_id for d in drafts), [m for d in drafts for m in d.members]
+    )
+
+
+@dataclass
+class CrossSuggestion:
+    """A move or swap between two families, with what it does to their fit."""
+
+    key: str
+    title: str
+    why: List[str]
+    change: Callable[[PedigreeDraft, PedigreeDraft], object]
+    flags: Tuple[str, ...] = ()
+    before: Optional[Fit] = None
+    after: Optional[Fit] = None
+    caution: str = ""
+
+    def apply(self, a: PedigreeDraft, b: PedigreeDraft) -> None:
+        self.change(a, b)
+
+
+def _placements(
+    x: str, sex: str, z: str, relation: str, b: PedigreeDraft
+) -> List[Tuple[str, Callable[[PedigreeDraft], None]]]:
+    """Where ``x`` could sit in family ``b`` beside ``z``, its observed relative."""
+    target = b.get(z)
+    out: List[Tuple[str, Callable[[PedigreeDraft], None]]] = [
+        ("with no parents", lambda d: None)
+    ]
+    if target is None:
+        return out
+    if relation in ("full-sibs", "first-degree"):
+        if target.parent(FATHER) != UNKNOWN or target.parent(MOTHER) != UNKNOWN:
+
+            def sib(d: PedigreeDraft, t=target) -> None:
+                for r in (FATHER, MOTHER):
+                    if t.parent(r) != UNKNOWN:
+                        d.set_parent(x, r, t.parent(r))
+
+            out.append((f"as {z}'s full sib", sib))
+    if relation in ("parent-offspring", "first-degree"):
+        role = FATHER if sex == MALE else MOTHER if sex == FEMALE else None
+        if role is not None and target.parent(role) == UNKNOWN:
+            out.append((f"as {z}'s {role}", lambda d, r=role: d.set_parent(z, r, x)))
+        zrole = (
+            FATHER
+            if norm_sex(target.sex) == MALE
+            else MOTHER
+            if norm_sex(target.sex) == FEMALE
+            else None
+        )
+        if zrole is not None:
+            out.append((f"as {z}'s child", lambda d, r=zrole: d.set_parent(x, r, z)))
+    return out
+
+
+def suggest_across(
+    a: PedigreeDraft, b: PedigreeDraft, qc: "QcContext"
+) -> List[CrossSuggestion]:
+    """Moves and swaps between families ``a`` and ``b`` that improve their fit.
+
+    ``qc`` is :meth:`QcContext.with_family` of the two. Candidates: each
+    member of one observed related to a member of the other moves there (with
+    no parents, as that relative's full sib, parent or child), or swaps with
+    each sequenced member of the other. The best :data:`MAX_SWAPS` are kept.
+    """
+    if not qc.pairs:
+        return []
+    upd = qc.upd_pairs
+    base = fit(combined_draft([a, b]), qc.pairs, upd)
+    if base is None:
+        return []
+    in_a, in_b = set(a.sequenced_ids), set(b.sequenced_ids)
+    links: List[
+        Tuple[str, str, str]
+    ] = []  # (member, its relative in the other family, relation)
+    for p in qc.pairs:
+        if p.observed in (None, "low_confidence", "unrelated"):
+            continue
+        for x, z in ((p.sample_a, p.sample_b), (p.sample_b, p.sample_a)):
+            if (x in in_a and z in in_b) or (x in in_b and z in in_a):
+                links.append((x, z, p.observed or ""))
+    flagged = {
+        s for f in qc.flags if f.code in ("SAMPLE_SWAP_CANDIDATE", "CRYPTIC_RELATED")
+        for s in (f.sample_a, f.sample_b) if s
+    }  # fmt: skip
+    candidates: List[CrossSuggestion] = []
+    seen: Set[str] = set()
+
+    def consider(s: CrossSuggestion) -> None:
+        if s.key in seen:
+            return
+        seen.add(s.key)
+        ta, tb = a.copy(), b.copy()
+        try:
+            s.change(ta, tb)
+        except (PedigreeEditError, ValueError):
+            return
+        after = fit(combined_draft([ta, tb]), qc.pairs, upd)
+        if after is None or not after < base:
+            return
+        s.before, s.after = base, after
+        candidates.append(s)
+
+    for x, z, relation in links:
+        home, away = (a, b) if x in in_a else (b, a)
+        sex = norm_sex(home.get(x).sex)  # type: ignore[union-attr]
+        why = [f"{x} ({home.family_id}) – {z} ({away.family_id}): observed {relation}"]
+        flags = ("SAMPLE_SWAP_CANDIDATE",) if x in flagged else ("CRYPTIC_RELATED",)
+        for label, place in _placements(x, sex, z, relation, away):
+
+            def move(
+                da: PedigreeDraft,
+                db: PedigreeDraft,
+                x=x,
+                place=place,
+                forward=x in in_a,
+            ) -> None:
+                src, dst = (da, db) if forward else (db, da)
+                move_member(src, dst, x)
+                place(dst)
+
+            consider(CrossSuggestion(
+                key=f"move:{x}:{label}",
+                title=f"Move {x} to {away.family_id}, {label}",
+                why=why, change=move, flags=flags,
+            ))  # fmt: skip
+        for y in away.sequenced_ids:
+
+            def swap(
+                da: PedigreeDraft, db: PedigreeDraft, x=x, y=y, forward=x in in_a
+            ) -> None:
+                if forward:
+                    swap_across(da, db, x, y)
+                else:
+                    swap_across(da, db, y, x)
+
+            consider(CrossSuggestion(
+                key=f"swap:{min(x, y)}:{max(x, y)}",
+                title=f"Swap {x} ({home.family_id}) and {y} ({away.family_id})",
+                why=why, change=swap, flags=flags,
+                caution="A sample swap: both families need ghfc-ngs --clean-stale-families.",
+            ))  # fmt: skip
+    candidates.sort(key=lambda s: (s.after.contradictions, s.after.unexplained))  # type: ignore[union-attr]
+    return candidates[:MAX_SWAPS]

@@ -361,11 +361,15 @@ def problems(
     original: PedigreeDraft,
     draft: PedigreeDraft,
     other_ids: Optional[Set[str]] = None,
+    *,
+    membership: bool = True,
 ) -> List[Problem]:
     """What is wrong with ``draft``: errors block the save, warnings do not.
 
     ``other_ids`` are the IDs of the other families of the cohort files: the
     pipeline refuses one ID with two different rows anywhere in the file.
+    ``membership`` refuses a change of sequenced members; an edit across
+    families checks them as a whole instead (:func:`cross_problems`).
     """
     out: List[Problem] = []
 
@@ -426,7 +430,7 @@ def problems(
 
     lost = sorted(set(original.sequenced_ids) - set(draft.sequenced_ids))
     gained = sorted(set(draft.sequenced_ids) - set(original.sequenced_ids))
-    if lost or gained:
+    if membership and (lost or gained):
         what = "; ".join(
             part for part in (
                 f"removed {', '.join(lost)}" if lost else "",
@@ -434,8 +438,8 @@ def problems(
             ) if part
         )  # fmt: skip
         err(
-            f"This changes the family's sequenced members ({what}). That needs "
-            "ghfc-ngs --clean-stale-families and is not supported yet.",
+            f"This changes the family's sequenced members ({what}): move or swap"
+            " a member with another family open alongside.",
             *lost, *gained,
         )  # fmt: skip
 
@@ -505,6 +509,119 @@ def rerun_needed(original: PedigreeDraft, draft: PedigreeDraft) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Across families
+# ---------------------------------------------------------------------------
+
+
+def move_member(source: PedigreeDraft, target: PedigreeDraft, iid: str) -> None:
+    """Move a sequenced member from ``source`` to ``target``, as a founder there.
+
+    Its children in ``source`` keep their sibship: the parent it was becomes
+    one shared dummy. Dummy parents of its that nobody else names are removed.
+    In ``target`` it keeps its sex and phenotype; its parents there are for the
+    curator to set.
+    """
+    member = source.get(iid)
+    if member is None or member.is_dummy:
+        raise PedigreeEditError(
+            f"{iid} is not a sequenced member of {source.family_id}"
+        )
+    if iid in target:
+        raise PedigreeEditError(f"{iid} is already in family {target.family_id}")
+    for role in (FATHER, MOTHER):
+        kids = [m.iid for m in source.members if m.parent(role) == iid]
+        for kid in kids:
+            source.set_parent(kid, role, None)
+        if kids:
+            source.add_dummy_parents(kids, roles=[role])
+    old_parents = [member.parent(r) for r in (FATHER, MOTHER)]
+    source.members = [m for m in source.members if m.iid != iid]
+    for pid in old_parents:
+        parent = source.get(pid)
+        if parent is not None and parent.is_dummy and not source.children(pid):
+            source.remove_dummy(pid)
+    target.members.append(
+        Member(iid, UNKNOWN, UNKNOWN, member.sex, member.phenotype or UNKNOWN)
+    )
+
+
+def swap_across(a: PedigreeDraft, b: PedigreeDraft, x: str, y: str) -> None:
+    """Exchange ``x`` of family ``a`` and ``y`` of family ``b``: each takes the
+    other's row and every reference to it, as :meth:`PedigreeDraft.swap` does
+    within one family."""
+    for draft, iid in ((a, x), (b, y)):
+        member = draft.get(iid)
+        if member is None or member.is_dummy:
+            raise PedigreeEditError(
+                f"{iid} is not a sequenced member of {draft.family_id}"
+            )
+    for draft, old, new in ((a, x, y), (b, y, x)):
+
+        def renamed(code: str, old: str = old, new: str = new) -> str:
+            return new if code.strip() == old else code
+
+        draft.members = [
+            replace(
+                m,
+                iid=new if m.iid == old else m.iid,
+                father=renamed(m.father),
+                mother=renamed(m.mother),
+            )
+            for m in draft.members
+        ]
+
+
+def cross_problems(
+    originals: Sequence[PedigreeDraft],
+    drafts: Sequence[PedigreeDraft],
+    other_ids: Optional[Set[str]] = None,
+) -> List[Problem]:
+    """:func:`problems` of an edit over several families, checked together.
+
+    Each family is checked alone, but for its sequenced members; together, no
+    sequenced member may be lost or gained, none may sit in two families, and
+    every family keeps one. ``other_ids`` are the IDs of the families not in
+    the edit.
+    """
+    if len(drafts) == 1:
+        return problems(originals[0], drafts[0], other_ids)
+    out: List[Problem] = []
+    for original, draft in zip(originals, drafts):
+        found = problems(original, draft, other_ids, membership=False)
+        out.extend(replace(p, message=f"{draft.family_id}: {p.message}") for p in found)
+    before = [i for d in originals for i in d.sequenced_ids]
+    after = [i for d in drafts for i in d.sequenced_ids]
+    lost = sorted(set(before) - set(after))
+    gained = sorted(set(after) - set(before))
+    if lost or gained:
+        out.append(
+            Problem(
+                ERROR,
+                "Sequenced members cannot be removed or added here: "
+                + ", ".join(lost + gained),
+                tuple(lost + gained),
+            )
+        )
+    seen: Dict[str, str] = {}
+    for draft in drafts:
+        for m in draft.members:
+            if m.iid in seen and seen[m.iid] != draft.family_id:
+                out.append(
+                    Problem(
+                        ERROR,
+                        f"{m.iid} is in {seen[m.iid]} and {draft.family_id}",
+                        (m.iid,),
+                    )
+                )
+            seen[m.iid] = draft.family_id
+        if not draft.sequenced_ids:
+            out.append(
+                Problem(ERROR, f"{draft.family_id} would have no sequenced member")
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # The files
 # ---------------------------------------------------------------------------
 
@@ -539,7 +656,10 @@ class PedigreeText:
 
     @classmethod
     def read(cls, path: Path, family_id: str) -> "PedigreeText":
-        text = path.read_text(encoding="utf-8")
+        return cls.from_text(path, path.read_text(encoding="utf-8"), family_id)
+
+    @classmethod
+    def from_text(cls, path: Path, text: str, family_id: str) -> "PedigreeText":
         lines = text.splitlines(keepends=True)
         header = None
         family_lines: List[int] = []
@@ -824,57 +944,131 @@ def _write_edit(
     flags: Sequence[str] = (),
     now: Optional[datetime] = None,
 ) -> EditRecord:
+    return _write_edits(
+        [(source, draft)], user=user, comment=comment, flags=flags, now=now
+    )[0]
+
+
+def save_cross_family_edit(
+    parts: Sequence[Tuple[FamilySource, PedigreeDraft]],
+    *,
+    user: str,
+    comment: str,
+    flags: Sequence[str] = (),
+    now: Optional[datetime] = None,
+) -> List[EditRecord]:
+    """Save an edit over several families at once (a move or a swap between them).
+
+    As :func:`save_pedigree_edit`, for every family together: one lock, one
+    check, one set of renames, and one record per family under one edit ID.
+    A family whose sequenced members change needs ``--clean-stale-families``.
+    """
+    _check_role()
+    return _write_edits(parts, user=user, comment=comment, flags=flags, now=now)
+
+
+async def save_cross_family_edit_async(
+    parts: Sequence[Tuple[FamilySource, PedigreeDraft]],
+    *,
+    user: str,
+    comment: str,
+    flags: Sequence[str] = (),
+) -> List[EditRecord]:
+    """:func:`save_cross_family_edit` for a page (role on the loop, files in a thread)."""
+    _check_role()
+    return await asyncio.to_thread(
+        _write_edits, parts, user=user, comment=comment, flags=flags
+    )
+
+
+def outside_ids(sources: Sequence[FamilySource]) -> Set[str]:
+    """The IDs of the families not in an edit, in its cohort files."""
+    inside = {m.iid for s in sources for m in s.original.members}
+    return set().union(*(s.other_ids for s in sources)) - inside
+
+
+def _write_edits(
+    parts: Sequence[Tuple[FamilySource, PedigreeDraft]],
+    *,
+    user: str,
+    comment: str,
+    flags: Sequence[str] = (),
+    now: Optional[datetime] = None,
+) -> List[EditRecord]:
+    if not parts:
+        raise ValueError("No family to edit")
     if not user:
         raise ValueError("No user to record the edit under")
     comment = comment.strip()
     if not comment:
         raise PedigreeEditError("Say why the pedigree is edited: a comment is required")
-    original = source.original
-    changes = describe_changes(original, draft)
-    if not changes:
+    sources = [s for s, _ in parts]
+    paths = [f.path for f in sources[0].files]
+    for s in sources[1:]:
+        if [f.path for f in s.files] != paths:
+            raise PedigreeEditError(
+                f"{sources[0].family_id} and {s.family_id} are not in the same"
+                " cohort pedigrees: edit them one at a time"
+            )
+    changes = {s.family_id: describe_changes(s.original, d) for s, d in parts}
+    if not any(changes.values()):
         raise PedigreeEditError("Nothing changed")
-    found = problems(original, draft, source.other_ids)
+    found = cross_problems(
+        [s.original for s in sources], [d for _, d in parts], outside_ids(sources)
+    )
     if has_errors(found):
         raise PedigreeEditError("; ".join(p.message for p in found if p.level == ERROR))
-    rerun = rerun_needed(original, draft)
+    reruns = {s.family_id: rerun_needed(s.original, d) for s, d in parts}
     now = now or datetime.now()
-    family_id = source.family_id
-    data_dir = source.data_dir
+    data_dir = sources[0].data_dir
 
     lock_path = index_file(data_dir).parent / LOCK_FILENAME
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "a") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            for f in source.files:
-                if (f.path.parent / PROGRESS_FILENAME).exists():
-                    raise PedigreeEditError(
-                        f"A ghfc-ngs run of {_cohort_name(f.path)} is in progress: "
-                        "save once it has finished"
+            for s in sources:
+                for f in s.files:
+                    if (f.path.parent / PROGRESS_FILENAME).exists():
+                        raise PedigreeEditError(
+                            f"A ghfc-ngs run of {_cohort_name(f.path)} is in"
+                            " progress: save once it has finished"
+                        )
+                    current = f.path.read_text(encoding="utf-8")
+                    if hashlib.sha256(current.encode("utf-8")).hexdigest() != f.sha256:
+                        raise PedigreeEditError(
+                            f"{f.path.name} changed since the editor was opened: "
+                            "reopen it and make the edit again"
+                        )
+            # Each cohort file: every family's rows edited in turn, re-read
+            # between them (a moved member's line leaves one, joins the other).
+            new_texts: List[str] = []
+            for index, path in enumerate(paths):
+                text = sources[0].files[index].text
+                for s, d in parts:
+                    text = render_cohort_text(
+                        PedigreeText.from_text(path, text, s.family_id), s.original, d
                     )
-                current = f.path.read_text(encoding="utf-8")
-                if hashlib.sha256(current.encode("utf-8")).hexdigest() != f.sha256:
-                    raise PedigreeEditError(
-                        f"{f.path.name} changed since the editor was opened: "
-                        "reopen it and make the edit again"
-                    )
-            new_texts = [render_cohort_text(f, original, draft) for f in source.files]
-            family_path = (
-                get_family_path(data_dir, family_id) / f"{family_id}.pedigree.tsv"
+                new_texts.append(text)
+            edit_id = max(
+                _edit_id(edits_dir(data_dir, s.family_id), s.family_id, now)
+                for s in sources
             )
-            history = edits_dir(data_dir, family_id)
-            edit_id = _edit_id(history, family_id, now)
-            before = family_file_text(source.files[0].text, family_id)
-            after = family_file_text(new_texts[0], family_id)
-            targets = [
-                *(f.path for f in source.files),
-                family_path,
-                history / f"{family_id}.{edit_id}.before.tsv",
-                history / f"{family_id}.{edit_id}.after.tsv",
-            ]
+            targets: List[Path] = list(paths)
+            texts: List[str] = list(new_texts)
+            for s in sources:
+                fid = s.family_id
+                history = edits_dir(data_dir, fid)
+                after = family_file_text(new_texts[0], fid)
+                targets += [
+                    get_family_path(data_dir, fid) / f"{fid}.pedigree.tsv",
+                    history / f"{fid}.{edit_id}.before.tsv",
+                    history / f"{fid}.{edit_id}.after.tsv",
+                ]
+                texts += [after, family_file_text(s.files[0].text, fid), after]
             temps: List[Path] = []
             try:
-                for target, text in zip(targets, [*new_texts, after, before, after]):
+                for target, text in zip(targets, texts):
                     temps.append(_write_temp(target, text))
             except OSError as e:
                 for t in temps:
@@ -885,30 +1079,40 @@ def _write_edit(
             for temp, target in zip(temps, targets):
                 os.replace(temp, target)
 
-            record = EditRecord(
-                family_id=family_id,
-                edit_id=edit_id,
-                timestamp=now.isoformat(timespec="seconds"),
-                user=user,
-                comment=comment,
-                changes=tuple(changes),
-                cohorts=tuple(source.cohorts),
-                rerun=rerun,
-                flags=tuple(flags),
-            )
-            shared = [record.timestamp, user, comment, "; ".join(changes),
-                      ",".join(record.cohorts), rerun]  # fmt: skip
-            append_tsv_row(
-                history / f"{family_id}.pedigree_edits.tsv",
-                LOG_HEADER,
-                [edit_id, *shared, ",".join(flags)],
-            )
-            append_tsv_row(
-                index_file(data_dir), INDEX_HEADER, [family_id, edit_id, *shared]
-            )
+            records: List[EditRecord] = []
+            timestamp = now.isoformat(timespec="seconds")
+            for s in sources:
+                fid = s.family_id
+                # A family's record names the others it was edited with.
+                together = [o.family_id for o in sources if o.family_id != fid]
+                note = (
+                    f"{comment} (with {', '.join(together)})" if together else comment
+                )
+                record = EditRecord(
+                    family_id=fid,
+                    edit_id=edit_id,
+                    timestamp=timestamp,
+                    user=user,
+                    comment=note,
+                    changes=tuple(changes[fid]),
+                    cohorts=tuple(s.cohorts),
+                    rerun=reruns[fid],
+                    flags=tuple(flags),
+                )
+                shared = [timestamp, user, note, "; ".join(record.changes),
+                          ",".join(record.cohorts), record.rerun]  # fmt: skip
+                append_tsv_row(
+                    edits_dir(data_dir, fid) / f"{fid}.pedigree_edits.tsv",
+                    LOG_HEADER,
+                    [edit_id, *shared, ",".join(flags)],
+                )
+                append_tsv_row(
+                    index_file(data_dir), INDEX_HEADER, [fid, edit_id, *shared]
+                )
+                records.append(record)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-    return record
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -1109,4 +1313,83 @@ def pending_steps(
             expected = {k: v for k, v in current.items() if not is_dummy_id(k)}
         if rows != expected:
             out.append(PendingStep(step, header.get("label", ""), path))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Families waiting for a run (the cohort's Workflow tab)
+# ---------------------------------------------------------------------------
+
+
+def bcf_samples(data_dir: Path, family_id: str) -> Optional[List[str]]:
+    """The samples of the family's joint call (``vcfs/<FID>.norm.bcf``), from its
+    header; ``None`` without one. ghfc-ngs compares them with the pedigree's
+    members to find a stale family (``StaleFamily.drift``)."""
+    path = get_family_path(data_dir, family_id) / "vcfs" / f"{family_id}.norm.bcf"
+    if not path.exists():
+        return None
+    import pysam
+
+    with pysam.VariantFile(str(path)) as f:
+        return list(f.header.samples)
+
+
+@dataclass(frozen=True)
+class WaitingFamily:
+    """A family edited since the cohort's last run started."""
+
+    family_id: str
+    last: EditRecord
+    #: The strongest rerun its edits since then need.
+    rerun: str
+    #: The joint call's samples against the pedigree's: ``None`` without a
+    #: joint call, else the members it lacks and those it has in excess.
+    missing: Optional[Tuple[str, ...]] = None
+    extra: Optional[Tuple[str, ...]] = None
+
+    @property
+    def needs_clean(self) -> bool:
+        """``--clean-stale-families``: the pedigree's members no longer match the call."""
+        if self.missing is None:
+            return self.rerun == RERUN_CLEAN
+        return bool(self.missing or self.extra)
+
+
+def waiting_families(
+    data_dir: Path,
+    members: Dict[str, Sequence[str]],
+    last_run_started: Optional[datetime],
+) -> List[WaitingFamily]:
+    """Blocking: the families of ``members`` (FID -> sequenced members) edited
+    after the last run started, each with what its next run needs.
+
+    Every edit counts but a phenotype-only one. The joint call's header is read
+    for each, so a member moved in or out shows as the drift ghfc-ngs sees.
+    """
+    out: List[WaitingFamily] = []
+    by_family: Dict[str, List[EditRecord]] = {}
+    for record in read_edit_index(data_dir):
+        if record.family_id not in members or record.rerun == RERUN_NONE:
+            continue
+        moment = _as_aware(record.timestamp)
+        if (
+            last_run_started is not None
+            and moment is not None
+            and moment <= last_run_started
+        ):
+            continue
+        by_family.setdefault(record.family_id, []).append(record)
+    for fid, records in sorted(by_family.items()):
+        rerun = (
+            RERUN_CLEAN
+            if any(r.rerun == RERUN_CLEAN for r in records)
+            else RERUN_NORMAL
+        )
+        called = bcf_samples(data_dir, fid)
+        missing = extra = None
+        if called is not None:
+            wanted = set(members[fid])
+            missing = tuple(sorted(wanted - set(called)))
+            extra = tuple(sorted(set(called) - wanted))
+        out.append(WaitingFamily(fid, records[-1], rerun, missing, extra))
     return out

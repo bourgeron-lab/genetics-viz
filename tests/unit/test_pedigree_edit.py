@@ -171,7 +171,7 @@ def test_sequenced_members_cannot_change_yet():
     original = draft_of(("A", "0", "0", "1", "1"), ("B", "0", "0", "2", "1"))
     draft = pe.PedigreeDraft("F", [original.members[0]])
     (error,) = messages(pe.problems(original, draft), pe.ERROR)
-    assert "removed B" in error and "--clean-stale-families" in error
+    assert "removed B" in error and "another family open alongside" in error
     assert pe.rerun_needed(original, draft) == pe.RERUN_CLEAN
 
 
@@ -490,3 +490,140 @@ def test_datagen_snapshots_match_the_pedigree(data_dir):
     text = cohort_file(data_dir).read_text()
     for fid in ("1001", "1002", "AU-X-1"):
         assert pe.pending_steps(data_dir, fid, text) == [], fid
+
+
+# --- Across families ---------------------------------------------------------------
+
+
+def test_a_moved_parent_leaves_a_shared_dummy_behind():
+    a = pe.PedigreeDraft(
+        "A",
+        [
+            pe.Member("D", "DUMMY_D_F", "0", "1", "1"),
+            pe.Member("DUMMY_D_F", "0", "0", "1", "0"),
+            pe.Member("M", "0", "0", "2", "1"),
+            pe.Member("K1", "D", "M", "1", "2"),
+            pe.Member("K2", "D", "M", "2", "1"),
+        ],
+    )
+    b = pe.PedigreeDraft("B", [pe.Member("Y", "0", "0", "2", "1")])
+    pe.move_member(a, b, "D")
+    assert a.ids == ["M", "K1", "K2", "DUMMY_K1_F"]  # D's own dummy father gone
+    assert {a.get(k).father for k in ("K1", "K2")} == {"DUMMY_K1_F"}
+    assert b.get("D") == pe.Member("D", "0", "0", "1", "1")
+    with pytest.raises(pe.PedigreeEditError):
+        pe.move_member(a, b, "DUMMY_K1_F")
+
+
+def test_a_swap_across_families_exchanges_places():
+    a = pe.PedigreeDraft(
+        "A", [pe.Member("X", "0", "0", "1", "1"), pe.Member("K", "X", "0", "1", "2")]
+    )
+    b = pe.PedigreeDraft(
+        "B", [pe.Member("P", "0", "0", "1", "1"), pe.Member("Y", "P", "0", "1", "2")]
+    )
+    pe.swap_across(a, b, "X", "Y")
+    assert [(m.iid, m.father) for m in a.members] == [("Y", "0"), ("K", "Y")]
+    assert [(m.iid, m.father) for m in b.members] == [("P", "0"), ("X", "P")]
+
+
+def test_cross_problems_check_the_members_as_a_whole():
+    a = pe.PedigreeDraft("A", [pe.Member("X", "0", "0", "1", "1")])
+    b = pe.PedigreeDraft("B", [pe.Member("Y", "0", "0", "2", "1")])
+    moved_a, moved_b = a.copy(), b.copy()
+    pe.move_member(moved_a, moved_b, "X")
+    errors = [p.message for p in pe.cross_problems([a, b], [moved_a, moved_b])]
+    assert errors == ["A would have no sequenced member"]
+    lost = b.copy()
+    lost.members = []
+    errors = [p.message for p in pe.cross_problems([a, b], [a.copy(), lost])]
+    assert "Sequenced members cannot be removed or added here: Y" in errors
+
+
+def test_a_move_between_families_is_saved_once_for_both(data_dir, curator):
+    demo = [cohort_file(data_dir)]
+    a = pe.load_family(data_dir, "1001", demo)
+    b = pe.load_family(data_dir, "AU-X-1", demo)
+    da, db = a.draft(), b.draft()
+    pe.move_member(da, db, "S3")
+    records = pe.save_cross_family_edit(
+        [(a, da), (b, db)], user="alice", comment="S3 belongs to AU-X-1", now=NOW
+    )
+    assert [(r.family_id, r.rerun) for r in records] == [
+        ("1001", pe.RERUN_CLEAN),
+        ("AU-X-1", pe.RERUN_CLEAN),
+    ]
+    assert records[0].changes == ("S3: removed",)
+    assert records[1].changes == ("S3: added",)
+    assert records[0].comment == "S3 belongs to AU-X-1 (with AU-X-1)"
+    assert records[0].edit_id == records[1].edit_id
+    text = cohort_file(data_dir).read_text()
+    assert "1001\tS3" not in text and "AU-X-1\tS3\t0\t0\t1\t2\n" in text
+    store = DataStore(data_dir)
+    store.load()
+    families = store.cohorts["DEMO"].families
+    assert "S3" not in [s.sample_id for s in families["1001"].samples]
+    assert "S3" in [s.sample_id for s in families["AU-X-1"].samples]
+    family = get_family_path(data_dir, "AU-X-1") / "AU-X-1.pedigree.tsv"
+    assert "S3" in family.read_text()
+    assert [r.family_id for r in pe.read_edit_index(data_dir)] == ["1001", "AU-X-1"]
+
+
+def test_families_in_different_cohorts_are_edited_apart(data_dir, curator):
+    a = pe.load_family(
+        data_dir, "1001", [cohort_file(data_dir), cohort_file(data_dir, "NOHEAD")]
+    )
+    b = pe.load_family(data_dir, "AU-X-1", [cohort_file(data_dir)])
+    da, db = a.draft(), b.draft()
+    pe.move_member(da, db, "S3")
+    with pytest.raises(pe.PedigreeEditError, match="not in the same cohort pedigrees"):
+        pe.save_cross_family_edit(
+            [(a, da), (b, db)], user="alice", comment="x", now=NOW
+        )
+
+
+def write_bcf(data_dir: Path, fid: str, samples) -> None:
+    """A joint call with only a header: the samples ghfc-ngs called together."""
+    import pysam
+
+    header = pysam.VariantHeader()
+    header.contigs.add("chr1", length=1000)
+    for s in samples:
+        header.add_sample(s)
+    path = get_family_path(data_dir, fid) / "vcfs" / f"{fid}.norm.bcf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pysam.VariantFile(str(path), "wb", header=header):
+        pass
+
+
+def test_waiting_families_and_the_clean_they_need(data_dir, curator):
+    write_bcf(data_dir, "1001", ["S1", "S2", "S3"])
+    demo = [cohort_file(data_dir)]
+    a = pe.load_family(data_dir, "1001", demo)
+    b = pe.load_family(data_dir, "AU-X-1", demo)
+    da, db = a.draft(), b.draft()
+    pe.move_member(da, db, "S3")
+    pe.save_cross_family_edit([(a, da), (b, db)], user="alice", comment="move", now=NOW)
+    c = pe.load_family(data_dir, "1002", demo)
+    dc = c.draft()
+    dc.set_sex("S4", "1")
+    pe.save_pedigree_edit(c, dc, user="bob", comment="sex", now=NOW)
+
+    store = DataStore(data_dir)
+    store.load()
+    members = {
+        fid: [s.sample_id for s in f.samples]
+        for fid, f in store.cohorts["DEMO"].families.items()
+    }
+    run = datetime(2026, 10, 1, 10, 0).astimezone()
+    waiting = {w.family_id: w for w in pe.waiting_families(data_dir, members, run)}
+    assert set(waiting) == {"1001", "1002", "AU-X-1"}
+    # 1001's joint call still has S3: the drift ghfc-ngs will see.
+    assert (waiting["1001"].extra, waiting["1001"].needs_clean) == (("S3",), True)
+    # AU-X-1 has no joint call here: the edit's own record says so.
+    assert waiting["AU-X-1"].missing is None and waiting["AU-X-1"].needs_clean
+    assert waiting["1002"].rerun == pe.RERUN_NORMAL and not waiting["1002"].needs_clean
+    # A run started after the edits: nothing waits.
+    assert (
+        pe.waiting_families(data_dir, members, datetime(2027, 1, 1).astimezone()) == []
+    )

@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a swap of two members, when it explains the pairs.
 
   Only changes that improve the agreement are offered (sibship ones when they do not worsen it). The flags a suggestion answers are recorded with the edit.
+- **Edits across two families.** In the pedigree editor, "Another family" opens a second family alongside: those related to this one in the cohort's Sample QC come first, and only families in the same cohort pedigrees are offered. A member can then be **swapped** with a member of the other family, each barcode taking the other's place, or **moved** there. Moving a member keeps its children's sibship with a shared dummy. Both families are checked together and saved as one edit, each with its own record. Since their sequenced members change, both are marked for ghfc-ngs `--clean-stale-families`. Sample QC suggests the moves and swaps that its pairs across the two families support.
+- **The Workflow tab lists the families waiting for a run** (curators). It shows the pedigree edits since the last ghfc-ngs run started and the rerun each needs. It compares each family's joint call with its pedigree, as ghfc-ngs does, and names the families that need `--clean-stale-families` (try `--dry-run` first).
 - **The Sample QC tab says which results still read an older pedigree** (curators): the steps whose inputs differ from the current pedigree, and the last edit.
 - **A Pedigree column in the cohort's Families tab** (curators): the date of the family's last edit, amber while no ghfc-ngs run has started since. Its "To rerun" filter keeps those families. With it, a curator's Families table scrolls a little in a 1,280 px window.
 
