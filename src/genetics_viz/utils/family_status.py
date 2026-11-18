@@ -371,6 +371,7 @@ def family_state(
     qc_high_written: Any = None,
     results: Sequence[Tuple[str, Any]] = (),
     affected: bool = True,
+    disagreements: Sequence[str] = (),
 ) -> FamilyState:
     """Work out the reasons to look at a family again.
 
@@ -378,8 +379,10 @@ def family_state(
     when the family has an open high-severity QC flag, the newest write
     (ISO timestamp or ``st_mtime``) of the tables holding the flags;
     ``results`` the ``(step, written)`` of each step output kept for the
-    family. Reasons about dates need a status; the diagnostic consistency
-    holds whatever the dates.
+    family. ``disagreements`` word the open high-severity pedigree findings
+    between cohorts (``pedigree_consistency``). Reasons about dates need a
+    status; the diagnostic consistency and the disagreements hold whatever
+    the dates.
     """
     reasons: List[Reason] = []
     status = record.status if record else NOT_REVIEWED
@@ -412,6 +415,8 @@ def family_state(
         )
         if steps:
             reasons.append(_reason("results_after", steps=", ".join(steps)))
+    if disagreements:
+        reasons.append(_reason("pedigree_differs", what="; ".join(disagreements)))
     return FamilyState(family_id, record, tuple(reasons), affected)
 
 
@@ -586,6 +591,7 @@ def state_map(
     *,
     affected: Mapping[str, bool],
     qc_high_written: Mapping[str, Any] = {},
+    disagreements: Mapping[str, Sequence[str]] = {},
 ) -> Dict[str, FamilyState]:
     """Every family's state, from data read once for all of them."""
     return {
@@ -596,6 +602,7 @@ def state_map(
             diagnostics=diagnostics.get(fid),
             qc_high_written=qc_high_written.get(fid),
             affected=affected.get(fid, True),
+            disagreements=disagreements.get(fid, ()),
         )
         for fid in family_ids
     }
@@ -671,6 +678,7 @@ def load_family_state(
     family: Any,
     cohorts: Sequence[Any] = (),
     results: Optional[Sequence[Tuple[str, Any]]] = None,
+    store: Any = None,
 ) -> FamilyState:
     """Blocking: one family's state, with every reason (the family pages).
 
@@ -722,10 +730,17 @@ def load_family_state(
         qc_high_written=qc_written,
         results=results,
         affected=has_affected(family) if family is not None else True,
+        disagreements=(
+            disagreements_by_family(store).get(family_id, ())
+            if store is not None
+            else ()
+        ),
     )
 
 
-def cohort_status_counts(cohort: Any, data_dir: Path) -> StatusCounts:
+def cohort_status_counts(
+    cohort: Any, data_dir: Path, store: Any = None
+) -> StatusCounts:
     """Blocking: the cohort's families by status (the home card).
 
     Every reason but the step outputs, which would walk every family
@@ -738,5 +753,33 @@ def cohort_status_counts(cohort: Any, data_dir: Path) -> StatusCounts:
         diagnostics_by_family(data_dir),
         affected={fid: has_affected(f) for fid, f in cohort.families.items()},
         qc_high_written=cohort_qc_high_written(cohort, data_dir),
+        disagreements=disagreements_by_family(store) if store is not None else {},
     )
     return count_statuses(states.values())
+
+
+def disagreements_by_family(store: Any) -> Dict[str, List[str]]:
+    """``FID -> open high-severity pedigree findings``, worded. Never raises.
+
+    Aliases (medium) are left out: a family known under another ID is no
+    reason to review it again.
+    """
+    from . import pedigree_consistency as pc
+
+    try:
+        findings = pc.open_findings(
+            pc.scan(store).findings, pc.load_acks(store.data_dir)
+        )
+    except Exception:
+        logger.warning("Failed to compare the cohort pedigrees", exc_info=True)
+        return {}
+    out: Dict[str, List[str]] = {}
+    for f in findings:
+        if f.severity != "high":
+            continue
+        for fid in f.family_ids:
+            others = ", ".join(
+                f"{c}" if g == fid else f"{g} ({c})" for c, g in f.others(fid)
+            )
+            out.setdefault(fid, []).append(f"{f.info.get('label', f.code)}: {others}")
+    return out

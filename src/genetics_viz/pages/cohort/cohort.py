@@ -67,6 +67,7 @@ from genetics_viz.utils.cohort_state import read_cohort_state
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.components.family_status import render_family_status_summary
+from genetics_viz.components.pedigree_consistency import render_cohort_findings
 from genetics_viz.utils import family_status as fs
 from genetics_viz.utils.family_rows import (
     DIAG_ORDER,
@@ -156,6 +157,7 @@ def _render_workflow_tab(cohort: Any) -> None:
             render_status_panel(cohort, title=None)
 
         if can_write():
+            render_cohort_findings(get_data_store(), cohort.name)
             render_waiting_families(cohort)
 
         # flex-wrap so the two panels stack rather than crushing each other on a
@@ -820,6 +822,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     diagnostics=diagnostics_of(fid),
                     curator=show_review,
                     show_relationship=show_review,
+                    cohort_name=cohort_name,
                 )
                 for fid in sorted(cohort.families)
             ]
@@ -1199,7 +1202,7 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                 """The Families table's ancestry, FROH and de novo columns."""
                 try:
                     family_data["facts"] = await asyncio.to_thread(
-                        load_family_facts, cohort, store.data_dir, show_review
+                        load_family_facts, cohort, store.data_dir, show_review, store
                     )
                 except Exception:
                     logger.warning("Failed to read the family facts", exc_info=True)

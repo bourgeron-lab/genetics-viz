@@ -16,6 +16,7 @@ from nicegui import ui
 
 from genetics_viz.utils import family_status as fs
 from genetics_viz.utils.auth import can_write, get_current_user
+from genetics_viz.utils.data import get_data_store
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,10 @@ class FamilyStatusChip:
         self.cohorts = list(cohorts)
         self.on_saved = on_saved
         self.curator = can_write()
+        try:
+            self.store = get_data_store()
+        except Exception:
+            self.store = None
         #: The family's step outputs, walked once per page.
         self._results: Optional[List[Any]] = None
         self.state = fs.FamilyState(
@@ -96,6 +101,7 @@ class FamilyStatusChip:
                 self.family,
                 self.cohorts,
                 self._results,
+                self.store,
             )
         except Exception:
             logger.warning("Failed to read %s's status", self.family_id, exc_info=True)

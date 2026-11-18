@@ -21,7 +21,7 @@ Deliberate exceptions to "ECharts for plots": the cohort PGS violins in `cohort_
 ## Tests and CI
 
 - `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
-- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle, the gene index manifests, the Vedette table cache, the UPD tables cache, the cohort SV calls cache and the family statuses cache. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle, the gene index manifests, the Vedette table cache, the UPD tables cache, the cohort SV calls cache, the family statuses cache and the pedigree consistency cache. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
 - An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
 - **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
   - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
@@ -72,9 +72,10 @@ src/genetics_viz/
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
     upd_dialog.py                 # UPD review: evidence, chromosome view, validation, diagnostic (UPD, ROH, Sample QC tabs)
     pedigree_tree.py              # Member card's Tree view: pypedigree drawing, selection faded, QC outline, Enlarge
-    pedigree_editor.py            # Pedigree editor dialog (Sample QC tab, curators): trees now/after, rows, changes, history; status note
+    pedigree_editor.py            # Pedigree editor dialog (Sample QC tab, curators): trees now/after, rows, changes, history; status note; cohort chooser when cohorts differ
     family_report_dialog.py       # Family report: "See report"/"PDF" buttons, dialog, conclusion, print
     family_status.py              # Family status chip + curator dialog (family pages), status bar and yield
+    pedigree_consistency.py       # Pedigrees across cohorts: family banner, cohort/data-directory lists, explain dialog
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
     genetrek.yaml                 # GeneTrek refresh period, tier colours, default profile
@@ -88,6 +89,7 @@ src/genetics_viz/
     str.yaml                      # STR class/status colours, support codes, REViewer filename
     report.yaml                   # Family report: wording, PGS traits, aneuploidy cut-off, methods
     family_status.yaml            # Family statuses (order, colours, yield role), solving verdicts, reasons
+    pedigree_consistency.yaml     # Cross-cohort pedigree findings: severity, label, short badge, text
     clinvar_colors.yaml           # ClinVar significance term -> color
     cnv.yaml                      # CN mask/display, single-vs-split read view, read-evidence caps/colours
     vedette.yaml                  # Vedette: impact levels, inheritance codes, colours, presets
@@ -99,6 +101,7 @@ src/genetics_viz/
     view_presets.yaml             # Column visibility presets
   pages/
     login.py                      # Login page (no auth required)
+    cohort/pedigree_consistency.py # /pedigree-consistency: the data directory's cross-cohort findings (curators)
     profile.py                    # User profile (role, password, gene badge tiers)
     search.py                     # Cohort-wide variant search: route and search steps
     search_form.py                # Search page form: source cards, Individuals panel (SearchForm)
@@ -186,6 +189,7 @@ src/genetics_viz/
     pedigree_merge.py             # Merging families under a new or existing FID; curation re-keyed; orphaned directories
     report_summaries.py           # reports/family_summaries.tsv: curator conclusions (role-guarded)
     family_status.py              # reports/family_status.tsv (role-guarded), reasons to look again, yield
+    pedigree_consistency.py       # Cohort pedigrees compared (same FID, aliases by barcode), acks (role-guarded)
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
     cnv_plots.py                  # ECharts builder for the copy-number panel
@@ -457,6 +461,21 @@ Where each family stands in its review (vault note: Roadmap, "Structured family 
 - **Where**: the family pages' chip (`family-status`, `family-status-reason`; dialog `family-status-dialog`, `-select`, `-comment`, `-save`, `-history`), drawn from the status file at once, its reasons read off-thread after (`FamilyStatusChip.update`, step outputs walked once per page) and again after each curation save (it is in `data_table_refreshers` and `on_acks_changed`); the Families tab's first column (`status_fields`, filter link `fstatus`, options the labels plus `Reopened` and `Needs re-review`), read in `load_family_facts`, empty until then; the bar and yield above the table over the shown families (`families-status-summary`), and the curators' "to recheck" pill (`status_pills`); the home cards (`home-status-<cohort>`, `cohort_status_counts` in the off-thread pass); the report's "Review status" line.
 - Test data: `datagen.add_family_statuses(data_dir)`: 1001 in review then solved, 1002 not analysable, AU-X-1 none. Opt-in.
 
+### Pedigrees Across Cohorts
+The cohorts of a data directory share one `families/` tree, and ghfc-ngs builds a family from the rows of the cohort it runs (`main.nf`, `FamilyPedigree.onDisk`): a family two cohorts list differently is rebuilt, and its results overwritten, by each cohort's run. Barcodes have no aliases, so a barcode under two FIDs is one family known by two codes. Measured on GHFC-GRCh38 (2026-11-18): four families differ between cohorts (C0733-011-021, AU-RD-LAR-016, 420498, C0733-011-126), 59 are the same people under two FIDs (CANDY_mpx ↔ dataset_paper_20251010), one is part of another (820910 ⊂ 88081200008).
+- **`utils/pedigree_consistency.py`** reads every cohort pedigree as the pipeline does (`rows_from_lines`: positional columns, first row per member, `pedigree_edit.norm_*`), and `scan(store)` returns `Finding`s (cached on the files' stats; `clear_consistency_cache` in `conftest`). Codes and wording are `config/pedigree_consistency.yaml`:
+  - one FID in several cohorts: `SAME_FID_ROWS_DIFFER` (parents, sex, dummies), `SAME_FID_MEMBERS_DIFFER`, `FID_COLLISION` (no member in common), all high; `SAME_FID_PHENOTYPE_DIFFERS` (info: a cohort per phenotype explains it);
+  - FIDs sharing a sequenced barcode (dummies never link: their IDs embed a barcode): `ALIAS_SAME_MEMBERS`, `ALIAS_SUBSET` (medium), `ALIAS_OVERLAP`, and `BARCODE_ROWS_DIFFER` (a shared sample with another sex, or other parents both families hold), high.
+- **Acknowledgements**: `validations/pedigree_consistency.tsv` (`Key Code Families Status Note User Timestamp`), append-only, last row wins, `explained` or `withdrawn`. `Finding.key` holds a digest of the rows involved, so a change of rows raises a finding again. Info findings are never acknowledged nor counted. `save_ack` checks `can_write()`.
+- **Where**:
+  - every role: the family pages' banner (`family-consistency`: the other places, linked);
+  - curators also get, in the banner, the details and the explain dialog (`consistency-explain`, `-dialog`, `-note`, `-save`);
+  - curators: the home warning (`home-consistency`), `/pedigree-consistency` (every finding), the cohort's findings on the Workflow tab (`workflow-consistency`), and the Families tab's Pedigree column badges (`consistency_badges`: `Differs: <cohort>`, `Alias: <FID>`);
+  - an open high finding is a family status reason (`pedigree_differs`, through `family_status.disagreements_by_family`); aliases are not.
+- **The pedigree editor** no longer refuses a family whose cohorts differ. `load_family(…, reference=)` keeps each file's rows (`FamilySource.drafts`) and edits the reference's (`original`). A save writes the reference rows, as edited, into every file (`FamilySource.target`: each file keeps its own phenotype unless the edit changed the reference's), and the record lists each other cohort's changes (`file_changes`, `NOHEAD: S3: father 0 -> S1`) with the strongest rerun (`rerun`). The dialog asks for the reference first (`ped-reference`, `ped-reference-<cohort>`) and says what the save writes (`ped-cohorts-differ`).
+- **Not yet**: "seen in N families" still counts the same people under two FIDs twice (the gene index keeps family counts per cohort, not identities: a schema change and a full rebuild); the families ghfc-ngs holds back once it checks other cohorts (`last_run.pedigree_conflicts`, proposed for ghfc-ngs) are not shown.
+- Test data: `datagen.add_cohort_disagreements(data_dir)`: NOHEAD lists 1001 with S3's parents at 0; cohort ALIAS knows AU-X-1 as AU-77 and S3 alone as K3. Opt-in (a third cohort).
+
 ### Gene Index (gene and variant pages)
 `/gene/<symbol>` and `/variant/<chr:pos:ref:alt>` (header box `gene-lookup`) gather a gene or variant from every cohort of **every data directory**, through `utils/gene_index.py`.
 - **Only cohort-level tables are indexed**: Wombat results (`cohort_wombat_sources`), WisecondorX calls (not `Below threshold`, 87% of a table), the newest STR catalog's genotypes, the `roh_genes` table. A family without a cohort table is missing; that is said in the CHANGELOG, not worked around.
@@ -481,7 +500,7 @@ Where each family stands in its review (vault note: Roadmap, "Structured family 
 
 ### Pedigree Edits (curators)
 `utils/pedigree_edit.py` is the model and writer; `components/pedigree_editor.py` the dialog (vault note `Pedigree editor`).
-- **ghfc-ngs reads only the cohort pedigree** and writes `<FID>.pedigree.tsv` from it (`FAMILIAL_PEDIGREE`: the cohort's header line, then the family's rows, first per member). A family file edited alone is overwritten at the next run. So an edit rewrites the family's lines in **every cohort pedigree listing the family** (`family_cohort_files`; they must read alike), leaves every other line byte for byte, puts new rows after the family's last line, then writes the family file as the pipeline would (`family_file_text`).
+- **ghfc-ngs reads only the cohort pedigree** and writes `<FID>.pedigree.tsv` from it (`FAMILIAL_PEDIGREE`: the cohort's header line, then the family's rows, first per member). A family file edited alone is overwritten at the next run. So an edit rewrites the family's lines in **every cohort pedigree listing the family** (`family_cohort_files`; when they differ, the reference cohort's rows are written into all, see Pedigrees Across Cohorts), leaves every other line byte for byte, puts new rows after the family's last line, then writes the family file as the pipeline would (`family_file_text`).
 - **Reruns**: each pedigree-reading step keeps `<prefix>.inputs.tsv`, the family's rows normalised (`fid sample father mother sex`: unknown parent `''`/`0`/`-9`/`.` → `0`, sex `1`/`2` else `0`, no phenotype) and reruns when they differ. So a parent, sex or dummy edit needs a normal run; a phenotype edit reruns nothing; a change of sequenced members needs `--clean-stale-families` and is refused for now (`rerun_needed`). `pending_steps` compares every `*.inputs.tsv` of the family directory with the current rows, by member (Wombat's are sorted; the STR snapshot has no dummies). `0.0`/`-9.0` are missing for the app (`models.MISSING_PARENT`) but an ID for the pipeline: `problems` warns.
 - **`save_pedigree_edit`** checks `can_write()` itself, needs a comment, refuses an error from `problems` (father not male, cycle, a new dummy not `DUMMY_<child>_<F|M…>` or already in another family…), a live run (`live_run`: `.ghfc-ngs.progress.json` saying `running` and updated in the last `LIVE_RUN_MINUTES`; the pipeline never removes the file, a finished run leaves `success`/`failed` in it and a killed one a `running` that stops moving) and a cohort file changed since `load_family` (sha256). Under `validations/.pedigree_edit.lock` it writes every file beside its target first (a permission error stops it before any change), renames them over (mode kept), then keeps `families/…/<FID>/pedigree_edits/<FID>.<EditId>.{before,after}.tsv` and appends the family log and `validations/pedigree_edits.tsv` (the cohort page's index). An empty phenotype is written `0`: ghfc-ngs drops trailing empty fields and stops on a five-column row.
 - **The dialog** opens from **Edit pedigree** (`pedigree-edit`) in the family's Sample QC tab, curators only, hung from its own anchor outside the tab's refreshable section. `load_family` runs off-thread; the draft is edited in place (`apply` keeps an undo stack) and redrawn whole: the trees (`ped-edit-now`, `ped-edit-new`, changed members in a `changed` class), one row per member and implied dummy (`ped-father-<iid>` … `ped-pheno-<iid>`, `ped-swap-<iid>`, `ped-remove-<iid>`; the parent select's `__new_dummy__` adds a dummy for that member), the full-sibs control (`ped-shared-*`), changes (`ped-changes`), problems (`ped-problems`). Save (`ped-save`) needs a comment and no error; `save_pedigree_edit_async` checks the role on the loop and writes in a thread. After a save the tab reloads the cohorts (`store.reload`, off-thread) and the page. The history (`ped-history`) shows each edit's trees and restores its rows before (`ped-restore-<id>`) into the draft, saved as a new edit.

@@ -49,7 +49,6 @@ from genetics_viz.utils.pedigree_edit import (
     read_edit_index,
     read_family_edits,
     WaitingFamily,
-    rerun_needed,
     save_cross_family_edit_async,
     save_pedigree_edit_async,
     swap_across,
@@ -188,10 +187,56 @@ def parent_options(draft: PedigreeDraft, iid: str, role: str) -> Dict[str, str]:
     return options
 
 
-def _load(data_dir, family_id: str, files) -> Tuple[FamilySource, List[EditRecord]]:
-    return load_family(data_dir, family_id, files), read_family_edits(
+def _load(
+    data_dir, family_id: str, files, reference: Optional[Path] = None
+) -> Tuple[FamilySource, List[EditRecord]]:
+    return load_family(data_dir, family_id, files, reference), read_family_edits(
         data_dir, family_id
     )
+
+
+def _cohort_of(path: Path) -> str:
+    return path.name.removesuffix(".pedigree.tsv")
+
+
+def _reference_dialog(source: FamilySource, choose: Callable[[Path], Any]) -> ui.dialog:
+    """The cohorts' rows side by side: pick the ones to edit and write everywhere."""
+    with (
+        ui.dialog() as dialog,
+        ui.card()
+        .classes("p-4 gap-3")
+        .style("width: min(1100px, 96vw); max-width: 96vw")
+        .mark("ped-reference"),
+    ):
+        ui.label(f"Family {source.family_id} differs between its cohorts").classes(
+            "text-lg font-semibold text-blue-800"
+        )
+        ui.label(
+            "ghfc-ngs rebuilds the family from the rows of the cohort it runs, so"
+            " each cohort's run overwrites the other's results. Choose the rows"
+            " to edit: saving writes them into every cohort (phenotypes stay per"
+            " cohort)."
+        ).classes("text-sm text-gray-700")
+        with ui.row().classes("w-full gap-4 items-start no-wrap"):
+            for f, draft in zip(source.files, source.drafts):
+                cohort = _cohort_of(f.path)
+                with ui.column().classes("flex-1 min-w-0 gap-1"):
+                    ui.label(cohort).classes("text-sm font-semibold")
+                    for m in draft.members:
+                        ui.label(
+                            f"{m.iid}\t{m.father}\t{m.mother}\t{m.sex}\t{m.phenotype}"
+                        ).classes("text-xs font-mono whitespace-pre")
+
+                    async def pick(p: Path = f.path) -> None:
+                        dialog.close()
+                        await choose(p)
+
+                    ui.button(f"Edit from {cohort}'s rows", on_click=pick).props(
+                        "outline no-caps color=primary"
+                    ).mark(f"ped-reference-{cohort}")
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+    return dialog
 
 
 @dataclass
@@ -247,6 +292,7 @@ async def open_pedigree_editor(
     qc: Optional[QcContext] = None,
     on_saved: Optional[Callable[[EditRecord], Any]] = None,
     on_merged: Optional[Callable[[str], Any]] = None,
+    reference: Optional[Path] = None,
 ) -> None:
     """Read the family's pedigree off the loop, then open the editor in ``anchor``.
 
@@ -259,7 +305,7 @@ async def open_pedigree_editor(
     files = family_cohort_files(store, family_id)
     try:
         source, history = await asyncio.to_thread(
-            _load, store.data_dir, family_id, files
+            _load, store.data_dir, family_id, files, reference
         )
         companions = await asyncio.to_thread(companion_families, store, family_id)
     except PedigreeEditError as e:
@@ -279,6 +325,25 @@ async def open_pedigree_editor(
             logger.exception("Failed to read the pedigree of %s", fid)
             ui.notify(f"The pedigree of {fid} could not be read", type="negative")
         return None
+
+    if source.differs and reference is None:
+
+        async def choose(path: Path) -> None:
+            await open_pedigree_editor(
+                anchor,
+                store,
+                family_id,
+                flags=flags,
+                qc=qc,
+                on_saved=on_saved,
+                on_merged=on_merged,
+                reference=path,
+            )
+
+        anchor.clear()
+        with anchor:
+            _reference_dialog(source, choose).open()
+        return
 
     qc = qc or QcContext()
 
@@ -388,6 +453,19 @@ def _editor_dialog(
             writes = ui.label("").classes("text-xs text-gray-500")
             ui.space()
             ui.button(icon="close", on_click=dialog.close).props("flat round dense")
+        if merge is None and main.source.differs:
+            others = ", ".join(
+                _cohort_of(main.source.files[i].path) for i in main.source.differing()
+            )
+            ui.label(
+                f"The cohorts list this family differently. You edit"
+                f" {main.source.reference_cohort}'s rows; saving writes them into"
+                f" {others} as well (each cohort keeps its own phenotypes), so"
+                " ghfc-ngs builds the family alike whichever cohort it runs."
+            ).classes(
+                "w-full text-sm text-amber-900 bg-amber-50 border border-amber-300"
+                " rounded p-2"
+            ).mark("ped-cohorts-differ")
 
         def update_title() -> None:
             if merge is not None:
@@ -626,7 +704,9 @@ def _editor_dialog(
                 found = merge_problems(merge, main.draft, target)
             else:
                 changes = {
-                    s.family_id: describe_changes(s.original, s.draft) for s in sides
+                    s.family_id: describe_changes(s.original, s.draft)
+                    + s.source.file_changes(s.draft)
+                    for s in sides
                 }
                 any_change = any(changes.values())
                 found = cross_problems(
@@ -650,7 +730,7 @@ def _editor_dialog(
                         if merge is not None:
                             text = merge_rerun_text(merge, state["target"])
                         else:
-                            text = RERUN_TEXT[rerun_needed(side.original, side.draft)]
+                            text = RERUN_TEXT[side.source.rerun(side.draft)]
                         ui.label(text).classes("text-xs text-blue-800").mark(
                             f"ped-rerun-{side.family_id}"
                         )
