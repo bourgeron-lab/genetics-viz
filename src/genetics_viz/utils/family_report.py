@@ -65,6 +65,7 @@ from .export import person
 from .pedigree_labels import PHENO_COLORS, normalize_pheno, normalize_sex
 from .pedigree_svg import PedigreePerson, pedigree_svg
 from .pipeline_params import load_params
+from .family_status import StatusRecord, family_statuses, status_label
 from .report_summaries import FamilySummary, latest_family_summary
 from .report_svg import Marker, ordinal, pca_svg, percentile, pgs_distribution_svg
 from .sample_qc_acks import ack_summary, load_acks, split_acknowledged
@@ -157,6 +158,15 @@ class FamilyReport:
     audience: str = CONFIG.get("audience", "")
     disclaimer: str = CONFIG.get("disclaimer", "")
     methods_source: str = CONFIG.get("methods_source", "")
+    #: The curator's review status, without its comment (an internal note).
+    status: Optional[StatusRecord] = None
+
+    @property
+    def status_text(self) -> str:
+        """``Solved (alice, 2026-11-18)``; empty when no curator set one."""
+        if self.status is None:
+            return ""
+        return f"{status_label(self.status.status)} ({self.status.user}, {self.status.date})"
 
     @property
     def document_title(self) -> str:
@@ -1436,6 +1446,7 @@ def build_family_report(
         app_version=_app_version(),
         pipeline=_pipeline_text(cohort),
         summary=latest_family_summary(data_dir, family_id),
+        status=family_statuses(data_dir).get(family_id),
         sections=sections,
         methods=_methods(sections, files, family_qc, data_dir, family_id, cohort),
     )

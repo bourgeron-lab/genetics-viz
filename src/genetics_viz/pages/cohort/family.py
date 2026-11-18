@@ -9,6 +9,7 @@ from nicegui import app, ui
 
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
+from genetics_viz.components.family_status import render_family_status
 from genetics_viz.components.header import create_header
 from genetics_viz.utils.family_rows import family_order
 from genetics_viz.components.family_tabs import (
@@ -188,6 +189,9 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                 )
 
                 ui.space()
+                status_chip = render_family_status(
+                    store.data_dir, family_id, family, [cohort]
+                )
                 render_report_buttons(store.data_dir, family_id, family, cohort)
 
                 def arrow(fid: Optional[str], icon: str, word: str) -> None:
@@ -266,6 +270,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                     qc["summary"] = family_qc_summary(store, family_id, cohort)
                     _, active, acked = qc["summary"]
                     qc_badge.refresh()
+                    status_chip.refresh()
                     update_qc_icons(flags_by_sample(active), flags_by_sample(acked))
                     if diagnostics_refresh["fn"] is not None:
                         diagnostics_refresh["fn"]()
@@ -420,6 +425,9 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
                             data_table_refreshers.append(
                                 render_diagnostics_panel.refresh
                             )
+                            # A diagnostic saved anywhere may contradict the
+                            # status: curation saves run these refreshers.
+                            data_table_refreshers.append(status_chip.refresh)
 
             # Pre-check data existence for each analysis tab
             has_wombat = probe_wombat_data(store.data_dir, family_id)

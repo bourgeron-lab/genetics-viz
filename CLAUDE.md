@@ -21,7 +21,7 @@ Deliberate exceptions to "ECharts for plots": the cohort PGS violins in `cohort_
 ## Tests and CI
 
 - `tests/datagen.py` builds a synthetic data directory and reference bundle in `tmp_path`. CI has no access to the data mount, so every test runs on it. When a new file format is read, extend `datagen` in the format the pipeline actually writes.
-- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle, the gene index manifests, the Vedette table cache, the UPD tables cache and the cohort SV calls cache. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
+- `tests/conftest.py` resets all module-level state before and after each test: the config singleton, the data store registry, the stat-keyed caches, the GeneTrek snapshot, the preferences cache, the per-user gene scorers, the login throttle, the gene index manifests, the Vedette table cache, the UPD tables cache, the cohort SV calls cache and the family statuses cache. A new module-level cache must be added to `_reset_globals`, or tests will depend on their order.
 - An autouse fixture makes any `urlopen` fail, so no test can reach GitHub by accident.
 - **UI tests** (`tests/ui/`) use NiceGUI's user simulation: no browser, timers run for real.
   - `tests/ui/app_main.py` purges `genetics_viz` from `sys.modules` and boots the app again for each test. NiceGUI's per-test reset removes every route, so without the purge nothing would be registered from the second test on.
@@ -74,6 +74,7 @@ src/genetics_viz/
     pedigree_tree.py              # Member card's Tree view: pypedigree drawing, selection faded, QC outline, Enlarge
     pedigree_editor.py            # Pedigree editor dialog (Sample QC tab, curators): trees now/after, rows, changes, history; status note
     family_report_dialog.py       # Family report: "See report"/"PDF" buttons, dialog, conclusion, print
+    family_status.py              # Family status chip + curator dialog (family pages), status bar and yield
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
     genetrek.yaml                 # GeneTrek refresh period, tier colours, default profile
@@ -86,6 +87,7 @@ src/genetics_viz/
     genome_qc.yaml                # genomeqc step: metric names/formats, seq_class wording, mirrored thresholds
     str.yaml                      # STR class/status colours, support codes, REViewer filename
     report.yaml                   # Family report: wording, PGS traits, aneuploidy cut-off, methods
+    family_status.yaml            # Family statuses (order, colours, yield role), solving verdicts, reasons
     clinvar_colors.yaml           # ClinVar significance term -> color
     cnv.yaml                      # CN mask/display, single-vs-split read view, read-evidence caps/colours
     vedette.yaml                  # Vedette: impact levels, inheritance codes, colours, presets
@@ -183,6 +185,7 @@ src/genetics_viz/
     pedigree_qc.py                # Sample QC against a pedigree draft (mirrors sampleqc_classify), editor suggestions, merge candidates
     pedigree_merge.py             # Merging families under a new or existing FID; curation re-keyed; orphaned directories
     report_summaries.py           # reports/family_summaries.tsv: curator conclusions (role-guarded)
+    family_status.py              # reports/family_status.tsv (role-guarded), reasons to look again, yield
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
     cnv_plots.py                  # ECharts builder for the copy-number panel
@@ -428,6 +431,7 @@ Curators send it to the referring clinician of each centre, who decides whether 
   The report sizes it in mm from the `viewBox` (`pedigree_drawing` in `report.yaml`) through `Plot.width`, and writes the observed karyotype under an ID when atypical or not the declared sex's. Tests check structure (`data-id`, `Not sampled`, prefixes), never pixels: figures change between pypedigree minors.
 - **Order is the one asked for:** pedigree, ancestry, Sample QC, ROH, PGS, aneuploidy, UPD, diagnostics, with the curator conclusion and "Results at a glance" (`Section.glance`, else `note`) under the pedigree. Each `Section` is available with rows, or missing with a reason.
 - **Aneuploidy** is two sources: the QC karyotype for sex chromosomes; for autosomes, same-direction WisecondorX segments covering `aneuploidy_min_fraction` of a chromosome's assessable span (the q arm of an acrocentric one). The pipeline has no aneuploidy step.
+  - **Only calls past the permissive thresholds count** (`wisecondorx.past_permissive()`: log2 ratio *and* z-score). `whole_chromosome_events` sums whatever it is given, and a chromosome-long segment reaches |z| ≈ 5 with a log2 ratio of ±0.01: before v0.41.2, 88021200005 read +14 (C0XYE8K) and −21 (C0XYE8L) from two such segments. Filter before calling it.
 - **PGS percentile = Φ(z)**: the pipeline's z is already ancestry-matched (k-NN SD in PC space). The traits shown are `pgs_traits` in `report.yaml`.
 - **Diagnostics** keep `diagnostic_verdicts` (pathogenic, uncertain, conflicting) and add the standing validation and inheritance per sample.
 - **Diagnostic details are a snapshot, not a lookup** (`utils/diagnostic_snapshot.py`): the table row's HGVS, zygosity, segregation, carriers, ClinVar, gnomAD, MOI (worded, from the badge tooltip), SV gene overlap and copy number are written with the diagnostic (`SNAPSHOT_COLUMNS`, after the ten old columns), and the report never re-reads Wombat or SV tables. `Source` is always set on a snapshot, so an empty `Source` means a record saved before v0.28.0 ("Not recorded"). Each call site passes `details=` to `show_diagnostic_dialog`, built from the Python row (the row sent back by the table may lack hidden fields).
@@ -435,6 +439,23 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - **Methods text and tool versions are in `report.yaml`, hand-copied from ghfc-ngs** (`methods_source` names the commit). The run's own version and commit come from the run record. Update both when the pipeline changes a tool.
 - **Curator conclusions** live in `reports/family_summaries.tsv` (`FID Summary User Timestamp`), append-only, last row wins, empty clears. Line breaks are written `\n`. `save_family_summary` checks `can_write()` itself.
 - Test data: `datagen.add_report_case(data_dir)` adds the four report traits, a chr21 gain for S3 and diagnostics. It is opt-in because it changes the PGS tables other tests compare whole.
+
+### Family Status
+Where each family stands in its review (vault note: Roadmap, "Structured family status"). `utils/family_status.py` is the model, `components/family_status.py` the chip, dialog and bar.
+- **Statuses are `config/family_status.yaml`**, in review order: `not_reviewed` (no record, the default), `in_review` (a claim: the record names who), `candidate`, `partially_solved`, `solved`, `unsolved`, `not_analysable`. Each has a `yield` role: `solved`, `reviewed`, `open` or `excluded`.
+- **`reports/family_status.tsv`** (`FID Status Comment User Timestamp`), beside the conclusions: append-only through `tsv.append_tsv_row`, the last row of a family wins, keyed by FID only (one status across cohorts). `save_family_status` checks `can_write()`; `save_family_status_async` checks it on the loop and writes in a thread. The file is in `pedigree_merge.curation_files`, so a merge re-keys it. Cached on its stat (`clear_status_cache` in `conftest`, which also clears the per-family diagnostics cache).
+- **The status never changes by itself.** `family_state` works out *reasons* to look again, shown as an amber "Reopened" (a pedigree edit) or "Check" badge with the text in the tooltip:
+  - `pedigree_waiting` / `pedigree_ready`: the family's last pedigree edit (`edit_statuses`, against the cohort's last run) is after the status. Phenotype edits count: they rerun nothing in ghfc-ngs but change who is affected;
+  - `diagnostic_after`: a standing diagnostic's `Timestamp` is after the status;
+  - `solved_without_diagnostic` / `diagnostic_not_solved`: a `solving_verdicts` diagnostic stands or not, against the status, whatever the dates (an Ignore toggle keeps its timestamp, so it is caught here). No reason for `in_review` or `not_analysable`;
+  - `qc_after`: an unacknowledged high flag in QC tables (Sample QC, genome QC) written after the status (file mtime: flags carry no date);
+  - `results_after`: a `*.inputs.tsv` of the family written after the status (`step_outputs`, which walks the family directory). **Family pages only**: across a cohort that is one walk per family over SMB.
+
+  Reasons about dates need a status record; saving a status again clears them.
+- **The yield** (`count_statuses`): solved = `solved` + `partially_solved`, over the reviewed (`yield` solved or reviewed), and the analysable families (every counted one). A family is not counted when `not_analysable`, or with no affected sequenced member and no record.
+- **Every role sees the status**; the comment is curators only (`status_badges(state, curator)`), and the report states the status without it.
+- **Where**: the family pages' chip (`family-status`, `family-status-reason`; dialog `family-status-dialog`, `-select`, `-comment`, `-save`, `-history`), drawn from the status file at once, its reasons read off-thread after (`FamilyStatusChip.update`, step outputs walked once per page) and again after each curation save (it is in `data_table_refreshers` and `on_acks_changed`); the Families tab's first column (`status_fields`, filter link `fstatus`, options the labels plus `Reopened` and `Needs re-review`), read in `load_family_facts`, empty until then; the bar and yield above the table over the shown families (`families-status-summary`), and the curators' "to recheck" pill (`status_pills`); the home cards (`home-status-<cohort>`, `cohort_status_counts` in the off-thread pass); the report's "Review status" line.
+- Test data: `datagen.add_family_statuses(data_dir)`: 1001 in review then solved, 1002 not analysable, AU-X-1 none. Opt-in.
 
 ### Gene Index (gene and variant pages)
 `/gene/<symbol>` and `/variant/<chr:pos:ref:alt>` (header box `gene-lookup`) gather a gene or variant from every cohort of **every data directory**, through `utils/gene_index.py`.
@@ -573,7 +594,7 @@ One row of tabs in captioned groups, without icons (`_TAB_GROUPS` in `cohort.py`
   - **The family page's arrows walk the Families tab's order** (`family_rows.save_family_order` / `family_order`, in `app.storage.user["family_order"][<cohort>]`). `remember_order` saves the table's rows (filtered, and sorted by `DataTable.sort_rows`, which `recompute` now applies before `update_data`) after each filter, sort or page change, and forgets them when neither filter nor sort is on, including on a bare page load. The family page uses the list only when it holds the family, else every family by ID; `family-position` shows "N of M".
   - **Width**: it fitted a 1,280 px window for curators until the Pedigree column (see Pedigree Edits) because the text filters are `size`d (`filter.size`, an opt-in in `data_table.js`: an input is about 20 characters wide by default, which set the column floor) and there is no Members column (Affected says `1 / 3`).
 - **Every variant kind has a cohort view under Variants.** `De novo QC` (`tab=denovo`, `cohort_denovo_tab.py`) is the step's QC only; the candidates are `SNVs/Indels` (`tab=snvs`, `utils/cohort_snvs.py`): the cohort `dnm` rows of the children shown, strict HIGH/MODERATE by default, with `denovo.load_curation`'s status and diagnostic, and `recurrent_genes` (two or more families). Gene badges are built in the loading thread with the scorer taken on the loop.
-  - **`SVs`** (`tab=svs`, `utils/cohort_svs.py`) reads `sample_counts.cohort_wcx_file` through `scan_calls`: `pl.scan_csv` of the needed columns only, filtered to the permissive thresholds and 100 kb before a streaming collect (`tsv.collect_streaming`: polars 1.17, which the project allows, refuses `engine="streaming"` and takes `streaming=True`; CI's polars 1.17.1 job caught it), cached on `(path, mtime, size)` (`clear_cache` in `conftest`). Never read a cohort WisecondorX table eagerly: CANDY_mpx's took 13.4 GB. A call row is per call and family of its sample (a sample can sit in two); `Variant` is the SV validation key `chr:start-end:del|dup`. Whole-chromosome events reuse `family_report.whole_chromosome_events`, so the tab and the report agree; recurrent regions merge overlapping same-direction calls of two or more families.
+  - **`SVs`** (`tab=svs`, `utils/cohort_svs.py`) reads `sample_counts.cohort_wcx_file` through `scan_calls`: `pl.scan_csv` of the needed columns only, filtered to the permissive thresholds (`past_permissive()`, the report's filter too) and 100 kb before a streaming collect (`tsv.collect_streaming`: polars 1.17, which the project allows, refuses `engine="streaming"` and takes `streaming=True`; CI's polars 1.17.1 job caught it), cached on `(path, mtime, size)` (`clear_cache` in `conftest`). Never read a cohort WisecondorX table eagerly: CANDY_mpx's took 13.4 GB. A call row is per call and family of its sample (a sample can sit in two); `Variant` is the SV validation key `chr:start-end:del|dup`. Whole-chromosome events reuse `family_report.whole_chromosome_events`, so the tab and the report agree; recurrent regions merge overlapping same-direction calls of two or more families.
   - **Polygenic Scores lists its outliers** (`ancestry.pgs_outlier_rows`): the individuals of the filter and regions at |z| ≥ the cut-off (`PGS_OUTLIER_THRESHOLDS`) for the plotted trait or every trait, percentile Φ(z) through `report_svg.percentile`/`ordinal`, so the tab and the report word a score alike. Nothing is read twice: it pairs the tab's own z-score rows with the individuals (`scoped()`).
   - Eleven tabs fit a 1,280 px window (the last ends at 1,216 of 1,240 px); a twelfth will need the labels shortened or two rows.
 - **The tab row and the filter bar are one sticky block** under the fixed page header. The header's height changes when its menus wrap, so `_HEADER_HEIGHT_JS` keeps `--gv-header-height` up to date (ResizeObserver) and the block's `top` reads it.

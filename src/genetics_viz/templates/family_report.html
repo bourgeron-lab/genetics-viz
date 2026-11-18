@@ -31,6 +31,7 @@
   header .meta .fid { font-size: 13pt; font-weight: bold; color: #111827; }
   .audience { border: 1px solid #fca5a5; background: #fef2f2; color: #7f1d1d;
               padding: 5px 8px; font-size: 8.5pt; margin-bottom: 8px; }
+  .review-status { margin: 2px 0 6px; font-size: 10pt; }
   .conclusion { border-left: 4px solid #1e3a8a; background: #eff6ff; padding: 6px 10px;
                 margin: 8px 0; white-space: pre-wrap; }
   .conclusion.empty { border-left-color: #9ca3af; background: #f9fafb; color: #6b7280;
@@ -149,6 +150,7 @@
 </section>
 
 <h2>Curator conclusion</h2>
+{% if report.status_text %}<p class="review-status">Review status: <strong>{{ report.status_text }}</strong></p>{% endif %}
 {% if report.summary %}
 <div class="conclusion">{{ report.summary.text }}<span class="by">{{ report.summary.user }}, {{ report.summary.date }}</span></div>
 {% else %}

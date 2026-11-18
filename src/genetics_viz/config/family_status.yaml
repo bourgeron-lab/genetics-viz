@@ -1,0 +1,93 @@
+# Family status: where a family stands in its review, set by a curator.
+#
+# The statuses are listed in the order of a review, which is the order of the
+# menu, the filter and the home card's bar. ``not_reviewed`` is the status of
+# a family with no record; it can also be written, to take a status back.
+#
+# ``yield`` says how a status counts in the cohort's diagnostic yield:
+#   solved     counts in the numerator and the denominators;
+#   reviewed   counts in both denominators (reviewed and analysable families);
+#   open       counts in the analysable families only;
+#   excluded   counts nowhere (the family cannot be interpreted).
+statuses:
+  not_reviewed:
+    label: Not reviewed
+    color: "#9e9e9e"
+    yield: open
+    description: Nobody has gone through the family's results yet.
+  in_review:
+    label: In review
+    color: "#1e88e5"
+    yield: open
+    description: A curator is going through the family; the record says who.
+  candidate:
+    label: Candidate
+    color: "#f59e0b"
+    yield: reviewed
+    description: >-
+      Reviewed: a strong candidate that is not settled (needs segregation,
+      functional data or a second opinion).
+  partially_solved:
+    label: Partially solved
+    color: "#f97316"
+    yield: solved
+    description: >-
+      Reviewed: a finding explains part of the phenotype, or one affected
+      member and not another.
+  solved:
+    label: Solved
+    color: "#dc2626"
+    yield: solved
+    description: "Reviewed: a finding explains the phenotype."
+  unsolved:
+    label: Unsolved
+    color: "#546e7a"
+    yield: reviewed
+    description: "Reviewed: nothing explains the phenotype."
+  not_analysable:
+    label: Not analysable
+    color: "#6a1b9a"
+    yield: excluded
+    description: >-
+      The family cannot be interpreted (sample swap, failed QC, consent, a
+      control family): left out of the yield.
+
+# Diagnostic verdicts that solve a family: a solved or partially solved
+# family should have one standing, and a family that is not should not.
+solving_verdicts:
+  - pathogenic
+
+# Why a family should be looked at again. The status never changes by itself:
+# these are shown beside it until a curator saves a status again (the ones
+# about dates) or the inconsistency is fixed.
+reasons:
+  pedigree_waiting:
+    label: Pedigree edited
+    text: >-
+      The pedigree was edited after the status; ghfc-ngs has not run since, so
+      the results still read the older pedigree.
+  pedigree_ready:
+    label: Pedigree edited
+    text: >-
+      The pedigree was edited after the status, and ghfc-ngs has run since:
+      the family is ready to be reviewed again.
+  diagnostic_after:
+    label: New diagnostic
+    text: A diagnostic was recorded after the status.
+  solved_without_diagnostic:
+    label: No pathogenic diagnostic
+    text: The family is marked solved, but no pathogenic diagnostic stands.
+  diagnostic_not_solved:
+    label: Pathogenic diagnostic
+    text: A pathogenic diagnostic stands, but the family is not marked solved.
+  qc_after:
+    label: New QC flag
+    text: >-
+      A high-severity QC flag is open, and the QC tables were written after
+      the status.
+  results_after:
+    label: New results
+    text: "Steps rerun for this family after the status: {steps}."
+
+# The status file's comment is shown to curators only: it may name what the
+# reader wording elsewhere hides (a non-paternity, a cell line).

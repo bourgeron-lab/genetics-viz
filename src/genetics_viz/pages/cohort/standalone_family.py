@@ -8,7 +8,9 @@ from fastapi import Request
 from nicegui import ui
 
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
+from genetics_viz.components.cell_line_note import family_cohorts
 from genetics_viz.components.family_report_dialog import render_report_buttons
+from genetics_viz.components.family_status import render_family_status
 from genetics_viz.components.header import create_header
 from genetics_viz.components.family_tabs import (
     TAB_LABELS,
@@ -130,6 +132,13 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                 ui.label("/").classes("text-gray-400")
                 ui.label(f"Family: {family_id}").classes("font-semibold")
 
+            # The status chip, once drawn (a family with a pedigree only).
+            status_chip: Dict[str, Any] = {"chip": None}
+
+            def refresh_status() -> None:
+                if status_chip["chip"] is not None:
+                    status_chip["chip"].refresh()
+
             # Family header
             with ui.row().classes("w-full items-center gap-4 mb-4"):
                 ui.label(f"Family: {family_id}").classes(
@@ -139,6 +148,9 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                     ui.badge(f"{family.num_samples} members").props("color=blue")
                     ui.badge(f"{family.num_founders} founders").props("color=teal")
                     ui.space()
+                    status_chip["chip"] = render_family_status(
+                        store.data_dir, family_id, family, family_cohorts(family_id)
+                    )
                     render_report_buttons(store.data_dir, family_id, family)
 
             # Data availability panel
@@ -211,6 +223,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
             review_badges: Dict[str, Any] = {}
 
             def on_acks_changed() -> None:
+                refresh_status()
                 if qc_icons["update"] is not None:
                     _, active, acked = family_qc_summary(store, family_id)
                     qc_icons["update"](flags_by_sample(active), flags_by_sample(acked))
@@ -382,6 +395,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                             render_diagnostics()
                             diagnostics_refresh["fn"] = render_diagnostics.refresh
                             data_table_refreshers.append(render_diagnostics.refresh)
+                            data_table_refreshers.append(refresh_status)
 
             # Analysis tabs
             has_ancestry = probe_ancestry_data(store.data_dir, family_id)

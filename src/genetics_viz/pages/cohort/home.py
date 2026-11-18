@@ -2,12 +2,14 @@
 
 import asyncio
 import csv
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
 
 from nicegui import ui
 
+from genetics_viz.components.family_status import render_family_status_summary
 from genetics_viz.components.header import create_header
 from genetics_viz.components.sample_dialog import show_sample_dialog
 from genetics_viz.models import Cohort, CohortStub
@@ -22,6 +24,7 @@ from genetics_viz.utils.data_availability import (
     check_sample_availability,
 )
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
+from genetics_viz.utils.family_status import StatusCounts, cohort_status_counts
 from genetics_viz.utils.pedigree import load_family_pedigree
 from genetics_viz.utils.genome_qc import cohort_flags
 from genetics_viz.utils.sample_qc import cohort_headline, severity_info
@@ -34,6 +37,8 @@ from genetics_viz.utils.pedigree_labels import (
 from genetics_viz.utils.sharding import get_family_path, get_sample_path
 
 # Diagnostic priority for "highest" resolution
+logger = logging.getLogger(__name__)
+
 _DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
 
 # Cohort card geometry. Three separate things were eating the card's width:
@@ -132,6 +137,30 @@ def _gather_qc_headlines(
         counts = cohort_headline(cohort, acknowledged, cohort_flags(cohort))
         if counts is not None:
             out[cohort.name] = counts
+    return out
+
+
+def _gather_cohort_stats(
+    cohorts: List[Cohort], data_dir: Path
+) -> Dict[str, Dict[str, Any]]:
+    """Every cohort's per-phenotype diagnostics, in one offloaded pass.
+
+    Each cohort reads every diagnostic file, which on the share must not
+    block the event loop.
+    """
+    return {c.name: _compute_cohort_stats(c, data_dir) for c in cohorts}
+
+
+def _gather_status_counts(
+    cohorts: List[Cohort], data_dir: Path
+) -> Dict[str, StatusCounts]:
+    """Every cohort's families by status, in one offloaded pass. Never raises."""
+    out: Dict[str, StatusCounts] = {}
+    for cohort in cohorts:
+        try:
+            out[cohort.name] = cohort_status_counts(cohort, data_dir)
+        except Exception:
+            logger.warning("Failed to count %s's statuses", cohort.name, exc_info=True)
     return out
 
 
@@ -489,6 +518,12 @@ async def home_page() -> None:
             qc_headlines = await asyncio.to_thread(
                 _gather_qc_headlines, cohorts, store.data_dir
             )
+            all_stats = await asyncio.to_thread(
+                _gather_cohort_stats, cohorts, store.data_dir
+            )
+            status_counts = await asyncio.to_thread(
+                _gather_status_counts, cohorts, store.data_dir
+            )
 
             # Display cohorts as cards
             ui.label("Available Cohorts").classes(
@@ -498,7 +533,7 @@ async def home_page() -> None:
             with ui.row().classes("w-full flex-wrap gap-4"):
                 for cohort in cohorts:
                     cohort_name = cohort.name  # Capture name for lambda
-                    stats = _compute_cohort_stats(cohort, store.data_dir)
+                    stats = all_stats[cohort_name]
                     with (
                         ui.card()
                         .classes(
@@ -535,6 +570,19 @@ async def home_page() -> None:
                                 qc_counts = qc_headlines.get(cohort_name)
                                 if qc_counts is not None:
                                     _render_qc_summary(qc_counts)
+
+                            # Where the families stand in their review.
+                            counts = status_counts.get(cohort_name)
+                            if counts is not None and counts.total:
+                                with ui.element("div").classes("w-full mb-3"):
+                                    ui.label("Family status").classes(
+                                        "text-xs text-gray-500 font-semibold"
+                                    )
+                                    render_family_status_summary(
+                                        counts,
+                                        compact=True,
+                                        mark=f"home-status-{cohort_name}",
+                                    )
 
                             # Per-phenotype breakdown table
                             per_pheno = stats["per_pheno"]

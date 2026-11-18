@@ -323,6 +323,16 @@ def filter_pills(
     ]
 
 
+def status_pills(reopened: int, to_check: int) -> List[Pill]:
+    """The Families tab's status badge: families to look at again."""
+    if not to_check:
+        return []
+    tip = f"{_plural(to_check, 'family', 'families')} to look at again"
+    if reopened:
+        tip += f", {reopened:,} after a pedigree edit"
+    return [Pill(f"{to_check:,} to recheck", "#b45309", tip + " (Status column).")]
+
+
 def qc_worst_by_individual(flags: Iterable[FlagRow], upd_tab: bool) -> Dict[Key, str]:
     """Each individual's worst high or medium flag, by ``(FID, sample)``.
 
