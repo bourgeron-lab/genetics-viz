@@ -26,6 +26,7 @@ from nicegui import ui
 
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
+from genetics_viz.components.pedigree_editor import render_merge_candidates
 from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.data import get_static_prefix
 from genetics_viz.utils.genome_qc import (
@@ -674,6 +675,13 @@ def render_cohort_sample_qc_tab(
                 options=labels, value=labels[0], label="Sites", on_change=on_label
             ).props("outlined dense").classes("w-full mb-2")
 
+        # Outside the refreshable section: the merge dialog outlives a redraw.
+        merge_anchor = ui.element("div")
+
+        async def merged(target: str) -> None:
+            await asyncio.to_thread(store.reload)
+            ui.navigate.reload()
+
         @ui.refreshable
         def render_body() -> None:
             qc: Optional[QcData] = state["qc"]
@@ -756,6 +764,10 @@ def render_cohort_sample_qc_tab(
                         cross, keys, cohort.name, show_detail, severities
                     ),
                 ).props("flat dense no-caps color=primary")
+
+            if show_detail:
+                _subtitle("Merge candidates")
+                render_merge_candidates(merge_anchor, store, cross, merged)
 
             _render_plots(rows, by_key, pairs, show_detail, severities)
 

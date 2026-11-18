@@ -249,5 +249,85 @@ async def test_a_swap_with_another_family_is_saved_for_both(user, data_dir):
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
     open_tab(user, "cohort-tabs", "Workflow")
-    await user.should_see(marker="workflow-pedigree-waiting", retries=30)
+    # The tab warms its caches off-thread first: slow on a busy CI runner.
+    await user.should_see("Pipeline status", retries=200)
+    await user.should_see(marker="workflow-pedigree-waiting", retries=100)
     await user.should_see("--clean-stale-families for 1002, AU-X-1")
+
+
+def add_cross_pair(data_dir: Path, fa, a, fb, b, observed: str, phi: float) -> None:
+    """One more cross-family pair in DEMO's cohort Sample QC, as the pipeline writes it."""
+    import datagen
+
+    path = data_dir / "cohorts" / "DEMO" / "qc" / f"DEMO.{datagen.QC_LABEL}.pairs.tsv"
+    row = datagen._qc_pair_row(
+        fa, a, fb, b, phi, 0.2, 0.0, "unrelated", observed, None, "mismatch"
+    )
+    with open(path, "a") as f:
+        f.write("\t".join(map(str, row)) + "\n")
+
+
+async def test_merge_candidates_on_the_cohort_sample_qc_tab(user, data_dir):
+    # 1001 and AU-X-1 (S2–S5, second degree) are in different cohort pedigrees;
+    # 1002 and AU-X-1, both in DEMO only, are made full sibs here.
+    add_cross_pair(data_dir, "1002", "S4", "AU-X-1", "S6", "full-sibs", 0.25)
+    await login(user, "curator")
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Sample QC")
+    await user.should_see(marker="merge-candidates", retries=30)
+    await user.should_see("1001 + 1002 + AU-X-1")
+    await user.should_see("S4 (1002) – S6 (AU-X-1): observed full-sibs")
+    button = _one(user, "merge-candidate-1001+1002+AU-X-1")
+    assert not button.enabled  # 1001 is also in NOHEAD
+
+
+async def test_readers_get_no_merge_candidates(user):
+    await login(user, "reader")
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Sample QC")
+    await user.should_see("Relatives across families", retries=30)
+    await user.should_not_see(marker="merge-candidates")
+
+
+async def test_two_families_merged_under_a_new_id(user, data_dir):
+    await open_qc(user, "curator", "AU-X-1")
+    await open_editor(user)
+    _one(user, "ped-merge-with").set_value(["1002"])
+    user.find(marker="ped-merge-start").click()
+    await user.should_see("Merge families AU-X-1, 1002", retries=30)
+    assert _one(user, "ped-merge-fid").value == "AU-X-1_1002"
+    await user.should_see("AU-X-1, 1002 merged into AU-X-1_1002 (a new family)")
+    await user.should_see(marker="ped-merge-curation")  # S6's acknowledgement
+    _one(user, "ped-merge-fid").set_value("1001")
+    await user.should_see(
+        "Family 1001 already exists in the cohort pedigree", retries=10
+    )
+    _one(user, "ped-merge-fid").set_value("FAMX")
+    await user.should_see("AU-X-1, 1002 merged into FAMX (a new family)", retries=10)
+    user.find(marker="ped-comment").type("One family entered under two IDs")
+    await wait_for(lambda: _one(user, "ped-save").enabled)
+    user.find(marker="ped-save").click()
+
+    # The merged family's page opens, on the new pedigree.
+    await user.should_see("Family: FAMX", retries=30)
+    text = (data_dir / DEMO).read_text()
+    assert "FAMX\tS4" in text and "FAMX\tS6" in text and "AU-X-1\t" not in text
+    acks = (data_dir / "validations" / "sampleqc.tsv").read_text()
+    assert "SEX_MISMATCH\tFAMX\tS6" in acks
+
+    # The Workflow tab names the old directories, and FAMX as waiting.
+    import sys
+
+    docs = sys.modules["genetics_viz.utils.ghfc_ngs_docs"]
+    docs._cached = docs.FetchedDoc(
+        markdown="# Stub reference", error=None, fetched_at=datetime.now()
+    )
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Workflow")
+    await user.should_see("Pipeline status", retries=200)
+    await user.should_see(marker="workflow-orphaned-families", retries=100)
+    await user.should_see("AU-X-1 → FAMX", retries=10)
+    await user.should_see(marker="workflow-pedigree-waiting")

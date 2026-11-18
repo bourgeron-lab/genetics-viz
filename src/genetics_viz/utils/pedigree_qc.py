@@ -578,6 +578,22 @@ def suggest(
             continue
         why = [c.describe()]
         flag = (c.code,)
+        if c.code == "RELATED_BEYOND_PEDIGREE" and c.observed == "parent-offspring":
+            # Which one is the parent the genotypes cannot say: both ways are
+            # offered, each where the child lacks a parent of that sex.
+            for parent, child in ((a, b), (b, a)):
+                pm_, cm = draft.get(parent), draft.get(child)
+                sex = norm_sex(pm_.sex) if pm_ is not None else UNKNOWN
+                r = FATHER if sex == MALE else MOTHER if sex == FEMALE else None
+                if r is None or cm is None or cm.parent(r) != UNKNOWN:
+                    continue
+                offer(Suggestion(
+                    key=f"parent:{parent}:{child}",
+                    title=f"Make {parent} {child}'s {r}",
+                    why=why, flags=flag,
+                    change=lambda d, x=child, rr=r, pp=parent: d.set_parent(x, rr, pp),
+                    caution="The genotypes do not say which of the two is the parent.",
+                ))  # fmt: skip
         if c.code == "RELATED_BEYOND_PEDIGREE" and c.observed == "second-degree":
             for r in (FATHER, MOTHER):
                 if ma.parent(r) == UNKNOWN and mb.parent(r) == UNKNOWN:
@@ -856,3 +872,77 @@ def suggest_across(
             ))  # fmt: skip
     candidates.sort(key=lambda s: (s.after.contradictions, s.after.unexplained))  # type: ignore[union-attr]
     return candidates[:MAX_SWAPS]
+
+
+# ---------------------------------------------------------------------------
+# Merging families
+# ---------------------------------------------------------------------------
+
+#: Observed classes that make two families one: first and second degree.
+#: A duplicate is the same person twice, not a reason to merge.
+MERGE_CLASSES = ("parent-offspring", "full-sibs", "first-degree", "second-degree")
+
+
+def merged_context(
+    families: Dict[str, "QcContext"],
+    cohort_pairs: Iterable[PairRow],
+    target: str,
+) -> "QcContext":
+    """The families' QC as the merged family's: their pairs, and the cohort's
+    pairs between any two of them, all read as pairs of ``target``."""
+    fids = set(families)
+    pairs: List[PairRow] = []
+    for ctx in families.values():
+        pairs += [replace(p, family_a=target, family_b=target) for p in ctx.pairs]
+    seen: Set[frozenset] = set()
+    for p in cohort_pairs:
+        key = frozenset((p.sample_a, p.sample_b))
+        if (
+            p.family_a != p.family_b
+            and {p.family_a, p.family_b} <= fids
+            and key not in seen
+        ):
+            seen.add(key)
+            pairs.append(replace(p, family_a=target, family_b=target))
+    return QcContext(
+        pairs=pairs,
+        samples=[s for ctx in families.values() for s in ctx.samples],
+        flags=[f for ctx in families.values() for f in ctx.flags],
+    )
+
+
+@dataclass(frozen=True)
+class MergeGroup:
+    """Families joined by first- or second-degree relatives across them."""
+
+    families: Tuple[str, ...]
+    pairs: Tuple[PairRow, ...]
+
+    def evidence(self) -> List[str]:
+        return [
+            f"{p.sample_a} ({p.family_a}) – {p.sample_b} ({p.family_b}):"
+            f" observed {p.observed}"
+            + (f" (kinship {p.kinship:.3f})" if p.kinship is not None else "")
+            for p in self.pairs
+        ]
+
+
+def merge_candidates(cohort_pairs: Iterable[PairRow]) -> List[MergeGroup]:
+    """Groups of families whose members are observed close relatives across them.
+
+    Families are joined through every pair of class :data:`MERGE_CLASSES`
+    (the cohort's ``pairs.tsv`` holds only cross-family pairs observed
+    related). Largest groups first, then the most pairs.
+    """
+    links = [p for p in cohort_pairs if p.cross_family and p.observed in MERGE_CLASSES]
+    families = sorted({f for p in links for f in (p.family_a, p.family_b)})
+    groups = _components(families, ((p.family_a, p.family_b) for p in links))
+    out = [
+        MergeGroup(
+            tuple(g),
+            tuple(p for p in links if p.family_a in g and p.family_b in g),
+        )
+        for g in groups
+    ]
+    out.sort(key=lambda g: (-len(g.families), -len(g.pairs), g.families))
+    return out
