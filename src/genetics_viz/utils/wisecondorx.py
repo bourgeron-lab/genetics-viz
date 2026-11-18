@@ -19,6 +19,22 @@ def _load_wisecondorx_config() -> Dict[str, Any]:
 WISECONDORX_CONFIG: Dict[str, Any] = _load_wisecondorx_config()
 
 
+def past_permissive() -> pl.Expr:
+    """True for a call past the permissive gain or loss thresholds.
+
+    Needs float ``ratio`` and ``zscore`` columns. A long segment can reach a
+    z-score of 5 with no copy-number change (log2 ratio 0.005), so both count.
+    """
+    r, z = pl.col("ratio"), pl.col("zscore")
+    gain, loss = (
+        WISECONDORX_CONFIG["permissive_gain"],
+        WISECONDORX_CONFIG["permissive_loss"],
+    )
+    return ((r >= gain["ratio_threshold"]) & (z >= gain["zscore_threshold"])) | (
+        (r <= loss["ratio_threshold"]) & (z <= loss["zscore_threshold"])
+    )
+
+
 def infer_sv_type(row_data: Dict[str, Any]) -> str:
     """Infer SV type (dup/del) from row data.
 
