@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A pedigree edit was refused for any cohort ghfc-ngs had ever run**, with "A ghfc-ngs run of … is in progress". The editor took the presence of `.ghfc-ngs.progress.json` for a live run, but the pipeline never removes that file: a finished run leaves `success` or `failed` in it, and a killed one `running` with an update time that stops. A run now counts as live only when the file says `running` and was updated in the last 10 minutes (the pipeline rewrites it every 30 s). The refusal names the run, its Slurm job and its last update.
+
 ## [0.41.0] - 2026-11-18
 
 ### Added

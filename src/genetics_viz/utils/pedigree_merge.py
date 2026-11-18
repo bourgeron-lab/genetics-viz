@@ -40,7 +40,6 @@ from .pedigree_edit import (
     INDEX_HEADER,
     LOCK_FILENAME,
     LOG_HEADER,
-    PROGRESS_FILENAME,
     RERUN_CLEAN,
     RERUN_NORMAL,
     EditRecord,
@@ -60,6 +59,7 @@ from .pedigree_edit import (
     edits_dir,
     family_file_text,
     index_file,
+    live_run,
     outside_ids,
     problems,
 )
@@ -371,10 +371,10 @@ def _write_merge(
         try:
             for s in merge.sources:
                 for f in s.files:
-                    if (f.path.parent / PROGRESS_FILENAME).exists():
+                    if running := live_run(f.path.parent):
                         raise PedigreeEditError(
                             f"A ghfc-ngs run of {_cohort_name(f.path)} is in"
-                            " progress: save once it has finished"
+                            f" progress ({running}): save once it has finished"
                         )
                     current = f.path.read_text(encoding="utf-8")
                     if hashlib.sha256(current.encode("utf-8")).hexdigest() != f.sha256:

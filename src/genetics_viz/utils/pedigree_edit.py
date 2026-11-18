@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import json
+import logging
 import fcntl
 import hashlib
 import os
@@ -55,8 +57,13 @@ ROLE_SEX = {FATHER: MALE, MOTHER: FEMALE}
 #: A dummy added by the editor: ``DUMMY_<child>_<path>``.
 NEW_DUMMY_ID = re.compile(rf"^{DUMMY_PREFIX}\S+_[FM]+$")
 
-#: Present while a ghfc-ngs run of the cohort is live (vault ``Running the pipeline``).
+#: ghfc-ngs's live view of a run (``COHORT_STATE.md``, "Live progress"). It is
+#: never removed: a run that ends writes ``success`` or ``failed`` into it, and
+#: a killed one leaves ``running`` with an ``updated_at`` that stops moving.
 PROGRESS_FILENAME = ".ghfc-ngs.progress.json"
+#: The pipeline rewrites the file every 30 s; past this, a ``running`` one is
+#: a dead run's (the shared filesystem may lag a little behind).
+LIVE_RUN_MINUTES = 10
 EDITS_DIRNAME = "pedigree_edits"
 LOCK_FILENAME = ".pedigree_edit.lock"
 
@@ -77,6 +84,45 @@ ERROR, WARNING = "error", "warning"
 #: Missing-parent spellings the app accepts (``models.MISSING_PARENT``) but
 #: ghfc-ngs does not: it reads them as a parent's ID.
 _FLOAT_MISSING = frozenset({"0.0", "-9.0"})
+
+
+logger = logging.getLogger(__name__)
+
+
+def live_run(cohort_dir: Path, now: Optional[datetime] = None) -> Optional[str]:
+    """What ghfc-ngs run of the cohort is going on, worded; ``None`` when none is.
+
+    A run is live when ``.ghfc-ngs.progress.json`` says ``running`` and was
+    updated in the last :data:`LIVE_RUN_MINUTES`. The file stays after every
+    run, so its presence alone says nothing. An unreadable file is not a run.
+    """
+    path = Path(cohort_dir) / PROGRESS_FILENAME
+    try:
+        progress = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        logger.warning("Unreadable %s: taken as no run going on", path, exc_info=True)
+        return None
+    if not isinstance(progress, dict) or progress.get("status") != "running":
+        return None
+    try:
+        updated = datetime.fromisoformat(str(progress.get("updated_at")))
+    except ValueError:
+        return None
+    if updated.tzinfo is None:
+        updated = updated.astimezone()
+    now = now or datetime.now().astimezone()
+    age = (now - updated).total_seconds() / 60
+    if age > LIVE_RUN_MINUTES:
+        return None
+    parts = []
+    if progress.get("run_name"):
+        parts.append(f"run {progress['run_name']}")
+    if progress.get("slurm_job_id"):
+        parts.append(f"Slurm job {progress['slurm_job_id']}")
+    parts.append(f"updated {max(age, 0):.0f} min ago")
+    return ", ".join(parts)
 
 
 class PedigreeEditError(Exception):
@@ -1029,10 +1075,10 @@ def _write_edits(
         try:
             for s in sources:
                 for f in s.files:
-                    if (f.path.parent / PROGRESS_FILENAME).exists():
+                    if running := live_run(f.path.parent):
                         raise PedigreeEditError(
                             f"A ghfc-ngs run of {_cohort_name(f.path)} is in"
-                            " progress: save once it has finished"
+                            f" progress ({running}): save once it has finished"
                         )
                     current = f.path.read_text(encoding="utf-8")
                     if hashlib.sha256(current.encode("utf-8")).hexdigest() != f.sha256:
