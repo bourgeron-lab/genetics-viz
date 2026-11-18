@@ -114,3 +114,44 @@ async def test_the_editor_makes_the_cohorts_agree(user, data_dir):
     user.find(marker="ped-save").click()
     nohead = data_dir / "cohorts" / "NOHEAD" / "NOHEAD.pedigree.tsv"
     await wait_for(lambda: "1001\tS3\tS1\tS2" in nohead.read_text())
+
+
+async def test_held_families_from_the_run_record(user, data_dir, monkeypatch):
+    datagen.add_held_families(data_dir)
+    await login(user, "curator")
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see(marker="family-held", retries=SLOW)
+    await user.should_see("ghfc-ngs held this family in DEMO's run of 2026-10-01")
+    await user.should_see(
+        "DEMO differs from NOHEAD: S3: father S1 -> 0, mother S2 -> 0"
+    )
+    # A cached parameters reference: the Workflow tab reads it, not GitHub.
+    import sys
+    from datetime import datetime
+
+    docs = sys.modules["genetics_viz.utils.ghfc_ngs_docs"]
+    docs._cached = docs.FetchedDoc(
+        markdown="# Stub reference", error=None, fetched_at=datetime.now()
+    )
+    tables = capture_tables(monkeypatch)
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=20)
+    open_tab(user, "cohort-tabs", "Workflow")
+    await user.should_see("Pipeline status", retries=SLOW)
+    await user.should_see(marker="workflow-held-families", retries=SLOW)
+    await user.should_see("differs from NOHEAD: S3: father S1 -> 0, mother S2 -> 0")
+    families = next(t for t in tables if "Structure" in t["columns"])
+    table = families["table"]
+    await wait_for(lambda: any(r.get("Pedigree_badges") for r in table.rows))
+    rows = {r["FID"]: r for r in table.rows}
+    assert rows["1001"]["Pedigree_badges"][0]["label"] == "Held"
+
+
+async def test_readers_see_which_families_were_held(user, data_dir):
+    datagen.add_held_families(data_dir)
+    await login(user, "reader")
+    await user.open("/cohort/DEMO/family/1001")
+    await user.should_see(marker="family-held", retries=SLOW)
+    await user.should_not_see(
+        "DEMO differs from NOHEAD: S3: father S1 -> 0, mother S2 -> 0"
+    )

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a phenotype that differs between cohorts, which a cohort per phenotype explains (information only).
 
   Every role sees, under the family's title, where else it is listed, with links. Curators also see what differs, and can mark a finding as explained with a note: a later change of the rows raises it again. Curators also get a warning on the home page with a list of every finding, the cohort's findings on its Workflow tab, a badge in the Families tab's Pedigree column, and "Check" on the family status for a high finding.
+- **Families ghfc-ngs held are shown.** From ghfc-ngs#66, a run leaves a family as it was when another cohort lists it with other parents, sex or members, and records it in the run record. The cohort's Workflow tab lists them, with what differs for curators; the family page says which cohort's run held it; curators get a "Held" badge in the Families tab's Pedigree column.
 - **The pedigree editor opens a family whose cohorts disagree.** It shows each cohort's rows side by side and asks which to edit; saving writes them into every cohort, so ghfc-ngs builds the family alike. A cohort's own phenotypes are kept unless the edit changes one. The edit lists what changes in each cohort (`NOHEAD: S3: father 0 -> S1, mother 0 -> S2`). Before, the editor refused such a family, even when only the phenotype differed.
 
 ### Fixed

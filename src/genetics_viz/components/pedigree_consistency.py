@@ -278,3 +278,115 @@ def render_cohort_findings(store: Any, cohort_name: str) -> None:
 def render_all_findings(store: Any) -> None:
     """The data directory's findings, for the consistency page."""
     FindingsPanel(store, lambda c: list(c.findings), _list)
+
+
+# ---------------------------------------------------------------------------
+# Families ghfc-ngs held (the run record's pedigree_conflicts)
+# ---------------------------------------------------------------------------
+
+
+def last_run_held(cohort: Any) -> Optional[Any]:
+    """Blocking: the cohort's last run record when it recorded held families
+    (``None`` when not recorded or no record)."""
+    from genetics_viz.utils.cohort_state import read_cohort_state
+
+    try:
+        state = read_cohort_state(cohort.pedigree_file.parent)
+    except Exception:
+        logger.warning("Failed to read %s's run record", cohort.name, exc_info=True)
+        return None
+    run = state.last_run if state is not None else None
+    return run if run is not None and run.held_families is not None else None
+
+
+def _run_date(run: Any) -> str:
+    return run.started_at.strftime("%Y-%m-%d") if run.started_at else "?"
+
+
+def render_held_families(cohort: Any) -> None:
+    """Workflow tab: the families the cohort's last ghfc-ngs run held.
+
+    Every role sees which; curators also see what differs.
+    """
+    curator = can_write()
+    box = ui.column().classes("w-full min-w-0 gap-1")
+
+    async def load() -> None:
+        run = await asyncio.to_thread(last_run_held, cohort)
+        if run is None or not run.held_families:
+            return
+        held = run.held_families
+        with (
+            box,
+            ui.column()
+            .classes("w-full gap-1 border border-amber-300 rounded-md p-3 bg-amber-50")
+            .mark("workflow-held-families"),
+        ):
+            ui.label(
+                f"ghfc-ngs held {len(held)} famil{'y' if len(held) == 1 else 'ies'}"
+                f" in its run of {_run_date(run)}: another cohort lists"
+                f" {'it' if len(held) == 1 else 'them'} with other rows, so"
+                " their family-level results were left as they were. Make the"
+                " cohorts agree (pedigree editor), and the next run builds them."
+            ).classes("text-sm font-semibold text-amber-900")
+            for h in held:
+                with ui.row().classes("items-baseline gap-2 wrap"):
+                    ui.link(h.family, family_href(cohort.name, h.family)).classes(
+                        "text-sm"
+                    )
+                    if curator:
+                        for line in h.describe():
+                            ui.label(line).classes("text-xs font-mono text-gray-800")
+                    else:
+                        ui.label("differs from " + ", ".join(h.cohorts)).classes(
+                            "text-xs text-gray-700"
+                        )
+
+    ui.timer(0.1, load, once=True)
+
+
+def render_family_held(store: Any, family_id: str) -> None:
+    """Family pages: the cohorts whose last run held this family."""
+    curator = can_write()
+    box = ui.column().classes("w-full gap-0")
+
+    def find() -> List[Any]:
+        out = []
+        for cohort in store.cohorts.values():
+            if family_id not in cohort.families:
+                continue
+            run = last_run_held(cohort)
+            for h in (run.held_families or []) if run is not None else []:
+                if h.family == family_id:
+                    out.append((cohort.name, run, h))
+        return out
+
+    async def load() -> None:
+        try:
+            held = await asyncio.to_thread(find)
+        except Exception:
+            logger.warning("Failed to read the held families", exc_info=True)
+            return
+        if not held:
+            return
+        with (
+            box,
+            ui.column()
+            .classes(
+                "w-full gap-1 border border-amber-300 rounded-md p-2 mb-3 bg-amber-50"
+            )
+            .mark("family-held"),
+        ):
+            for cohort_name, run, h in held:
+                ui.label(
+                    f"ghfc-ngs held this family in {cohort_name}'s run of"
+                    f" {_run_date(run)}: its family-level results were left as"
+                    " they were, built from another cohort's rows."
+                ).classes("text-sm text-amber-900")
+                if curator:
+                    for line in h.describe():
+                        ui.label(f"{cohort_name} {line}").classes(
+                            "text-xs font-mono text-gray-800 pl-2"
+                        )
+
+    ui.timer(0.1, load, once=True)

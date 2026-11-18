@@ -11,7 +11,10 @@ from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.cell_line_note import family_cohorts
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.family_status import render_family_status
-from genetics_viz.components.pedigree_consistency import render_family_banner
+from genetics_viz.components.pedigree_consistency import (
+    render_family_banner,
+    render_family_held,
+)
 from genetics_viz.components.header import create_header
 from genetics_viz.components.family_tabs import (
     TAB_LABELS,
@@ -155,6 +158,7 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                     render_report_buttons(store.data_dir, family_id, family)
 
             render_family_banner(store, family_id, None)
+            render_family_held(store, family_id)
 
             # Data availability panel
             with ui.card().classes("w-full mb-4"):

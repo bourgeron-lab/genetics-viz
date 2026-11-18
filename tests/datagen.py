@@ -1922,6 +1922,25 @@ def add_cohort_disagreements(data: Path) -> None:
     )
 
 
+#: DEMO's last run held 1001, which NOHEAD lists with S3's parents at 0
+#: (ghfc-ngs ``pedigree_conflicts``; pair it with add_cohort_disagreements).
+HELD_FAMILIES = [
+    {
+        "family": "1001",
+        "cohorts": ["NOHEAD"],
+        "changes": {"NOHEAD": ["S3: father S1 -> 0, mother S2 -> 0"]},
+    }
+]
+
+
+def add_held_families(data: Path, cohort: str = "DEMO") -> None:
+    """Record :data:`HELD_FAMILIES` in the cohort's last run. Opt-in."""
+    path = data / "cohorts" / cohort / ".ghfc-ngs.state.json"
+    state = json.loads(path.read_text())
+    state["last_run"]["pedigree_conflicts"] = HELD_FAMILIES
+    path.write_text(json.dumps(state))
+
+
 def add_gene_case(data: Path) -> None:
     """Cohort OTHER beside DEMO, and curation of the variant they share.
 

@@ -67,7 +67,10 @@ from genetics_viz.utils.cohort_state import read_cohort_state
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.components.family_status import render_family_status_summary
-from genetics_viz.components.pedigree_consistency import render_cohort_findings
+from genetics_viz.components.pedigree_consistency import (
+    render_cohort_findings,
+    render_held_families,
+)
 from genetics_viz.utils import family_status as fs
 from genetics_viz.utils.family_rows import (
     DIAG_ORDER,
@@ -156,6 +159,7 @@ def _render_workflow_tab(cohort: Any) -> None:
             # status chip and the step summary.
             render_status_panel(cohort, title=None)
 
+        render_held_families(cohort)
         if can_write():
             render_cohort_findings(get_data_store(), cohort.name)
             render_waiting_families(cohort)
