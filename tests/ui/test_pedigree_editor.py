@@ -29,17 +29,21 @@ def _one(user, marker: str):
     return element
 
 
+#: Lazy tabs load off-thread: generous waits, for a busy CI runner.
+SLOW = 200
+
+
 async def open_qc(user, username: str, fid: str = "1001") -> None:
     await login(user, username)
     await user.open(f"/cohort/DEMO/family/{fid}")
-    await user.should_see(f"Family: {fid}", retries=10)
+    await user.should_see(f"Family: {fid}", retries=SLOW)
     open_tab(user, "family-tabs", "Sample QC")
-    await user.should_see("Sex and karyotype", retries=30)
+    await user.should_see("Sex and karyotype", retries=SLOW)
 
 
 async def open_editor(user) -> None:
     user.find(marker="pedigree-edit").click()
-    await user.should_see(marker="pedigree-editor", retries=30)
+    await user.should_see(marker="pedigree-editor", retries=SLOW)
 
 
 async def test_readers_get_no_editor(user):
@@ -78,10 +82,11 @@ async def test_a_curator_gives_a_child_a_dummy_father_and_saves(user, data_dir):
 
     # The page reloads on the new pedigree: the member card has the dummy, and
     # the Sample QC tab says which results still read the older one.
-    await user.should_see("Family: 1001", retries=30)
-    await user.should_see("DUMMY_S3_F", retries=10)
+    await user.should_see("Family: 1001", retries=SLOW)
+    await user.should_see("DUMMY_S3_F", retries=SLOW)
     open_tab(user, "family-tabs", "Sample QC")
-    await user.should_see(marker="pedigree-pending", retries=30)
+    await user.should_see("Sex and karyotype", retries=SLOW)
+    await user.should_see(marker="pedigree-pending", retries=SLOW)
     await user.should_see("Computed on an older pedigree: Sample QC")
     await user.should_see("Pedigree last edited on")
 
@@ -126,7 +131,7 @@ async def test_the_history_restores_the_rows_before_an_edit(
     pe.save_pedigree_edit(source, draft, user="alice", comment="non-paternity")
 
     await open_qc(user, "curator")
-    await user.should_see("Pedigree last edited on", retries=30)
+    await user.should_see("Pedigree last edited on", retries=SLOW)
     await open_editor(user)
     _one(user, "ped-history").set_value(True)
     await user.should_see("non-paternity", retries=10)
@@ -250,7 +255,7 @@ async def test_a_swap_with_another_family_is_saved_for_both(user, data_dir):
     await user.should_see("6 samples", retries=10)
     open_tab(user, "cohort-tabs", "Workflow")
     # The tab warms its caches off-thread first: slow on a busy CI runner.
-    await user.should_see("Pipeline status", retries=200)
+    await user.should_see("Pipeline status", retries=SLOW)
     await user.should_see(marker="workflow-pedigree-waiting", retries=100)
     await user.should_see("--clean-stale-families for 1002, AU-X-1")
 
@@ -311,7 +316,7 @@ async def test_two_families_merged_under_a_new_id(user, data_dir):
     user.find(marker="ped-save").click()
 
     # The merged family's page opens, on the new pedigree.
-    await user.should_see("Family: FAMX", retries=30)
+    await user.should_see("Family: FAMX", retries=SLOW)
     text = (data_dir / DEMO).read_text()
     assert "FAMX\tS4" in text and "FAMX\tS6" in text and "AU-X-1\t" not in text
     acks = (data_dir / "validations" / "sampleqc.tsv").read_text()
@@ -327,7 +332,7 @@ async def test_two_families_merged_under_a_new_id(user, data_dir):
     await user.open("/cohort/DEMO")
     await user.should_see("6 samples", retries=10)
     open_tab(user, "cohort-tabs", "Workflow")
-    await user.should_see("Pipeline status", retries=200)
+    await user.should_see("Pipeline status", retries=SLOW)
     await user.should_see(marker="workflow-orphaned-families", retries=100)
     await user.should_see("AU-X-1 → FAMX", retries=10)
     await user.should_see(marker="workflow-pedigree-waiting")
