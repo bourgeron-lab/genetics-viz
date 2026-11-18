@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.41.2] - 2026-11-18
 
 ### Fixed
 - **The family report's aneuploidy section counted WisecondorX segments below threshold**, so a chromosome-long segment with no copy-number change read as a whole-chromosome gain or loss: family 88021200005 showed +14 for C0XYE8K (log2 ratio +0.005, z 5.0) and −21 for C0XYE8L (log2 ratio −0.015, z −5.2). The report now counts only calls past the permissive thresholds, as the SVs tabs and the cohort SVs tab's whole-chromosome events do.
