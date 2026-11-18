@@ -199,3 +199,81 @@ def test_qc_context_reads_upd_flags():
     assert ctx.upd_pairs == [("D", "K")]
     assert ctx.fit(draft) == pq.Fit(0, 0)
     assert pq.QcContext().fit(draft) is None
+
+
+# --- Across families ---------------------------------------------------------------
+
+
+def cross(fa: str, a: str, fb: str, b: str, observed: str) -> PairRow:
+    phi, ratio = OBSERVED[observed]
+    return PairRow(fa, a, fb, b, phi, ratio, 16000, None, None, observed, None, None)
+
+
+def two_trios():
+    """Families A (P1, P2, C) and B (Q1, Q2, R) whose children were swapped."""
+    a = pe.PedigreeDraft(
+        "A",
+        [pe.Member("P1", "0", "0", "1", "1"), pe.Member("P2", "0", "0", "2", "1"),
+         pe.Member("C", "P1", "P2", "1", "2")],
+    )  # fmt: skip
+    b = pe.PedigreeDraft(
+        "B",
+        [pe.Member("Q1", "0", "0", "1", "1"), pe.Member("Q2", "0", "0", "2", "1"),
+         pe.Member("R", "Q1", "Q2", "1", "2")],
+    )  # fmt: skip
+    qa = pq.QcContext(
+        pairs=[
+            cross("A", "P1", "A", "P2", "unrelated"),
+            cross("A", "P1", "A", "C", "unrelated"),
+            cross("A", "P2", "A", "C", "unrelated"),
+        ],
+        flags=[
+            FlagRow("cohort", "A,B", "C", "Q1", "SAMPLE_SWAP_CANDIDATE", "high", "")
+        ],
+        cross_pairs=[
+            cross("A", "C", "B", "Q1", "parent-offspring"),
+            cross("A", "C", "B", "Q2", "parent-offspring"),
+            cross("B", "R", "A", "P1", "parent-offspring"),
+            cross("B", "R", "A", "P2", "parent-offspring"),
+        ],
+    )
+    qb = pq.QcContext(
+        pairs=[
+            cross("B", "Q1", "B", "Q2", "unrelated"),
+            cross("B", "Q1", "B", "R", "unrelated"),
+            cross("B", "Q2", "B", "R", "unrelated"),
+        ]
+    )
+    return a, b, qa, qb
+
+
+def test_the_related_families_come_from_the_cross_pairs():
+    _, _, qa, _ = two_trios()
+    assert qa.related_families() == ["B"]
+
+
+def test_a_swap_between_families_is_offered_when_it_explains_every_pair():
+    a, b, qa, qb = two_trios()
+    both = qa.with_family(qb, "A", "B")
+    before = pq.fit(pq.combined_draft([a, b]), both.pairs)
+    assert before.contradictions == 4  # C and R are each nobody's child
+    best = pq.suggest_across(a, b, both)
+    assert best[0].title == "Swap C (A) and R (B)"
+    assert best[0].after == pq.Fit(0, 0)
+    assert best[0].flags == ("SAMPLE_SWAP_CANDIDATE",)
+    best[0].apply(a, b)
+    assert a.get("R").father == "P1" and b.get("C").father == "Q1"
+
+
+def test_a_move_places_the_sample_beside_its_relative():
+    # B's child R was never sequenced: C is that child.
+    a, b, qa, qb = two_trios()
+    b.members = b.members[:2]
+    qa.cross_pairs = qa.cross_pairs[:2]
+    qb.pairs = qb.pairs[:1]
+    both = qa.with_family(qb, "A", "B")
+    titles_ = [s.title for s in pq.suggest_across(a, b, both)]
+    assert "Move C to B, as Q1's child" in titles_
+    s = next(s for s in pq.suggest_across(a, b, both) if s.title.endswith("Q1's child"))
+    # A then holds P1 and P2 only; C's pairs with Q2 still want a mother.
+    assert s.after.contradictions == 0

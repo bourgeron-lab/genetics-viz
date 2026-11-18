@@ -1110,6 +1110,15 @@ def render_sample_qc_tab(
                 samples=qc.sample_rows(),
                 # Acknowledged ones too: a UPD_CANDIDATE still explains its pair.
                 flags=all_flags,
+                # The cohort's pairs with other families: where a sample may
+                # belong instead (the editor's "Another family").
+                cross_pairs=[
+                    p
+                    for p in pair_rows(
+                        state["cohort_qc"].pairs if state["cohort_qc"] else None
+                    )
+                    if p.cross_family and family_id in (p.family_a, p.family_b)
+                ],
             ),
             on_saved=pedigree_saved,
         )

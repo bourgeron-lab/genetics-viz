@@ -216,3 +216,38 @@ async def test_sample_qc_suggests_the_karyotypes_sex(user):
     await user.should_see("S6: karyotype XY")
     user.find(marker="ped-apply-sex:S6").click()
     await user.should_see("S6: sex 2 -> 1", retries=10)
+
+
+async def test_a_swap_with_another_family_is_saved_for_both(user, data_dir):
+    """AU-X-1 and 1002 are both in DEMO only: one edit can hold both."""
+    await open_qc(user, "curator", "AU-X-1")
+    await open_editor(user)
+    _one(user, "ped-other-family").set_value("1002")
+    user.find(marker="ped-other-open").click()
+    await user.should_see("Edit the pedigrees of families AU-X-1 and 1002", retries=30)
+    user.find(marker="ped-swap-S6-S4").click()
+    await user.should_see("S4: added", retries=10)
+    await user.should_see("S6: added")
+    await user.should_see(marker="ped-rerun-1002")
+    await user.should_see("ghfc-ngs needs --clean-stale-families")
+    user.find(marker="ped-comment").type("S6 and S4 were swapped at the lab")
+    await wait_for(lambda: _one(user, "ped-save").enabled)
+    user.find(marker="ped-save").click()
+    await wait_for(lambda: len(pe.read_edit_index(data_dir)) == 2)
+    text = (data_dir / DEMO).read_text()
+    assert "AU-X-1\tS4\tS5\t0\t2\t1" in text and "1002\tS6\t0\t0\t2.0\t-9.0" in text
+    assert {r.rerun for r in pe.read_edit_index(data_dir)} == {pe.RERUN_CLEAN}
+
+    # The cohort's Workflow tab lists both, for the clean. A fresh cached
+    # parameters reference: the tab reads it instead of fetching GitHub.
+    import sys
+
+    docs = sys.modules["genetics_viz.utils.ghfc_ngs_docs"]
+    docs._cached = docs.FetchedDoc(
+        markdown="# Stub reference", error=None, fetched_at=datetime.now()
+    )
+    await user.open("/cohort/DEMO")
+    await user.should_see("6 samples", retries=10)
+    open_tab(user, "cohort-tabs", "Workflow")
+    await user.should_see(marker="workflow-pedigree-waiting", retries=30)
+    await user.should_see("--clean-stale-families for 1002, AU-X-1")
