@@ -1865,6 +1865,34 @@ GENE_CASE_DIAGNOSTICS = [
 ]  # fmt: skip
 
 
+FAMILY_STATUS_COLUMNS = ["FID", "Status", "Comment", "User", "Timestamp"]
+
+#: 1001 in review, then solved; 1002 not analysable; AU-X-1 left unreviewed.
+FAMILY_STATUSES = [
+    ["1001", "in_review", "", "curator", "2026-10-04T10:00:00"],
+    ["1001", "solved", "SHANK3 de novo", "curator", "2026-10-05T10:00:00"],
+    [
+        "1002",
+        "not_analysable",
+        "tube mix-up at the centre",
+        "curator",
+        "2026-10-06T10:00:00",
+    ],
+]
+
+
+def add_family_statuses(data: Path) -> None:
+    """Curator statuses for DEMO's families (:data:`FAMILY_STATUSES`).
+
+    Opt-in: it changes the home card, the Families tab and the report. 1001 is
+    solved with no pathogenic diagnostic unless :func:`add_report_case` adds
+    one, and its QC tables (an open ``NOT_PARENT``) are written after it.
+    """
+    write_tsv(
+        data / "reports" / "family_status.tsv", FAMILY_STATUS_COLUMNS, FAMILY_STATUSES
+    )
+
+
 def add_gene_case(data: Path) -> None:
     """Cohort OTHER beside DEMO, and curation of the variant they share.
 

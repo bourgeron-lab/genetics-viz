@@ -5,6 +5,19 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **A review status per family**, set by curators and shown to every role: not reviewed (the default), in review, candidate, partially solved, solved, unsolved, not analysable. On both family pages a chip beside "See report" shows it, with who set it and when. A curator clicks it to change the status, add a comment (shown to curators only) and read the history.
+  - **The Families tab opens on it**: a Status column first, with a filter, and above the table a bar of the shown families by status and the yield ("Solved 12 of 40 reviewed (30%) · 83 analysable"). The yield leaves out families not analysable, and families with no affected member that nobody gave a status.
+  - **The home page's cohort cards** show the same bar and yield.
+  - **The family report** states the status under "Curator conclusion", without the comment.
+- **A family to look at again is marked**, without its status changing: "Reopened" when its pedigree was edited after the status (waiting for ghfc-ngs, or ready to review), "Check" when a diagnostic was recorded after it, a pathogenic diagnostic contradicts it (solved without one, or one standing on a family not marked solved), a high QC flag was written after it, or steps were rerun for the family after it (family pages only). The tooltip says why; saving the status again clears the reasons about dates. The Families filter's "Reopened" and "Needs re-review" options list these families, and curators get a "to recheck" count on the Families tab.
+- **Merging families moves their status** with the rest of the curation.
+
+### Changed
+- **The home page reads the diagnostics off the event loop**: the per-phenotype table read every diagnostic file once per cohort while the page was built.
+
 ## [0.41.2] - 2026-11-18
 
 ### Fixed

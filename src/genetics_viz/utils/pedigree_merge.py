@@ -89,6 +89,7 @@ def curation_files(data_dir: Path) -> List[Path]:
         data_dir / "validations" / "sampleqc.tsv",
         data_dir / "notes" / "notes.tsv",
         data_dir / "reports" / "family_summaries.tsv",
+        data_dir / "reports" / "family_status.tsv",
     ]
 
 

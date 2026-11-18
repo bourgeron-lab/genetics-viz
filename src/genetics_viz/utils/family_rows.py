@@ -15,9 +15,9 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 import polars as pl
 
 from . import denovo
+from . import family_status as fs
 from .ancestry import ID_COLUMNS, NULL_VALUES, find_cohort_ancestry_files
-from .cohort_state import read_cohort_state
-from .pedigree_edit import EditStatus, edit_statuses, read_edit_index
+from .pedigree_edit import EditStatus
 from .pedigree_labels import normalize_pheno
 from .report_summaries import FamilySummary, read_family_summaries
 from .roh import GRADES, find_cohort_roh_files, read_roh_table
@@ -50,7 +50,16 @@ class FamilyFacts:
     summaries: Dict[str, FamilySummary] = field(default_factory=dict)
     #: FID -> its last pedigree edit and whether it awaits a run. Curators only.
     pedigree: Dict[str, EditStatus] = field(default_factory=dict)
-    #: Which tables were found: ``ancestry``, ``roh``, ``denovo``.
+    #: FID -> standing status record (every role).
+    statuses: Dict[str, fs.StatusRecord] = field(default_factory=dict)
+    #: FID -> last pedigree edit, for the status's reasons (every role).
+    edits: Dict[str, EditStatus] = field(default_factory=dict)
+    #: FID -> standing diagnostics, for the status's reasons.
+    status_diagnostics: Dict[str, fs.FamilyDiagnostics] = field(default_factory=dict)
+    #: FID -> when the cohort QC tables holding an open high flag were written.
+    qc_high_written: Dict[str, float] = field(default_factory=dict)
+    #: Which tables were found: ``ancestry``, ``roh``, ``denovo``; ``status``
+    #: once the statuses are read.
     found: Set[str] = field(default_factory=set)
 
 
@@ -154,21 +163,37 @@ def load_family_facts(cohort: Any, data_dir: Path, curator: bool) -> FamilyFacts
                 )
     except Exception:
         logger.warning("Failed to read %s's de novo tables", cohort.name, exc_info=True)
+    try:
+        facts.edits = fs.cohort_edits(cohort, data_dir)
+    except Exception:
+        logger.warning("Failed to read the pedigree edits", exc_info=True)
+    try:
+        facts.statuses = fs.family_statuses(data_dir)
+        facts.status_diagnostics = fs.diagnostics_by_family(data_dir)
+        facts.qc_high_written = fs.cohort_qc_high_written(cohort, data_dir)
+        facts.found.add("status")
+    except Exception:
+        logger.warning("Failed to read the family statuses", exc_info=True)
     if curator:
+        facts.pedigree = facts.edits
         try:
             facts.summaries = read_family_summaries(data_dir)
         except Exception:
             logger.warning("Failed to read the family conclusions", exc_info=True)
-        try:
-            state = read_cohort_state(cohort.pedigree_file.parent)
-            last_run = state.last_run if state is not None else None
-            facts.pedigree = edit_statuses(
-                read_edit_index(data_dir),
-                last_run.started_at if last_run is not None else None,
-            )
-        except Exception:
-            logger.warning("Failed to read the pedigree edits", exc_info=True)
     return facts
+
+
+def family_state(family: Any, facts: FamilyFacts) -> fs.FamilyState:
+    """The family's status and reasons to look again, from the facts read."""
+    fid = family.family_id
+    return fs.family_state(
+        fid,
+        facts.statuses.get(fid),
+        edit=facts.edits.get(fid),
+        diagnostics=facts.status_diagnostics.get(fid),
+        qc_high_written=facts.qc_high_written.get(fid),
+        affected=any(is_affected(s.phenotype) for s in family.samples),
+    )
 
 
 def grade_rank(category: Optional[str]) -> int:
@@ -279,6 +304,10 @@ def family_row(
     affected = sum(1 for s in members if is_affected(s.phenotype))
     row: Dict[str, Any] = {
         "FID": fid,
+        **status_fields(
+            family_state(family, facts) if "status" in facts.found else None,
+            curator,
+        ),
         "Structure": label,
         "_structure": kind,
         "Members": len(members),
@@ -411,6 +440,20 @@ def family_row(
     return row
 
 
+def status_fields(state: Optional[fs.FamilyState], curator: bool) -> Dict[str, Any]:
+    """The Status cell; empty until the statuses are read."""
+    if state is None:
+        return {"Status": "", "Status_badges": [], "_status_rank": -1,
+                "_status_cats": []}  # fmt: skip
+    return {
+        "Status": fs.status_label(state.status),
+        "Status_badges": fs.status_badges(state, curator),
+        # Review order, then those to look at again first.
+        "_status_rank": fs.status_rank(state.status) * 2 + (not state.reasons),
+        "_status_cats": fs.filter_categories(state),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Columns and filters
 # ---------------------------------------------------------------------------
@@ -475,6 +518,7 @@ def family_columns(
     from .roh import GRADES
 
     columns: List[Dict[str, Any]] = [
+        _badges("Status", "Status", "_status_rank", filter=_multi(fs.filter_options())),
         {
             "id": "FID",
             "header": "Family ID",
@@ -595,7 +639,11 @@ def filter_families(
         wanted = set(filters.get(col) or [])
         if wanted:
             out = [r for r in out if r.get(field_) in wanted]
-    for col, field_ in (("DenovoQC", "_dn_cats"), ("Diagnostics", "_diag_cats")):
+    for col, field_ in (
+        ("Status", "_status_cats"),
+        ("DenovoQC", "_dn_cats"),
+        ("Diagnostics", "_diag_cats"),
+    ):
         wanted = set(filters.get(col) or [])
         if wanted:
             out = [r for r in out if wanted & set(r.get(field_) or [])]

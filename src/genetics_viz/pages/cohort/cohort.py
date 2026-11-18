@@ -66,12 +66,15 @@ from genetics_viz.utils.auth import can_write, check_auth
 from genetics_viz.utils.cohort_state import read_cohort_state
 from genetics_viz.utils.data import get_data_store
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
+from genetics_viz.components.family_status import render_family_status_summary
+from genetics_viz.utils import family_status as fs
 from genetics_viz.utils.family_rows import (
     DIAG_ORDER,
     FamilyFacts,
     compact_qc_cell,
     family_columns,
     family_row,
+    family_state,
     filter_families,
     load_family_facts,
     save_family_order,
@@ -84,6 +87,7 @@ from genetics_viz.utils.review_counts import (
     qc_worst_by_individual,
     denovo_cohort_pills,
     denovo_cohort_status,
+    status_pills,
     str_cohort_open_flags,
     str_cohort_pills,
     upd_cohort_pills,
@@ -178,6 +182,7 @@ _FILTER_LINK = {
 
 #: Link key of each families-table column filter, and its empty value.
 _FAMILY_FILTER_LINK = {
+    "Status": ("fstatus", []),
     "FID": ("ffid", ""),
     "Structure": ("fstruct", []),
     "Trios": ("ftrio", False),
@@ -792,13 +797,19 @@ def cohort_page(cohort_name: str, request: Request) -> None:
         upd_open_by_family: Dict[str, List[str]] = defaultdict(list)
         for ind in all_individuals:
             upd_open_by_family[ind["FID"]].extend(ind.get("_upd_open") or [])
-        family_data: Dict[str, Any] = {"facts": FamilyFacts(), "rows": []}
+        family_data: Dict[str, Any] = {"facts": FamilyFacts(), "rows": [], "states": {}}
 
         def build_family_rows() -> None:
             str_open: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
             for (fid, _sid), _locus, severity in state["str_flags"]:
                 str_open[fid][0] += 1
                 str_open[fid][1] += severity == "high"
+            facts = family_data["facts"]
+            family_data["states"] = (
+                {fid: family_state(f, facts) for fid, f in cohort.families.items()}
+                if "status" in facts.found
+                else {}
+            )
             family_data["rows"] = [
                 family_row(
                     cohort.families[fid],
@@ -909,10 +920,30 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         dt.update_data(dt.sort_rows(list(rows)))
                 remember_order()
                 filter_bar.refresh()
+                status_summary.refresh()
                 update_pills()
                 # Re-render the tabs that follow the filters
                 for refresher in refreshers:
                     refresher()
+
+            def status_counts() -> Optional[fs.StatusCounts]:
+                """The shown families by status; ``None`` until they are read."""
+                states = family_data["states"]
+                if not states:
+                    return None
+                return fs.count_statuses(
+                    states[r["FID"]] for r in state["families"] if r["FID"] in states
+                )
+
+            @ui.refreshable
+            def status_summary() -> None:
+                counts = status_counts()
+                if counts is None:
+                    ui.label("Reading the family statuses…").classes(
+                        "text-xs text-gray-400 italic"
+                    )
+                    return
+                render_family_status_summary(counts, mark="families-status-summary")
 
             def remember_order() -> None:
                 """The family page's arrows walk the families shown, as sorted.
@@ -1105,6 +1136,18 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         "families",
                     )
                 )
+                counts = status_counts()
+                if show_review and counts is not None:
+                    pills["Families"].set(
+                        filter_pills(
+                            len(state["families"]),
+                            n_families,
+                            n_filters,
+                            "family",
+                            "families",
+                        )
+                        + status_pills(counts.reopened, counts.to_check)
+                    )
                 if "Sample QC" in pills:
                     pills["Sample QC"].set(
                         qc_cohort_pills(qc_worst, keys, has_data["UPD"])
@@ -1230,6 +1273,8 @@ def cohort_page(cohort_name: str, request: Request) -> None:
             panel_classes = "w-full px-0 pt-3 pb-0"
             with ui.tab_panels(tabs, value=initial).classes("w-full"):
                 with ui.tab_panel(tab_objects["Families"]).classes(panel_classes):
+                    with ui.element("div").classes("w-full max-w-3xl px-1 pb-2"):
+                        status_summary()
                     dt_ref["families"] = DataTable(
                         columns=family_cols,
                         rows=family_data["rows"],

@@ -22,6 +22,7 @@ from genetics_viz.utils import (
     cohort_state,
     data,
     denovo,
+    family_status,
     gene_index,
     gene_scoring,
     genome_qc,
@@ -62,6 +63,7 @@ def _reset_globals() -> None:
     genome_qc.clear_gqc_cache()
     sample_qc_acks.clear_ack_cache()
     report_summaries.clear_summary_cache()
+    family_status.clear_status_cache()
     cohort_state.clear_state_cache()
     cohort_state.clear_sha_cache()
     pipeline_params.clear_params_cache()
