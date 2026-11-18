@@ -72,7 +72,7 @@ from .sharding import get_family_path
 from .str_eh import find_eh_labels, get_family_eh_dir
 from .validation_files import validation_path
 from .vep import get_consequence_impact, get_consequence_priority
-from .wisecondorx import parse_wisecondorx_bed
+from .wisecondorx import parse_wisecondorx_bed, past_permissive
 
 logger = logging.getLogger(__name__)
 
@@ -817,6 +817,10 @@ def _aneuploidy(
     if wcx_file.exists():
         try:
             calls = parse_wisecondorx_bed(wcx_file)
+            # The calls the SVs tabs show: a segment below threshold can span
+            # a chromosome with no copy-number change (log2 ratio 0.005).
+            if calls is not None and {"ratio", "zscore"} <= set(calls.columns):
+                calls = calls.filter(past_permissive())
         except Exception:
             logger.warning("Failed to read %s", wcx_file, exc_info=True)
     if family_qc is None and not wcx_file.exists():

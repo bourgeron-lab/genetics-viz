@@ -136,6 +136,26 @@ def test_aneuploidy_sex_chromosomes_and_whole_chromosome_gain(store, data_dir):
     assert section.attention
 
 
+def test_aneuploidy_ignores_calls_below_threshold(store, data_dir):
+    """88021200005: whole-chromosome segments at log2 ±0.01, z ±5, read as
+    +14 and −21 before the report applied the permissive thresholds."""
+    wcx = (
+        datagen.family_dir(data_dir, "1001")
+        / "svs"
+        / "wisecondorx"
+        / "1001_aberrations.annotated.bed"
+    )
+    with open(wcx, "a") as f:
+        for chrom, start, end, ratio, z, kind in (
+            ("chr14", "16113001", "101693000", "0.0046", "5.03", "gain"),
+            ("chr21", "12965001", "46682000", "-0.0152", "-5.20", "loss"),
+        ):
+            f.write("\t".join([chrom, start, end, ratio, z, "primary", kind,
+                               "S1", "", "", "", "", "1001"]) + "\n")  # fmt: skip
+    rows = {r["iid"]: r for r in _report(store).section("aneuploidy").rows}
+    assert rows["S1"]["autosomes"] == "none detected"
+
+
 def test_whole_chromosome_events_need_most_of_the_chromosome():
     calls = pl.DataFrame(
         {

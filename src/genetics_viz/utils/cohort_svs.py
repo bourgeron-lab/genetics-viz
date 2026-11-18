@@ -21,7 +21,7 @@ from typing import Any, Collection, Dict, List, Optional, Tuple
 import polars as pl
 
 from .tsv import collect_streaming
-from .wisecondorx import WISECONDORX_CONFIG
+from .wisecondorx import WISECONDORX_CONFIG, past_permissive
 
 logger = logging.getLogger(__name__)
 
@@ -86,10 +86,7 @@ def scan_calls(path: Path, min_kb: int = SIZE_OPTIONS_KB[0]) -> pl.DataFrame:
         .select(wanted)
         .with_columns(pl.col(c).cast(pl.Float64, strict=False) for c in _NUMERIC)
         .filter((pl.col("end") - pl.col("start")) >= min_kb * 1000)
-        .filter(
-            _past(_LEVELS[("permissive", "gain")], True)
-            | _past(_LEVELS[("permissive", "loss")], False)
-        )
+        .filter(past_permissive())
     )
     if "sample" not in wanted:
         lazy = lazy.rename({"barcode": "sample"})
