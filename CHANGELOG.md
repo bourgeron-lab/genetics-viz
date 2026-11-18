@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.42.0] - 2026-11-18
 
 ### Added
 - **A review status per family**, set by curators and shown to every role: not reviewed (the default), in review, candidate, partially solved, solved, unsolved, not analysable. On both family pages a chip beside "See report" shows it, with who set it and when. A curator clicks it to change the status, add a comment (shown to curators only) and read the history.
