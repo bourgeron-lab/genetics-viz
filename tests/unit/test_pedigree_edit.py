@@ -385,6 +385,60 @@ def test_a_viewer_cannot_save(data_dir, monkeypatch):
     assert nothing_written(data_dir, before)
 
 
+def write_progress(cohort_dir: Path, status: str, minutes_ago: float) -> None:
+    """``.ghfc-ngs.progress.json`` as ghfc-ngs's RunProgress writes it."""
+    import json
+    from datetime import timedelta
+
+    updated = datetime.now().astimezone() - timedelta(minutes=minutes_ago)
+    (cohort_dir / pe.PROGRESS_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_name": "tender_allen",
+                "slurm_job_id": "23792765",
+                "status": status,
+                "updated_at": updated.isoformat(timespec="seconds"),
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "status, minutes_ago, live",
+    [
+        ("running", 1, True),
+        # The file stays after a run: its last word is success or failed.
+        ("success", 1, False),
+        ("failed", 1, False),
+        # A killed run leaves "running" with an updated_at that stops moving.
+        ("running", 60, False),
+    ],
+)
+def test_a_run_is_live_only_while_its_progress_file_moves(
+    tmp_path, status, minutes_ago, live
+):
+    write_progress(tmp_path, status, minutes_ago)
+    found = pe.live_run(tmp_path)
+    if live:
+        assert found == "run tender_allen, Slurm job 23792765, updated 1 min ago"
+    else:
+        assert found is None
+
+
+def test_no_or_an_unreadable_progress_file_is_no_run(tmp_path):
+    assert pe.live_run(tmp_path) is None
+    (tmp_path / pe.PROGRESS_FILENAME).write_text("{not json")
+    assert pe.live_run(tmp_path) is None
+
+
+def test_a_finished_runs_progress_file_does_not_block_a_save(data_dir, curator):
+    write_progress(cohort_file(data_dir).parent, "success", minutes_ago=600)
+    src, draft = edit_1001(data_dir)
+    record = pe.save_pedigree_edit(src, draft, user="alice", comment="why", now=NOW)
+    assert record.rerun == pe.RERUN_NORMAL
+
+
 @pytest.mark.parametrize(
     "case, match",
     [
@@ -406,7 +460,7 @@ def test_a_refused_save_writes_nothing(data_dir, curator, case, match):
     elif case == "error":
         draft.set_sex("S2", "1")
     elif case == "running":
-        (cohort_file(data_dir).parent / pe.PROGRESS_FILENAME).write_text("{}")
+        write_progress(cohort_file(data_dir).parent, "running", minutes_ago=1)
     elif case == "changed":
         cohort_file(data_dir, "NOHEAD").write_text(
             cohort_file(data_dir, "NOHEAD").read_text() + "# touched\n"
