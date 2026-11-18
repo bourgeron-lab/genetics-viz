@@ -64,6 +64,10 @@ class FamilyFacts:
     consistency: Dict[str, List[Any]] = field(default_factory=dict)
     #: The explained findings' keys. Curators.
     consistency_acks: Set[str] = field(default_factory=set)
+    #: FID -> what differs, for the families the cohort's last run held.
+    held: Dict[str, List[str]] = field(default_factory=dict)
+    #: The date of that run.
+    held_run: str = ""
     #: Which tables were found: ``ancestry``, ``roh``, ``denovo``; ``status``
     #: once the statuses are read.
     found: Set[str] = field(default_factory=set)
@@ -197,6 +201,18 @@ def load_family_facts(
                 facts.consistency_acks = set(pc.load_acks(data_dir))
             except Exception:
                 logger.warning("Failed to compare the cohort pedigrees", exc_info=True)
+        try:
+            from .cohort_state import read_cohort_state
+
+            run_state = read_cohort_state(cohort.pedigree_file.parent)
+            run = run_state.last_run if run_state is not None else None
+            if run is not None and run.held_families:
+                facts.held = {h.family: h.describe() for h in run.held_families}
+                facts.held_run = (
+                    run.started_at.strftime("%Y-%m-%d") if run.started_at else ""
+                )
+        except Exception:
+            logger.warning("Failed to read the held families", exc_info=True)
         try:
             facts.summaries = read_family_summaries(data_dir)
         except Exception:
@@ -440,8 +456,12 @@ def family_row(
 
     status = facts.pedigree.get(fid)
     row["Pedigree"] = status.last.timestamp[:10] if status else ""
-    row["Pedigree_badges"] = pedigree_badges(status) + consistency_badges(
-        fid, cohort_name, facts.consistency.get(fid, []), facts.consistency_acks
+    row["Pedigree_badges"] = (
+        pedigree_badges(status)
+        + held_badges(fid, facts)
+        + consistency_badges(
+            fid, cohort_name, facts.consistency.get(fid, []), facts.consistency_acks
+        )
     )
     row["_ped_cats"] = (
         [PED_EDITED] + ([PED_AWAITING] if status.awaiting_rerun else [])
@@ -505,6 +525,26 @@ def pedigree_badges(status: Optional[EditStatus]) -> List[Dict[str, str]]:
             "label": date,
             "color": "#b45309" if status.awaiting_rerun else "#546e7a",
             "tooltip": tooltip,
+        }
+    ]
+
+
+def held_badges(family_id: str, facts: FamilyFacts) -> List[Dict[str, str]]:
+    """``Held``: the cohort's last ghfc-ngs run left the family as it was."""
+    if family_id not in facts.held:
+        return []
+    return [
+        {
+            "label": "Held",
+            "color": "#b91c1c",
+            "tooltip": "\n".join(
+                [
+                    f"ghfc-ngs held it in its run of {facts.held_run}: another"
+                    " cohort lists it with other rows, so its family-level"
+                    " results were left as they were."
+                ]
+                + facts.held[family_id]
+            ),
         }
     ]
 

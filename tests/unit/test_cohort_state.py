@@ -199,3 +199,31 @@ def test_fetch_is_cached_and_failures_are_reported(monkeypatch):
     monkeypatch.setattr(docs.urllib.request, "urlopen", fail)
     failed = docs.fetch_params_doc(force=True)
     assert not failed.ok and "offline" in failed.error
+
+
+def test_held_families(data_dir):
+    import datagen
+
+    state = cs.read_cohort_state(data_dir / "cohorts" / "DEMO")
+    assert state.last_run.held_families is None  # not recorded
+    datagen.add_held_families(data_dir)
+    cs.clear_state_cache()
+    (held,) = cs.read_cohort_state(data_dir / "cohorts" / "DEMO").last_run.held_families
+    assert (held.family, held.cohorts) == ("1001", ("NOHEAD",))
+    assert held.describe() == [
+        "differs from NOHEAD: S3: father S1 -> 0, mother S2 -> 0"
+    ]
+
+
+def test_held_families_parse_defensively():
+    assert cs._parse_held(None) is None
+    assert cs._parse_held([]) == []
+    held = cs._parse_held(
+        [{"family": "F"}, {"cohorts": ["A"]}, "junk", {"family": "G", "cohorts": ["A", 3],
+          "changes": {"A": ["x", 1], "B": "y"}}]
+    )  # fmt: skip
+    assert [(h.family, h.cohorts, h.changes) for h in held] == [
+        ("F", (), {}),
+        ("G", ("A",), {"A": ("x",)}),
+    ]
+    assert held[0].describe() == []

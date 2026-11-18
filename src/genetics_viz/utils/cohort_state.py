@@ -113,6 +113,30 @@ class StepCompletion:
 
 
 @dataclass(frozen=True)
+class HeldFamily:
+    """A family the run held: another cohort lists it with other rows.
+
+    ghfc-ngs ``pedigree_conflicts`` (``COHORT_STATE.md``): the family's file
+    and family-level outputs were left as they were. ``changes`` maps each
+    other cohort to one clause per member that differs, from this cohort's
+    value to the other's (``C0KID: father 0 -> C0DAD``).
+    """
+
+    family: str
+    cohorts: Tuple[str, ...] = ()
+    changes: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+
+    def describe(self) -> List[str]:
+        """``differs from OTHER: C0KID: father 0 -> C0DAD``, per other cohort."""
+        return [
+            f"differs from {c}: " + "; ".join(self.changes.get(c, ()))
+            if self.changes.get(c)
+            else f"differs from {c}"
+            for c in self.cohorts
+        ]
+
+
+@dataclass(frozen=True)
 class RunRecord:
     """One pipeline run against one cohort. Self-contained, as the schema is."""
 
@@ -137,6 +161,10 @@ class RunRecord:
     #: Empty when the record carried ``completion: null`` -- a run that stopped
     #: before a plan was built, which is every validation failure.
     completion: Dict[str, StepCompletion] = field(default_factory=dict)
+    #: The families the run held (ghfc-ngs ``pedigree_conflicts``); ``None``
+    #: when not recorded: a record from before the field, a run stopped before
+    #: the pedigree was read, or ``pedigree_conflicts: overwrite``.
+    held_families: Optional[List[HeldFamily]] = None
 
     @property
     def duration(self) -> Optional[timedelta]:
@@ -286,7 +314,36 @@ def _parse_record(raw: Any) -> Optional[RunRecord]:
         # Present only on validation failures; a task failure carries none.
         reason=_as_str(raw.get("reason")),
         completion=_parse_completion(raw.get("completion")),
+        held_families=_parse_held(raw.get("pedigree_conflicts")),
     )
+
+
+def _parse_held(raw: Any) -> Optional[List["HeldFamily"]]:
+    """``pedigree_conflicts``: absent is not recorded (``None``), ``[]`` none held."""
+    if not isinstance(raw, list):
+        return None
+    out: List[HeldFamily] = []
+    for item in raw:
+        if not isinstance(item, dict) or not _as_str(item.get("family")):
+            continue
+        cohorts = item.get("cohorts")
+        changes = item.get("changes")
+        out.append(
+            HeldFamily(
+                family=str(item["family"]),
+                cohorts=tuple(str(c) for c in cohorts if isinstance(c, str))
+                if isinstance(cohorts, list)
+                else (),
+                changes={
+                    str(k): tuple(str(x) for x in v if isinstance(x, str))
+                    for k, v in changes.items()
+                    if isinstance(v, list)
+                }
+                if isinstance(changes, dict)
+                else {},
+            )
+        )
+    return out
 
 
 def _as_str(value: Any) -> Optional[str]:

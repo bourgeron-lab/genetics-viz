@@ -10,7 +10,10 @@ from nicegui import app, ui
 from genetics_viz.components.diagnostics_panel import render_family_diagnostics
 from genetics_viz.components.family_report_dialog import render_report_buttons
 from genetics_viz.components.family_status import render_family_status
-from genetics_viz.components.pedigree_consistency import render_family_banner
+from genetics_viz.components.pedigree_consistency import (
+    render_family_banner,
+    render_family_held,
+)
 from genetics_viz.components.header import create_header
 from genetics_viz.utils.family_rows import family_order
 from genetics_viz.components.family_tabs import (
@@ -233,6 +236,7 @@ def family_page(cohort_name: str, family_id: str, request: Request) -> None:
 
             # Where else the family is listed, and what differs (off-thread).
             render_family_banner(store, family_id, cohort_name)
+            render_family_held(store, family_id)
 
             # Dummies are listed by the selector but never selected: the
             # selection is what every tab looks up.
