@@ -167,13 +167,18 @@ metrics:
     group: variants
     label: "SNVs"
     format: int
+    explain: >-
+      Follows ancestry (African genomes carry about 22% more SNP sites),
+      consanguinity and depth: reported, not tested.
   het_hom_ratio:
-    flags: [HET_HOM_LOW]
     group: variants
     label: "Het/hom"
     format: float
     digits: 2
-    side: low
+    explain: >-
+      Follows ancestry (higher in African genomes) and consanguinity (lower):
+      reported, not tested. Heterozygous calls lost to low GQ show in the
+      low-GQ share instead.
   ti_tv:
     flags: [TITV_OUTLIER]
     group: variants
@@ -190,38 +195,77 @@ metrics:
       SNVs no other member of the family carries. Depends on the family: a
       trio child has hundreds, its parents hundreds of thousands.
   low_vaf_het_share:
-    flags: [LOW_VAF_HET_EXCESS]
     group: variants
     label: "Hets under 0.3 VAF"
     format: percent
     digits: 2
+    explain: >-
+      Follows depth: a 27x genome's true heterozygotes fall under 0.3 of the
+      reads three times as often as a 39x genome's. Not tested; see the
+      excess.
+  low_vaf_het_expected:
+    group: variants
+    label: "Hets under 0.3 VAF, expected"
+    format: percent
+    digits: 2
+    explain: >-
+      The share a true heterozygote gives at the same depths: the chance that
+      half the reads fall under 0.3 (binomial at each call's depth), averaged
+      over the calls.
+  low_vaf_het_excess:
+    flags: [LOW_VAF_HET_EXCESS]
+    group: variants
+    label: "Hets under 0.3 VAF, excess"
+    format: percent
+    digits: 2
     side: high
+    explain: >-
+      The share less the expected share: contamination or mosaicism. A
+      contamination of a few percent leaves it unchanged; that is Sample QC's
+      CHARR.
+  het_low_gq_share:
+    flags: [LOW_GQ_HET_EXCESS]
+    group: variants
+    label: "Hets of low GQ"
+    format: percent
+    digits: 1
+    side: high
+    explain: >-
+      Heterozygous SNVs of depth 10 or more whose GQ is under 20, counted
+      before the GQ filter: calls lost to it.
   n_indel:
-    flags: [INDEL_COUNT_OUTLIER]
     group: variants
     label: "Indels"
     format: int
-    side: both
+    explain: >-
+      Follows ancestry (African genomes carry about 14% more), depth and read
+      length (100 bp genomes call about 40% fewer): reported, not tested.
   ins_del_ratio:
+    flags: [INDEL_PROFILE_OUTLIER]
     group: variants
     label: "Ins/del"
     format: float
     digits: 2
+    side: both
   indel_1bp_share:
+    flags: [INDEL_PROFILE_OUTLIER]
     group: variants
     label: "1 bp indels"
     format: percent
     digits: 1
+    side: both
   ins_over_10bp_share:
     group: variants
     label: "Insertions > 10 bp"
     format: percent
     digits: 2
   indel_tr_share:
+    flags: [INDEL_PROFILE_OUTLIER]
     group: variants
     label: "Indels in repeats"
     format: percent
     digits: 1
+    side: both
 
 # The standing caveat on a CELL_LINE sample's results, by where it is shown
 # (components/cell_line_note.py, the family report). {samples}: the cell-line

@@ -91,7 +91,7 @@ def test_sample_qc_vocabulary_covers_the_pipeline():
         # genomeqc_tables' flag codes
         "CELL_LINE", "EBV_TRACE", "LOW_DEPTH", "HIGH_DUPLICATES",
         "HIGH_ERROR_RATE", "READ_INDEL_EXCESS", "SHORT_INSERT", "TITV_OUTLIER",
-        "HET_HOM_LOW", "LOW_VAF_HET_EXCESS", "INDEL_COUNT_OUTLIER",
+        "LOW_VAF_HET_EXCESS", "LOW_GQ_HET_EXCESS", "INDEL_PROFILE_OUTLIER",
     }  # fmt: skip
     assert {"charr_warn", "charr_high"} <= set(cfg["thresholds"])
     categories = set(cfg["categories"])
@@ -111,6 +111,23 @@ def test_sample_qc_vocabulary_covers_the_pipeline():
     colors = [c["color"] for c in cfg["categories"].values()]
     colors += [v["color"] for v in cfg["relationships"].values()]
     assert all(HEX.match(c) for c in colors)
+
+
+def test_genome_qc_metrics_name_worded_flags():
+    # A flag drawn on a metric is one the pipeline raises, worded with the
+    # Sample QC flags: a retired code left on either side fails here.
+    flags = set(load("sample_qc.yaml")["flags"])
+    metrics = load("genome_qc.yaml")["metrics"]
+    drawn = {code for spec in metrics.values() for code in spec.get("flags", [])}
+    assert drawn <= flags
+    sides = {spec["side"] for spec in metrics.values() if "side" in spec}
+    assert sides <= {"high", "low", "both"}
+    # A tested metric has a side, so its plot draws the class's limits.
+    assert all(
+        "side" in spec
+        for key, spec in metrics.items()
+        if set(spec.get("flags", [])) - {"CELL_LINE", "EBV_TRACE"}
+    )
 
 
 def test_sample_qc_acknowledgement_wording():

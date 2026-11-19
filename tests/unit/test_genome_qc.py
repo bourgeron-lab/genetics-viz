@@ -44,6 +44,7 @@ def test_cohort_tables(data_dir):
     assert data.row_for("S1")["seq_class"] == "rl150_pcr"
     assert data.row_for("S6")["seq_class"] == "rl100"
     assert s3["read_indels_per_kb"] == 0.2714 and s3["read_indels_per_kb_adj"] == 0.2731
+    assert s3["low_vaf_het_excess"] == 0.0009 and s3["het_low_gq_share"] == 0.102
     assert data.cell_lines() == {"S3"}
     # Sample QC's flag rows: one sample, level genome, low read as info,
     # most severe first.
@@ -85,6 +86,8 @@ def test_family_without_cohort_tables(data_dir):
     assert s3["ebv_copies_per_cell"] == 152.3 and s3["het_hom_ratio"] == 1.5293
     assert s3["seq_class"] is None and s3["flags"] is None
     assert s3["read_indels_per_kb_adj"] is None
+    # The family table's own columns, read without the cohort's
+    assert s3["low_vaf_het_expected"] == 0.0081 and s3["het_low_gq_share"] == 0.102
     assert set(fam.samples.columns) >= set(gqc.COHORT_COLUMNS)
     assert gqc.probe_family_gqc(data_dir, "1001")
     assert gqc.load_family_gqc(data_dir, "1002") is None
@@ -115,7 +118,16 @@ def test_metric_wording():
     assert ebv.fmt(0.0174) == "0.017"
     assert gqc.metric_info("duplicate_share").fmt(0.1202) == "12.0%"
     assert gqc.metric_info("n_indel").fmt(587299) == "587,299"
-    assert gqc.metric_info("n_indel").side == "both"
+    # Counts follow ancestry: shown, never tested
+    for count in ("n_snv", "het_hom_ratio", "n_indel", "low_vaf_het_share"):
+        assert (
+            gqc.metric_info(count).flags == [] and gqc.metric_info(count).side is None
+        )
+    assert gqc.metric_info("low_vaf_het_excess").flags == ["LOW_VAF_HET_EXCESS"]
+    assert gqc.metric_info("het_low_gq_share").flags == ["LOW_GQ_HET_EXCESS"]
+    for share in ("indel_1bp_share", "indel_tr_share", "ins_del_ratio"):
+        info = gqc.metric_info(share)
+        assert info.flags == ["INDEL_PROFILE_OUTLIER"] and info.side == "both"
     # READ_INDEL_EXCESS is on the adjusted reads' indels: the raw ones follow ancestry
     adj = gqc.metric_info("read_indels_per_kb_adj")
     assert adj.flags == ["READ_INDEL_EXCESS"] and adj.side == "high"

@@ -68,7 +68,8 @@ SAMPLE_COLUMNS = [
 ]  # fmt: skip
 FAMILY_COLUMNS = [
     "family_id", "sample", "n_snv", "n_snv_het", "n_snv_hom", "het_hom_ratio",
-    "ti_tv", "private_snvs", "low_vaf_het_share", "n_indel", "ins_del_ratio",
+    "ti_tv", "private_snvs", "low_vaf_het_share", "low_vaf_het_expected",
+    "low_vaf_het_excess", "het_low_gq_share", "n_indel", "ins_del_ratio",
     "indel_1bp_share", "ins_over_10bp_share", "indel_tr_share",
 ]  # fmt: skip
 COHORT_COLUMNS = (

@@ -38,8 +38,8 @@ Key = Tuple[str, str]
 #: The table's metric columns, in order (the others are in the download).
 TABLE_METRICS = [
     "ebv_copies_per_cell", "mt_copies_per_cell", "chr20_depth", "duplicate_share",
-    "error_rate", "insert_median", "read_indels_per_kb_adj", "het_hom_ratio", "ti_tv",
-    "low_vaf_het_share", "n_indel",
+    "error_rate", "insert_median", "read_indels_per_kb_adj", "ti_tv",
+    "low_vaf_het_excess", "het_low_gq_share", "indel_1bp_share", "indel_tr_share",
 ]  # fmt: skip
 
 _NUM = {"cellType": "number", "sorting": "numerical", "sortable": True}

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Genome QC tests the reads' indels with the genome's own indels taken out.** ghfc-ngs (bourgeron-lab/ghfc-ngs#68) no longer tests `read_indels_per_kb` raw: it counts the person's germline indels as well as polymerase slippage, so it flagged African-ancestry genomes `READ_INDEL_EXCESS` for their ancestry. It writes `read_indels_per_kb_adj` in the cohort table and tests that. The DNA and library section shows it in the table, and it is drawn by class with the `READ_INDEL_EXCESS` samples in red. The raw rate is still drawn, without flags, and says it follows ancestry. A cohort table written before the change has no adjusted column, so the column is empty.
+- **Genome QC follows the pipeline's flags and columns again.** ghfc-ngs stopped testing counts, which follow ancestry, and tests shares and compositions instead:
+  - `HET_HOM_LOW` and `INDEL_COUNT_OUTLIER` are gone. An older cohort table that still carries one shows its raw code, in grey. Het/hom, SNV and indel counts are still drawn, without flags, and say why they are not tested.
+  - `LOW_GQ_HET_EXCESS` (heterozygous calls lost to the GQ filter) and `INDEL_PROFILE_OUTLIER` (share of 1 bp indels or of indels in repeats, or the insertion/deletion ratio, either side) are worded and drawn on their metrics.
+  - `LOW_VAF_HET_EXCESS` is drawn on the excess over what the depths give, `low_vaf_het_excess`, and no longer on the raw share, which follows depth. The expected share is read and drawn too.
+  - The DNA and library table shows the tested metrics: the low-VAF excess, the low-GQ share and the indel shares, in place of het/hom, the raw low-VAF share and the indel count.
+  - The family report says that variant counts are not compared.
 
 ## [0.43.0] - 2026-11-19
 

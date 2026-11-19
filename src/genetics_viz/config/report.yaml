@@ -164,7 +164,8 @@ methods:
       copy-number changes may come from the culture. Alignment metrics of
       chromosome 20 and each member's variant calls (GQ 20 and DP 10 or more)
       are compared with genomes of the same read length and library (5 scaled
-      MADs, 20 genomes or more).
+      MADs, 20 genomes or more). Variant counts, which follow ancestry, are not
+      compared.
   ancestry:
     title: "Genetic ancestry"
     text: >-
