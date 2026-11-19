@@ -342,3 +342,47 @@ async def test_two_families_merged_under_a_new_id(user, data_dir):
     await user.should_see(marker="workflow-orphaned-families", retries=100)
     await user.should_see("AU-X-1 → FAMX", retries=10)
     await user.should_see(marker="workflow-pedigree-waiting")
+
+
+async def test_a_merge_keeping_the_suggested_id_asks_first(user, data_dir):
+    await open_qc(user, "curator", "AU-X-1")
+    await open_editor(user)
+    _one(user, "ped-merge-with").set_value(["1002"])
+    user.find(marker="ped-merge-start").click()
+    await user.should_see("Merge families AU-X-1, 1002", retries=30)
+    user.find(marker="ped-comment").type("One family entered under two IDs")
+    await wait_for(lambda: _one(user, "ped-save").enabled)
+    user.find(marker="ped-save").click()
+    await user.should_see(marker="ped-confirm-fid", retries=10)
+    await user.should_see("Keep AU-X-1_1002")
+
+    # Change it: nothing written, the save button back.
+    user.find(marker="ped-change-fid").click()
+    await wait_for(lambda: _one(user, "ped-save").enabled)
+    assert "AU-X-1\tS5" in (data_dir / DEMO).read_text()
+
+    user.find(marker="ped-save").click()
+    await user.should_see("Keep AU-X-1_1002", retries=10)
+    user.find(marker="ped-keep-fid").click()
+    await user.should_see("Family: AU-X-1_1002", retries=SLOW)
+    assert "AU-X-1_1002\tS5" in (data_dir / DEMO).read_text()
+
+
+async def test_a_family_renamed(user, data_dir):
+    await open_qc(user, "curator", "AU-X-1")
+    await open_editor(user)
+    user.find(marker="ped-rename-start").click()
+    await user.should_see("Rename family AU-X-1", retries=30)
+    await user.should_see("Type the family's new ID")
+    user.find(marker="ped-comment").type("Typo in the family ID")
+    assert not _one(user, "ped-save").enabled
+    _one(user, "ped-merge-fid").set_value("FAMR")
+    await user.should_see("AU-X-1 renamed to FAMR (a new family)", retries=10)
+    await wait_for(lambda: _one(user, "ped-save").enabled)
+    user.find(marker="ped-save").click()  # no confirmation for a rename
+
+    await user.should_see("Family: FAMR", retries=SLOW)
+    text = (data_dir / DEMO).read_text()
+    assert "FAMR\tS5" in text and "AU-X-1\t" not in text
+    acks = (data_dir / "validations" / "sampleqc.tsv").read_text()
+    assert "SEX_MISMATCH\tFAMR\tS6" in acks
