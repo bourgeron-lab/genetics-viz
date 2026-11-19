@@ -5,6 +5,11 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Genome QC tests the reads' indels with the genome's own indels taken out.** ghfc-ngs (bourgeron-lab/ghfc-ngs#68) no longer tests `read_indels_per_kb` raw: it counts the person's germline indels as well as polymerase slippage, so it flagged African-ancestry genomes `READ_INDEL_EXCESS` for their ancestry. It writes `read_indels_per_kb_adj` in the cohort table and tests that. The DNA and library section shows it in the table, and it is drawn by class with the `READ_INDEL_EXCESS` samples in red. The raw rate is still drawn, without flags, and says it follows ancestry. A cohort table written before the change has no adjusted column, so the column is empty.
+
 ## [0.43.0] - 2026-11-19
 
 ### Added

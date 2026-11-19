@@ -13,7 +13,8 @@ mutations come out as extra de novo calls. It writes, under the label
   per member: SNV and indel profile from the family BCF). **No flags**;
 - cohort: ``cohorts/<NAME>/qc/<NAME>.<label>.{samples,flags,inputs}.tsv``:
   every sample's metrics and its member row, its ``family_id``, ``library``,
-  ``dna_source``, ``seq_class`` and ``flags``; one row per flag.
+  ``dna_source``, ``seq_class``, ``read_indels_per_kb_adj`` (what
+  ``READ_INDEL_EXCESS`` tests) and ``flags``; one row per flag.
 
 Flags exist at cohort level only: outliers are judged against the samples of
 the same ``seq_class`` (read length class × PCR), 20 of them at least. The
@@ -74,7 +75,8 @@ COHORT_COLUMNS = (
     ["sample", "family_id", "seq_class", "library", "dna_source"]
     + SAMPLE_COLUMNS[1:]
     + FAMILY_COLUMNS[2:]
-    + ["flags"]
+    # The reads' indels with the genome's own taken out: cohort tables only
+    + ["read_indels_per_kb_adj", "flags"]
 )
 FLAG_COLUMNS = ["sample", "family_id", "seq_class", "flag", "severity", "evidence"]
 
