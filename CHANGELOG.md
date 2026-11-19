@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.43.0] - 2026-11-19
 
 ### Added
 - **A family can be renamed.** The pedigree editor has a "Rename…" button next to "Merge…": the family gets a new ID in every cohort pedigree that lists it, and its validations, diagnostics, notes, acknowledgements, conclusion and status follow, as in a merge. ghfc-ngs builds the family again under its new ID, and the old directory is listed on the Workflow tab for removal. This corrects a merged family left with the suggested ID (the families' IDs joined).
