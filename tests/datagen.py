@@ -1307,13 +1307,15 @@ GQC_SAMPLE_COLUMNS = [
     "mapq0_share", "properly_paired_share", "error_rate", "mean_base_quality",
     "insert_median", "insert_mad", "read_indels_per_kb", "n_snv", "n_snv_het",
     "n_snv_hom", "het_hom_ratio", "ti_tv", "private_snvs", "low_vaf_het_share",
+    "low_vaf_het_expected", "low_vaf_het_excess", "het_low_gq_share",
     "n_indel", "ins_del_ratio", "indel_1bp_share", "ins_over_10bp_share",
     "indel_tr_share", "read_indels_per_kb_adj", "flags",
 ]  # fmt: skip
 GQC_FLAG_COLUMNS = ["sample", "family_id", "seq_class", "flag", "severity", "evidence"]
 GQC_VARIANT_COLUMNS = [
     "family_id", "sample", "n_snv", "n_snv_het", "n_snv_hom", "het_hom_ratio",
-    "ti_tv", "private_snvs", "low_vaf_het_share", "n_indel", "ins_del_ratio",
+    "ti_tv", "private_snvs", "low_vaf_het_share", "low_vaf_het_expected",
+    "low_vaf_het_excess", "het_low_gq_share", "n_indel", "ins_del_ratio",
     "indel_1bp_share", "ins_over_10bp_share", "indel_tr_share",
 ]  # fmt: skip
 
@@ -1355,7 +1357,8 @@ def _gqc_sample_row(sid: str) -> List:
 def _gqc_variants(fid: str, sid: str) -> List:
     private = 405 if sid in ("S3", "S6") else 482603
     return [fid, sid, 3521843, 2129404, 1392439, "1.5293", "2.0686", private,
-            "0.0090", 587299, "0.9408", "0.5469", "0.0184", "0.6654"]  # fmt: skip
+            "0.0090", "0.0081", "0.0009", "0.1020", 587299, "0.9408", "0.5469",
+            "0.0184", "0.6654"]  # fmt: skip
 
 
 def _gqc_inputs(
