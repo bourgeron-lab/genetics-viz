@@ -64,7 +64,9 @@ from genetics_viz.utils.pedigree_merge import (
     merge_changes,
     merge_problems,
     merge_rerun,
+    reuses_directory,
     save_merge_async,
+    suggested_fid,
 )
 from genetics_viz.utils.pedigree_qc import (
     CrossSuggestion,
@@ -352,6 +354,11 @@ async def open_pedigree_editor(
             anchor, store, [family_id, *others], on_merged=on_merged
         )
 
+    async def start_rename() -> None:
+        await open_merge_editor(
+            anchor, store, [family_id], on_merged=on_merged, rename=True
+        )
+
     anchor.clear()  # an earlier editor's dialog
     with anchor:
         _editor_dialog(
@@ -361,6 +368,7 @@ async def open_pedigree_editor(
             load_other,
             on_saved,
             start_merge=start_merge if on_merged is not None else None,
+            start_rename=start_rename if on_merged is not None else None,
         ).open()
 
 
@@ -372,6 +380,7 @@ def _editor_dialog(
     on_saved: Optional[Callable[[EditRecord], Any]],
     *,
     start_merge: Optional[Callable[[List[str]], Any]] = None,
+    start_rename: Optional[Callable[[], Any]] = None,
     merge: Optional[MergeSource] = None,
     curation: Optional[Dict[Path, int]] = None,
     on_merged: Optional[Callable[[str], Any]] = None,
@@ -447,9 +456,16 @@ def _editor_dialog(
                     update_title()
                     summary.refresh()
 
-                ui.input(
-                    "Merged family ID", value=merge.target, on_change=on_target
-                ).props("dense outlined").classes("w-64").mark("ped-merge-fid")
+                fid_input = (
+                    ui.input(
+                        "New family ID" if merge.is_rename else "Merged family ID",
+                        value=merge.target,
+                        on_change=on_target,
+                    )
+                    .props("dense outlined")
+                    .classes("w-64")
+                    .mark("ped-merge-fid")
+                )
             writes = ui.label("").classes("text-xs text-gray-500")
             ui.space()
             ui.button(icon="close", on_click=dialog.close).props("flat round dense")
@@ -469,7 +485,11 @@ def _editor_dialog(
 
         def update_title() -> None:
             if merge is not None:
-                title.set_text(f"Merge families {', '.join(merge.family_ids)}")
+                title.set_text(
+                    f"Rename family {merge.family_ids[0]}"
+                    if merge.is_rename
+                    else f"Merge families {', '.join(merge.family_ids)}"
+                )
                 writes.set_text(
                     "Writes "
                     + ", ".join(f"{c}.pedigree.tsv" for c in merge.cohorts)
@@ -565,9 +585,29 @@ def _editor_dialog(
 
         suggestions()
 
+        def rename_row() -> None:
+            if start_rename is None:
+                return
+            with ui.row().classes("w-full items-center gap-2"):
+
+                async def begin_rename() -> None:
+                    dialog.close()
+                    await start_rename()
+
+                ui.button(
+                    "Rename…", icon="drive_file_rename_outline", on_click=begin_rename
+                ).props("outline dense").mark("ped-rename-start")
+                ui.label(
+                    "Give the family another ID; its curation follows. ghfc-ngs"
+                    " builds it again under the new ID."
+                ).classes("text-xs text-gray-500")
+
         @ui.refreshable
         def companion_picker() -> None:
-            if merge is not None or len(sides) > 1 or not companions:
+            if merge is not None or len(sides) > 1:
+                return
+            if not companions:
+                rename_row()
                 return
             related = [f for f in main.qc.related_families() if f in companions]
             options = {f: f"{f} (related in Sample QC)" for f in related}
@@ -609,6 +649,7 @@ def _editor_dialog(
                     " then need ghfc-ngs --clean-stale-families."
                 ).classes("text-xs text-gray-500")
             if start_merge is None:
+                rename_row()
                 return
             with ui.row().classes("w-full items-center gap-2"):
                 ui.label("Merge with:").classes("text-sm text-gray-700")
@@ -639,6 +680,7 @@ def _editor_dialog(
                     "One family under a new ID (or one of theirs); their"
                     " curation follows."
                 ).classes("text-xs text-gray-500")
+            rename_row()
 
         companion_picker()
 
@@ -736,7 +778,7 @@ def _editor_dialog(
                         )
                     if merge is not None and curation:
                         ui.label(
-                            "Curation moved to the merged family: "
+                            "Curation moved to the new ID: "
                             + ", ".join(
                                 f"{n} in {p.relative_to(merge.data_dir)}"
                                 for p, n in curation.items()
@@ -767,6 +809,42 @@ def _editor_dialog(
                 state["update_save"]()
 
         summary()
+
+        if merge is not None and not merge.is_rename:
+            with (
+                ui.dialog().props("persistent") as confirm_fid,
+                ui.card().classes("p-4 gap-3").mark("ped-confirm-fid"),
+            ):
+                confirm_text = ui.label("").classes("text-sm")
+                with ui.row().classes("w-full justify-end gap-2"):
+
+                    def change_fid() -> None:
+                        confirm_fid.close()
+                        update_save()
+                        # After the dialog's close, which gives the focus
+                        # back to the Save button.
+                        ui.timer(
+                            0.4,
+                            lambda: (
+                                fid_input.run_method("focus"),
+                                fid_input.run_method("select"),
+                            ),
+                            once=True,
+                        )
+
+                    async def keep_fid() -> None:
+                        confirm_fid.close()
+                        state["fid_confirmed"] = state["target"]
+                        await save_merged()
+
+                    ui.button("Change it", on_click=change_fid).props(
+                        "unelevated color=primary"
+                    ).mark("ped-change-fid")
+                    keep_button = (
+                        ui.button("", on_click=keep_fid)
+                        .props("flat")
+                        .mark("ped-keep-fid")
+                    )
 
         comment = (
             ui.textarea(
@@ -837,6 +915,21 @@ def _editor_dialog(
     async def save() -> None:
         save_button.disable()
         if merge is not None:
+            target = state["target"]
+            if (
+                not merge.is_rename
+                and target == suggested_fid(merge.family_ids)
+                and state.get("fid_confirmed") != target
+            ):
+                confirm_text.set_text(
+                    f"The merged family will be {target}: the families' IDs"
+                    " joined, as suggested. A family ID cannot be changed after"
+                    " the merge without renaming the family, which ghfc-ngs"
+                    " then builds again. Keep it?"
+                )
+                keep_button.set_text(f"Keep {target}")
+                confirm_fid.open()
+                return
             await save_merged()
             return
         try:
@@ -897,11 +990,21 @@ def _editor_dialog(
             return
         except Exception:
             logger.exception("Failed to merge %s", ", ".join(merge.family_ids))  # type: ignore[union-attr]
-            ui.notify("The families could not be merged", type="negative")
+            ui.notify(
+                "The family could not be renamed"
+                if merge.is_rename  # type: ignore[union-attr]
+                else "The families could not be merged",
+                type="negative",
+            )
             update_save()
             return
+        done = (
+            f"Family renamed to {target}. "
+            if merge.is_rename  # type: ignore[union-attr]
+            else f"Families merged into {target}. "
+        )
         ui.notify(
-            f"Families merged into {target}. " + merge_rerun_text(merge, target),  # type: ignore[arg-type]
+            done + merge_rerun_text(merge, target),  # type: ignore[arg-type]
             type="positive",
             multi_line=True,
         )
@@ -916,27 +1019,38 @@ def _editor_dialog(
 
 
 def merge_rerun_text(merge: MergeSource, target: str) -> str:
-    """What the next ghfc-ngs run does for a merge, worded for the curator."""
-    if merge_rerun(merge, target) == RERUN_CLEAN:
+    """What the next ghfc-ngs run does for a merge or rename, worded for the
+    curator."""
+    if merge.is_rename and target in merge.family_ids:
+        return ""  # no new ID yet
+    left = (
+        f"{merge.family_ids[0]}'s directory stays"
+        if merge.is_rename
+        else "The other families' directories stay"
+        if merge_rerun(merge, target) == RERUN_CLEAN
+        else "The old families' directories stay"
+    ) + ", orphaned (listed on the Workflow tab)."
+    if reuses_directory(merge, target):
         return (
-            f"{target} gains members: ghfc-ngs needs --clean-stale-families. The"
-            " other families' directories stay, orphaned (listed on the Workflow"
-            " tab)."
+            f"{target}'s old directory is used again, with results for other"
+            f" members: ghfc-ngs needs --clean-stale-families. {left}"
         )
+    if merge_rerun(merge, target) == RERUN_CLEAN:
+        return f"{target} gains members: ghfc-ngs needs --clean-stale-families. {left}"
     return (
         f"{target} is a new family for ghfc-ngs: a normal run builds it from the"
-        " members' gVCFs. The old families' directories stay, orphaned (listed on"
-        " the Workflow tab)."
+        f" members' gVCFs. {left}"
     )
 
 
 def _load_merge(
-    store: Any, family_ids: List[str]
+    store: Any, family_ids: List[str], rename: bool = False
 ) -> Tuple[MergeSource, QcContext, Dict[Path, int], Dict[str, List[FlagRow]]]:
-    """Blocking: the families to merge, their QC as one, the curation to
-    re-key, and the open flags by member (for the trees' outlines)."""
+    """Blocking: the families to merge (or the one to rename), their QC as one,
+    the curation to re-key, and the open flags by member (for the trees'
+    outlines)."""
     files = [family_cohort_files(store, fid) for fid in family_ids]
-    merge = load_merge(store.data_dir, family_ids, files)
+    merge = load_merge(store.data_dir, family_ids, files, rename=rename)
     contexts: Dict[str, QcContext] = {}
     label = None
     for fid in family_ids:
@@ -968,16 +1082,18 @@ async def open_merge_editor(
     family_ids: List[str],
     *,
     on_merged: Optional[Callable[[str], Any]] = None,
+    rename: bool = False,
 ) -> None:
     """Read the families off the loop, then open the editor on them merged.
 
     The merged family is one draft under the suggested ID (the IDs joined by
     ``_``, editable), with the families' Sample QC read as one, so its members
     can be linked before saving. ``on_merged`` gets the merged family's ID.
+    ``rename``: one family, given a new ID (its own to start with, to change).
     """
     try:
         merge, qc, curation, open_flags = await asyncio.to_thread(
-            _load_merge, store, family_ids
+            _load_merge, store, family_ids, rename
         )
     except PedigreeEditError as e:
         ui.notify(str(e), type="negative", multi_line=True)

@@ -10,7 +10,16 @@ family pedigree as ``FAMILIAL_PEDIGREE`` would. For ghfc-ngs:
 - an **existing** one gains members: ``--clean-stale-families``;
 - the other families leave the pedigree. Their directories stay on disk,
   orphaned: the cohort tables are rebuilt without them, and the Workflow tab
-  lists them for removal by hand.
+  lists them for removal by hand;
+- the ID of a family an earlier merge took out of the pedigree may be taken
+  again while its directory is still there (a merged family given back one of
+  its IDs): the directory holds results for other members, so
+  ``--clean-stale-families``.
+
+**Renaming** a family is a merge of that family alone under a new ID
+(``load_merge(..., rename=True)``): the same files, histories and re-keyed
+curation. ghfc-ngs builds the family again under the new ID, and the old
+directory is orphaned like a merged family's.
 
 Everything the app's curators wrote is keyed by family ID: validations,
 diagnostics, notes, Sample QC acknowledgements, report conclusions. A merge
@@ -29,7 +38,7 @@ import fcntl
 import hashlib
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set
@@ -69,8 +78,12 @@ from .validation_files import validation_paths
 
 #: The joint of a suggested family ID: the merged IDs in order.
 SEPARATOR = "_"
-#: An old family's ``Rerun``: it left the pedigree, merged into another.
+#: An old family's ``Rerun``: it left the pedigree, merged into another
+#: (or renamed).
 RERUN_MERGED = "merged"
+#: The old family's change clause, before the target ID.
+MERGED_INTO = "merged into "
+RENAMED_TO = "renamed to "
 #: A family ID: no whitespace, no path separator, no comma (the acks' pairs).
 _FID = re.compile(r"^[^\s/\\,]+$")
 
@@ -147,6 +160,14 @@ class MergeSource:
 
     sources: List[FamilySource]
     target: str
+    #: Families an earlier merge or rename took out of the pedigree: their
+    #: IDs may be taken again, directory and all.
+    former: Set[str] = field(default_factory=set)
+
+    @property
+    def is_rename(self) -> bool:
+        """One family under a new ID."""
+        return len(self.sources) == 1
 
     @property
     def data_dir(self) -> Path:
@@ -177,13 +198,22 @@ class MergeSource:
 
 
 def load_merge(
-    data_dir: Path, family_ids: Sequence[str], cohort_files: Sequence[Sequence[Path]]
+    data_dir: Path,
+    family_ids: Sequence[str],
+    cohort_files: Sequence[Sequence[Path]],
+    *,
+    rename: bool = False,
 ) -> MergeSource:
     """Read the families to merge (each from its cohort pedigrees, which must
-    be the same files for all), with the suggested target ID."""
-    from .pedigree_edit import load_family
+    be the same files for all), with the suggested target ID.
 
-    if len(family_ids) < 2:
+    ``rename``: one family, whose own ID is the starting target (to change).
+    """
+    from .pedigree_edit import load_family, read_edit_index
+
+    if rename and len(family_ids) != 1:
+        raise PedigreeEditError("Choose one family to rename")
+    if not rename and len(family_ids) < 2:
         raise PedigreeEditError("Choose two families or more to merge")
     if any(list(f) != list(cohort_files[0]) for f in cohort_files[1:]):
         raise PedigreeEditError(
@@ -194,14 +224,27 @@ def load_merge(
         load_family(data_dir, fid, files)
         for fid, files in zip(family_ids, cohort_files)
     ]
-    return MergeSource(sources, suggested_fid(family_ids))
+    former = {r.family_id for r in read_edit_index(data_dir) if r.rerun == RERUN_MERGED}
+    return MergeSource(sources, suggested_fid(family_ids), former)
+
+
+def reuses_directory(merge: MergeSource, target: str) -> bool:
+    """``target`` is a family merged away earlier whose directory remains."""
+    return (
+        target not in merge.family_ids
+        and target in merge.former
+        and get_family_path(merge.data_dir, target).exists()
+    )
 
 
 def target_problems(merge: MergeSource, target: str) -> List[Problem]:
-    """What is wrong with ``target`` as the merged family's ID."""
+    """What is wrong with ``target`` as the merged (or renamed) family's ID."""
     out: List[Problem] = []
     if not target or not _FID.match(target):
         out.append(Problem(ERROR, "The family ID must have no space, comma or slash"))
+        return out
+    if merge.is_rename and target == merge.family_ids[0]:
+        out.append(Problem(ERROR, "Type the family's new ID"))
         return out
     if target in merge.family_ids:
         return out
@@ -215,7 +258,9 @@ def target_problems(merge: MergeSource, target: str) -> List[Problem]:
         out.append(
             Problem(ERROR, f"Family {target} already exists in the cohort pedigree")
         )
-    elif get_family_path(merge.data_dir, target).exists():
+    elif get_family_path(merge.data_dir, target).exists() and not reuses_directory(
+        merge, target
+    ):
         out.append(
             Problem(
                 ERROR,
@@ -235,19 +280,32 @@ def merge_problems(
 
 
 def merge_changes(merge: MergeSource, draft: PedigreeDraft, target: str) -> List[str]:
-    """The merge first, then each member's change (as the pipeline words them)."""
-    others = [f for f in merge.family_ids if f != target]
-    head = (
-        f"{', '.join(others)} merged into {target}"
-        if target in merge.family_ids
-        else f"{', '.join(merge.family_ids)} merged into {target} (a new family)"
+    """The merge (or rename) first, then each member's change (as the pipeline
+    words them)."""
+    others = (
+        merge.family_ids
+        if merge.is_rename
+        else [f for f in merge.family_ids if f != target]
     )
+    if reuses_directory(merge, target):
+        suffix = " (its old directory reused)"
+    elif target not in merge.family_ids:
+        suffix = " (a new family)"
+    elif merge.is_rename:
+        return [*describe_changes(merge.original(), draft)]
+    else:
+        suffix = ""
+    joint = RENAMED_TO if merge.is_rename else MERGED_INTO
+    head = f"{', '.join(others)} {joint}{target}{suffix}"
     return [head, *describe_changes(merge.original(), draft)]
 
 
 def merge_rerun(merge: MergeSource, target: str) -> str:
-    """A new family is built by a normal run; an existing one gains members."""
-    return RERUN_CLEAN if target in merge.family_ids else RERUN_NORMAL
+    """A new family is built by a normal run; an existing one gains members,
+    and so does a former family's directory taken again."""
+    if target in merge.family_ids or reuses_directory(merge, target):
+        return RERUN_CLEAN
+    return RERUN_NORMAL
 
 
 def render_merge_text(
@@ -451,7 +509,8 @@ def _write_merge(
                         clauses.append(f"curation re-keyed: {moved_text}")
                     fid_rerun = rerun
                 else:
-                    clauses = [f"merged into {target}"]
+                    joint = RENAMED_TO if merge.is_rename else MERGED_INTO
+                    clauses = [f"{joint}{target}"]
                     fid_rerun = RERUN_MERGED
                 record = EditRecord(
                     family_id=fid,
@@ -504,6 +563,7 @@ def orphaned_families(
             continue
         path = get_family_path(data_dir, r.family_id)
         if path.exists():
-            into = r.changes[0].removeprefix("merged into ") if r.changes else ""
+            first = r.changes[0] if r.changes else ""
+            into = first.removeprefix(MERGED_INTO).removeprefix(RENAMED_TO)
             out[r.family_id] = Orphan(r.family_id, into, r.timestamp, path)
     return sorted(out.values(), key=lambda o: o.family_id)

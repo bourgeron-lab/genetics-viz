@@ -50,6 +50,8 @@ def test_families_of_other_cohort_pedigrees_cannot_be_merged(data_dir):
         )
     with pytest.raises(pe.PedigreeEditError, match="two families or more"):
         pm.load_merge(data_dir, ["1002"], [[demo(data_dir)]])
+    with pytest.raises(pe.PedigreeEditError, match="one family to rename"):
+        pm.load_merge(data_dir, ["1002", "AU-X-1"], [[demo(data_dir)]] * 2, rename=True)
 
 
 @pytest.mark.parametrize(
@@ -192,3 +194,72 @@ def test_a_viewer_cannot_merge(data_dir, monkeypatch):
     merge = merge_of(data_dir, "1002", "AU-X-1")
     with pytest.raises(PermissionError):
         pm.save_merge(merge, merge.original(), "FAMX", user="eve", comment="x", now=NOW)
+
+
+def rename_of(data_dir: Path, fid: str) -> pm.MergeSource:
+    return pm.load_merge(data_dir, [fid], [[demo(data_dir)]], rename=True)
+
+
+def test_a_rename_starts_on_the_family_s_own_id(data_dir):
+    rename = rename_of(data_dir, "AU-X-1")
+    assert rename.is_rename and rename.target == "AU-X-1"
+    (problem,) = pm.target_problems(rename, "AU-X-1")
+    assert problem.message == "Type the family's new ID"
+    assert pm.merge_changes(rename, rename.original(), "AU-X-1") == []
+    assert pm.target_problems(rename, "FAMR") == []
+    assert pm.merge_changes(rename, rename.original(), "FAMR") == [
+        "AU-X-1 renamed to FAMR (a new family)"
+    ]
+    assert pm.merge_rerun(rename, "FAMR") == pe.RERUN_NORMAL
+
+
+def test_a_rename_moves_the_lines_and_the_curation(data_dir, curator):
+    rename = rename_of(data_dir, "AU-X-1")
+    records = pm.save_merge(
+        rename, rename.original(), "FAMR", user="alice", comment="typo", now=NOW
+    )
+    assert [(r.family_id, r.rerun, r.changes[0]) for r in records] == [
+        ("AU-X-1", pm.RERUN_MERGED, "renamed to FAMR"),
+        ("FAMR", pe.RERUN_NORMAL, "AU-X-1 renamed to FAMR (a new family)"),
+    ]
+    text = demo(data_dir).read_text()
+    assert "AU-X-1\t" not in text and "FAMR\tS5" in text and "FAMR\tS6" in text
+    acks = (data_dir / "validations" / "sampleqc.tsv").read_text()
+    assert "SEX_MISMATCH\tFAMR\tS6" in acks
+    get_family_path(data_dir, "AU-X-1").mkdir(parents=True, exist_ok=True)
+    (orphan,) = pm.orphaned_families(data_dir, records, ["FAMR", "1001", "1002"])
+    assert (orphan.family_id, orphan.into) == ("AU-X-1", "FAMR")
+
+
+def test_a_merged_family_given_back_one_of_its_ids(data_dir, curator):
+    # The merge kept the suggested ID by mistake; the family is renamed to
+    # AU-X-1, whose directory the merge left behind.
+    merge = merge_of(data_dir, "1002", "AU-X-1")
+    pm.save_merge(
+        merge, merge.original(), "1002_AU-X-1", user="alice", comment="x", now=NOW
+    )
+    get_family_path(data_dir, "AU-X-1").mkdir(parents=True, exist_ok=True)
+    rename = rename_of(data_dir, "1002_AU-X-1")
+    assert {"1002", "AU-X-1"} <= rename.former
+    assert pm.target_problems(rename, "AU-X-1") == []
+    assert pm.reuses_directory(rename, "AU-X-1")
+    assert pm.merge_rerun(rename, "AU-X-1") == pe.RERUN_CLEAN
+    later = datetime(2026, 11, 19, 9, 0, 0)
+    records = pm.save_merge(
+        rename, rename.original(), "AU-X-1", user="alice", comment="ID", now=later
+    )
+    assert records[-1].family_id == "AU-X-1"
+    assert records[-1].rerun == pe.RERUN_CLEAN
+    assert records[-1].changes[0] == (
+        "1002_AU-X-1 renamed to AU-X-1 (its old directory reused)"
+    )
+    acks = (data_dir / "validations" / "sampleqc.tsv").read_text()
+    assert "SEX_MISMATCH\tAU-X-1\tS6" in acks
+    text = demo(data_dir).read_text()
+    assert "1002_AU-X-1" not in text and text.count("AU-X-1\tS") == 3
+
+    # A directory of a family never merged away is still refused.
+    get_family_path(data_dir, "OTHER").mkdir(parents=True)
+    again = rename_of(data_dir, "AU-X-1")
+    (problem,) = pm.target_problems(again, "OTHER")
+    assert "already exists: choose another ID" in problem.message
