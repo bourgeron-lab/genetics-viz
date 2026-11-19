@@ -43,6 +43,7 @@ def test_cohort_tables(data_dir):
     assert s3["seq_class"] == "rl150" and s3["ebv_copies_per_cell"] == 152.3
     assert data.row_for("S1")["seq_class"] == "rl150_pcr"
     assert data.row_for("S6")["seq_class"] == "rl100"
+    assert s3["read_indels_per_kb"] == 0.2714 and s3["read_indels_per_kb_adj"] == 0.2731
     assert data.cell_lines() == {"S3"}
     # Sample QC's flag rows: one sample, level genome, low read as info,
     # most severe first.
@@ -83,6 +84,7 @@ def test_family_without_cohort_tables(data_dir):
     s3 = fam.row_for("S3")
     assert s3["ebv_copies_per_cell"] == 152.3 and s3["het_hom_ratio"] == 1.5293
     assert s3["seq_class"] is None and s3["flags"] is None
+    assert s3["read_indels_per_kb_adj"] is None
     assert set(fam.samples.columns) >= set(gqc.COHORT_COLUMNS)
     assert gqc.probe_family_gqc(data_dir, "1001")
     assert gqc.load_family_gqc(data_dir, "1002") is None
@@ -114,6 +116,11 @@ def test_metric_wording():
     assert gqc.metric_info("duplicate_share").fmt(0.1202) == "12.0%"
     assert gqc.metric_info("n_indel").fmt(587299) == "587,299"
     assert gqc.metric_info("n_indel").side == "both"
+    # READ_INDEL_EXCESS is on the adjusted reads' indels: the raw ones follow ancestry
+    adj = gqc.metric_info("read_indels_per_kb_adj")
+    assert adj.flags == ["READ_INDEL_EXCESS"] and adj.side == "high"
+    raw = gqc.metric_info("read_indels_per_kb")
+    assert raw.flags == [] and raw.side is None
     assert gqc.metric_info("chr20_depth").lines == [20.0]
     assert gqc.metric_info("private_snvs").plot is False
     assert gqc.metric_info("library").fmt("pcr") == "pcr"

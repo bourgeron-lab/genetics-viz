@@ -274,9 +274,10 @@ flags:
     label: "Indels in the reads"
     reader_label: "Low data quality"
     explain: >-
-      Indels in the reads' alignments 5 scaled MADs above its class:
-      polymerase slippage of a PCR library, or damaged DNA. Indel calls in
-      homopolymers and tandem repeats are less reliable.
+      Indels in the reads' alignments 5 scaled MADs above its class, beyond
+      what the genome's own indels put there: polymerase slippage of a PCR
+      library, or damaged DNA. Indel calls in homopolymers and tandem repeats
+      are less reliable.
   SHORT_INSERT:
     category: sequencing
     label: "Short inserts"

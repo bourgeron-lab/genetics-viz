@@ -1308,7 +1308,7 @@ GQC_SAMPLE_COLUMNS = [
     "insert_median", "insert_mad", "read_indels_per_kb", "n_snv", "n_snv_het",
     "n_snv_hom", "het_hom_ratio", "ti_tv", "private_snvs", "low_vaf_het_share",
     "n_indel", "ins_del_ratio", "indel_1bp_share", "ins_over_10bp_share",
-    "indel_tr_share", "flags",
+    "indel_tr_share", "read_indels_per_kb_adj", "flags",
 ]  # fmt: skip
 GQC_FLAG_COLUMNS = ["sample", "family_id", "seq_class", "flag", "severity", "evidence"]
 GQC_VARIANT_COLUMNS = [
@@ -1420,7 +1420,7 @@ def add_genomeqc_tables(data: Path, cohort: Optional[str] = "DEMO") -> None:
             row = _gqc_sample_row(sid)
             samples.append(
                 [sid, fid, cls, library, ".", *row[1:], *_gqc_variants(fid, sid)[2:],
-                 codes]
+                 "0.2731", codes]
             )  # fmt: skip
             flags += [[sid, fid, cls, c, sev, ev] for c, sev, ev in sample_flags]
     if cohort is not None:

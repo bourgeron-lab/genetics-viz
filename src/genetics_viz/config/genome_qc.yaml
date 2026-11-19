@@ -143,13 +143,26 @@ metrics:
     label: "Insert MAD (bp)"
     format: int
   read_indels_per_kb:
-    flags: [READ_INDEL_EXCESS]
     group: alignment
     label: "Indels in reads per kb"
     format: float
     digits: 3
+    explain: >-
+      The person's own indels as well as polymerase slippage, and mostly the
+      former: it follows ancestry (African genomes run higher), so it is not
+      tested. See the adjusted value.
+  read_indels_per_kb_adj:
+    flags: [READ_INDEL_EXCESS]
+    group: alignment
+    label: "Indels in reads per kb, adjusted"
+    format: float
+    digits: 3
     side: high
-    explain: "Raised by polymerase slippage in PCR libraries."
+    explain: >-
+      Indels in reads per kb, with the genome's own indels taken out: moved,
+      along a line fitted within the class, to the class's median indel count.
+      What is left rises with polymerase slippage in PCR libraries. Cohort
+      tables only; empty without the member's variant calls.
   n_snv:
     group: variants
     label: "SNVs"
