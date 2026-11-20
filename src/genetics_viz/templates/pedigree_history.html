@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ history.document_title }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 14mm 12mm 16mm 12mm;
+    @bottom-left {
+      content: "Cohort {{ history.cohort_name }} · Pedigree edits · Confidential";
+      font: 7pt Helvetica, Arial, sans-serif; color: #6b7280;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " / " counter(pages);
+      font: 7pt Helvetica, Arial, sans-serif; color: #6b7280;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0; padding: 16px; background: #e5e7eb;
+    font: 9.5pt/1.4 Helvetica, Arial, sans-serif; color: #111827;
+  }
+  .page { max-width: 186mm; margin: 0 auto; background: white; padding: 12mm; }
+  header { display: flex; justify-content: space-between; align-items: flex-start;
+           border-bottom: 2px solid #1e3a8a; padding-bottom: 6px; margin-bottom: 8px; }
+  header h1 { margin: 0; font-size: 16pt; color: #1e3a8a; }
+  header .subtitle { color: #4b5563; font-size: 9pt; }
+  header .meta { text-align: right; font-size: 8.5pt; color: #374151; }
+  header .meta .cohort { font-size: 13pt; font-weight: bold; color: #111827; }
+  .print { margin-top: 4px; font: 8.5pt Helvetica, Arial, sans-serif; cursor: pointer; }
+  h2 { font-size: 11.5pt; color: #1e3a8a; margin: 16px 0 4px;
+       border-bottom: 1px solid #c7d2fe; padding-bottom: 2px; break-after: avoid; }
+  h2 .awaiting { color: #b45309; font-size: 8.5pt; font-weight: normal; margin-left: 6px; }
+  section.family { break-before: auto; }
+  .note { margin: 2px 0 4px; color: #374151; }
+  table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 8.5pt; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; }
+  th { text-align: left; background: #f3f4f6; border-bottom: 1px solid #d1d5db;
+       padding: 3px 4px; font-weight: 600; }
+  td { border-bottom: 1px solid #e5e7eb; padding: 3px 4px; vertical-align: top;
+       overflow-wrap: anywhere; }
+  td.mono, .changes li { font-family: Menlo, Consolas, monospace; font-size: 8pt; }
+  .trees { display: flex; gap: 6mm; justify-content: center; align-items: flex-start;
+           margin: 6px 0; break-inside: avoid; }
+  .tree { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+          align-items: center; }
+  .tree .title { font-weight: 600; font-size: 8.5pt; color: #374151; margin-bottom: 2px; }
+  .tree svg { display: block; width: 100%; height: auto; }
+  .tree .missing { color: #6b7280; font-style: italic; font-size: 8.5pt; padding: 8mm 0; }
+  .tree .node.changed .shape { stroke: #ea580c !important; stroke-width: 0.12; }
+  .key { color: #6b7280; font-size: 7.5pt; text-align: center; margin: 0 0 4px; }
+  .edit { border-left: 3px solid #c7d2fe; padding: 2px 0 2px 8px; margin: 6px 0;
+          break-inside: avoid; }
+  .edit .when { font-family: Menlo, Consolas, monospace; font-size: 8.5pt; }
+  .edit .who { font-weight: 600; }
+  .edit .comment { margin: 2px 0; white-space: pre-wrap; }
+  .edit .rerun, .edit .flags { color: #4b5563; font-size: 8pt; }
+  .changes { margin: 2px 0; padding-left: 16px; }
+  .empty { color: #6b7280; font-style: italic; }
+  @media print {
+    body { background: white; padding: 0; }
+    .page { max-width: none; padding: 0; }
+    .print { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <div>
+    <h1>Pedigree edit history</h1>
+    <div class="subtitle">Changes made to the cohort pedigree through genetics-viz</div>
+  </div>
+  <div class="meta">
+    <div class="cohort">Cohort {{ history.cohort_name }}</div>
+    <div>Generated {{ history.generated_at }}{% if history.generated_by %} by {{ history.generated_by }}{% endif %}</div>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+</header>
+
+{% if not history.families %}
+<p class="empty">No pedigree edit was saved for this cohort.</p>
+{% else %}
+<p class="note">
+  {{ history.n_edits }} edit{{ 's' if history.n_edits != 1 }} to
+  {{ history.families | length }} famil{{ 'ies' if history.families | length != 1 else 'y' }},
+  by {{ history.users | join(', ') or 'unknown' }}.
+  The trees are drawn from the rows each edit kept: before the family's first
+  edit, and after its last.
+</p>
+
+<h2>Summary</h2>
+<table>
+  <thead>
+    <tr><th>Family</th><th>Edits</th><th>First edit</th><th>Last edit</th><th>By</th><th>ghfc-ngs run since</th></tr>
+  </thead>
+  <tbody>
+  {% for f in history.families %}
+    <tr>
+      <td><a href="#family-{{ loop.index }}">{{ f.family_id }}</a></td>
+      <td>{{ f.edits | length }}</td>
+      <td class="mono">{{ when(f.edits[0].timestamp) }}</td>
+      <td class="mono">{{ when(f.edits[-1].timestamp) }}</td>
+      <td>{{ f.users | join(', ') }}</td>
+      <td>{% if f.awaiting_rerun is none %}–{% elif f.awaiting_rerun %}Waiting for a run{% else %}Yes{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% for f in history.families %}
+<section class="family" id="family-{{ loop.index }}">
+  <h2>Family {{ f.family_id }}{% if f.awaiting_rerun %}<span class="awaiting">waiting for a ghfc-ngs run</span>{% endif %}</h2>
+  <div class="trees">
+    {% for tree in (f.before, f.after) %}
+    <div class="tree">
+      <div class="title">{{ tree.title }}</div>
+      {% if tree.svg %}
+      <div style="width: {{ tree.width }}; max-width: 100%">{{ tree.markup }}</div>
+      {% else %}
+      <div class="missing">{{ tree.missing }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="key">Square: male. Circle: female. Diamond: sex not declared. Filled: affected.
+    Dashed outline: not sequenced. Orange outline: added or changed.</p>
+  {% for e in f.edits %}
+  <div class="edit">
+    <div><span class="when">{{ when(e.timestamp) }}</span> · <span class="who">{{ e.user or 'unknown' }}</span>{% if e.cohorts %} · cohorts {{ e.cohorts | join(', ') }}{% endif %}</div>
+    {% if e.comment %}<div class="comment">{{ e.comment }}</div>{% endif %}
+    {% if e.changes %}
+    <ul class="changes">
+      {% for clause in e.changes %}<li>{{ clause }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    <div class="rerun">Rerun needed: {{ rerun_words.get(e.rerun, e.rerun) }}</div>
+    {% if e.flags %}<div class="flags">Sample QC flags addressed: {{ e.flags | join(', ') }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+{% endif %}
+</div>
+</body>
+</html>

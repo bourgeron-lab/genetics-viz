@@ -54,7 +54,6 @@ from genetics_viz.utils.pedigree_edit import (
     swap_across,
     waiting_families,
 )
-from genetics_viz.utils.pedigree_labels import normalize_pheno, normalize_sex
 from genetics_viz.utils.pedigree_merge import (
     MergeSource,
     Orphan,
@@ -78,6 +77,8 @@ from genetics_viz.utils.pedigree_qc import (
     merged_context,
     suggest_across,
 )
+from genetics_viz.utils.pedigree_history import changed_ids
+from genetics_viz.utils.pedigree_history import draft_people as history_draft_people
 from genetics_viz.utils.pedigree_svg import PedigreePerson, pedigree_svg
 from genetics_viz.utils.sample_qc_acks import load_acks
 from genetics_viz.utils.sample_qc import (
@@ -118,45 +119,22 @@ TREE_PX_PER_UNIT = 60
 TREE_MAX_HEIGHT = "320px"
 
 
-def _parent(code: str) -> str:
-    return "" if code == UNKNOWN else code
-
-
-def changed_ids(original: PedigreeDraft, draft: PedigreeDraft) -> set:
-    """Members whose row the edit adds or changes (codes normalised)."""
-    was = {m.iid: m.key() for m in [*original.members, *original.implied]}
-    return {
-        m.iid for m in [*draft.members, *draft.implied] if was.get(m.iid) != m.key()
-    }
-
-
 def draft_people(
     draft: PedigreeDraft,
     flags: Optional[Dict[str, List[FlagRow]]] = None,
     changed: Sequence[str] = (),
 ) -> List[PedigreePerson]:
-    """The draft's members (and implied dummies) as drawing people."""
-    people = []
+    """The draft's members (and implied dummies) as drawing people: the
+    changed ones outlined, the others by their worst open QC flag."""
+    classes: Dict[str, List[str]] = {}
     for m in [*draft.members, *draft.implied]:
-        classes: List[str] = []
         if m.iid in changed:
-            classes.append("changed")
+            classes[m.iid] = ["changed"]
         elif not m.is_dummy:
             severity = worst_severity((flags or {}).get(m.iid, []))
             if severity in OUTLINED_SEVERITIES:
-                classes.append(f"qc-{severity}")
-        people.append(
-            PedigreePerson(
-                m.iid,
-                _parent(m.parent(FATHER)),
-                _parent(m.parent(MOTHER)),
-                normalize_sex(m.sex),
-                normalize_pheno(m.phenotype),
-                dummy=m.is_dummy,
-                classes=tuple(classes),
-            )
-        )
-    return people
+                classes[m.iid] = [f"qc-{severity}"]
+    return history_draft_people(draft, classes)
 
 
 def draft_tree_html(

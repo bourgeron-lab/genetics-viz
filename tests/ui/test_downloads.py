@@ -4,10 +4,14 @@ import asyncio
 import csv
 import io
 import zipfile
+from datetime import datetime
+from pathlib import Path
 
 from nicegui import ui
 from nicegui.testing import User
 from ui_helpers import capture_tables, login, open_tab
+
+from genetics_viz.utils import pedigree_edit as pe
 
 
 async def _download(user: User, mark: str, entry: str = "") -> bytes:
@@ -78,8 +82,10 @@ async def test_cohort_tabs_download_what_they_show(user):
         io.BytesIO(await _download(user, "download-sampleqc", "zip"))
     )
     names = archive.namelist()
-    assert len(names) == 3
-    assert {n.split(".")[2] for n in names} == {"flags", "samples", "pairs"}
+    # No pedigree edit in the default data: no history in the archive.
+    assert len(names) == 4
+    assert {n.split(".")[1] for n in names} == {"sampleqc", "pedigree"}
+    assert {n.split(".")[2] for n in names} >= {"flags", "samples", "pairs"}
 
 
 def _individuals(tables):
@@ -169,3 +175,35 @@ async def test_an_empty_export_downloads_nothing(user, monkeypatch):
     await user.should_see("Nothing to download", retries=30)
     assert not user.download.http_responses
     assert user.find(kind=ui.button, marker="download-str").elements
+
+
+async def test_the_pedigree_and_its_edit_history(user, data_dir, monkeypatch):
+    demo = data_dir / "cohorts" / "DEMO" / "DEMO.pedigree.tsv"
+    monkeypatch.setattr(pe, "can_write", lambda: True)
+    source = pe.load_family(data_dir, "1001", [demo])
+    draft = source.draft()
+    draft.set_phenotype("S1", "2")
+    pe.save_pedigree_edit(
+        source, draft, user="alice", comment="father affected", now=datetime.now()
+    )
+
+    await _open_cohort(user, "curator")
+    open_tab(user, "cohort-tabs", "Sample QC")
+    await user.should_see("5 of 6 shown individuals checked", retries=30)
+    content = await _download(user, "download-sampleqc", "pedigree")
+    assert content.decode() == demo.read_text()  # the file as written
+    html = (await _download(user, "download-sampleqc", "pedigree-history")).decode()
+    assert "Pedigree edit history" in html and "Cohort DEMO" in html
+    assert "father affected" in html and "S1: phenotype 1 -&gt; 2" in html
+    assert "by curator" in html and html.count("<svg") == 2
+    names = zipfile.ZipFile(
+        io.BytesIO(await _download(user, "download-sampleqc", "zip"))
+    ).namelist()
+    assert any(Path(n).suffix == ".html" for n in names) and len(names) == 5
+
+
+async def test_readers_get_the_pedigree_not_its_history(user):
+    await _open_cohort(user, "reader")
+    open_tab(user, "cohort-tabs", "Sample QC")
+    await user.should_see(marker="download-sampleqc-pedigree", retries=30)
+    await user.should_not_see(marker="download-sampleqc-pedigree-history")

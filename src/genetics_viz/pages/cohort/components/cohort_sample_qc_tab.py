@@ -27,7 +27,8 @@ from nicegui import ui
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.pedigree_editor import render_merge_candidates
-from genetics_viz.utils.auth import can_write
+from genetics_viz.utils import family_status
+from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.data import get_static_prefix
 from genetics_viz.utils.genome_qc import (
     GenomeQc,
@@ -43,6 +44,7 @@ from genetics_viz.utils.export import (
     people_from_individuals,
     rows_to_tsv,
 )
+from genetics_viz.utils.pedigree_history import history_html
 from genetics_viz.utils.roh import to_float
 from genetics_viz.utils.sample_qc import (
     HUB_MINIMUM,
@@ -486,7 +488,12 @@ def _download_menu(
     filtered_state: Dict[str, Any],
     show_detail: bool,
 ) -> None:
-    """Flags, samples and pairs of the shown individuals, apart or zipped."""
+    """Flags, samples and pairs of the shown individuals, apart or zipped.
+
+    Also the cohort pedigree as it is now (the whole file, as written) and,
+    for curators, the history of the edits genetics-viz made to it.
+    """
+    user = get_current_user() or ""
 
     def keys() -> Set[Key]:
         return _keys(filtered_state)
@@ -557,6 +564,32 @@ def _download_menu(
         ),
         Download("pairs", "Pairs (relatedness)", filename("pairs"), build_pairs),
     ]
+
+    def build_pedigree() -> str:
+        return cohort.pedigree_file.read_text(encoding="utf-8")
+
+    def build_history() -> str:
+        statuses = family_status.cohort_edits(cohort, store.data_dir)
+        return history_html(store.data_dir, cohort.name, user=user, statuses=statuses)
+
+    downloads.append(
+        Download(
+            "pedigree",
+            "Pedigree (current file)",
+            lambda: export_filename(cohort.name, "pedigree"),
+            build_pedigree,
+        )
+    )
+    if show_detail:
+        downloads.append(
+            Download(
+                "pedigree-history",
+                "Pedigree edit history (HTML, printable)",
+                lambda: export_filename(cohort.name, "pedigree", "history", ext="html"),
+                build_history,
+                media_type="text/html",
+            )
+        )
     if state["has_genome"]:
         downloads.append(
             Download(

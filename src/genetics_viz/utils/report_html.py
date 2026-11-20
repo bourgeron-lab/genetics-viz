@@ -23,6 +23,11 @@ _ENV = Environment(
 )
 
 
+def render_template(name: str, **context) -> str:
+    """Another document of ``templates/``, with the same environment."""
+    return _ENV.get_template(name).render(**context)
+
+
 def render_report_html(report: FamilyReport) -> str:
     """The whole document, ``<!DOCTYPE html>`` included."""
     template = _ENV.get_template("family_report.html")
