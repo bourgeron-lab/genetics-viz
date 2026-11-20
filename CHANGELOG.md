@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The cohort pedigree can be downloaded** from the cohort's Sample QC tab: "Pedigree (current file)" in the Download menu gives the cohort's `.pedigree.tsv` as it is now, byte for byte, edits included.
+- **A report of every pedigree edit made in the app, for curators.** "Pedigree edit history" in the same menu gives one HTML document, which you can print or save as PDF from the browser (A4, page numbers). It starts with a summary of the edited families: number of edits, first and last date, who made them, and whether a ghfc-ngs run has started since. Then, for each family, the pedigree tree before its first edit and after its last, with the added or changed members outlined in orange, and each edit with its date, curator, comment, the changes in ghfc-ngs's words, the rerun it needs and the Sample QC flags it addressed. Merges and renames are included. "All tables (.zip)" now holds both files too.
+
 ### Changed
 - **Genome QC tests the reads' indels with the genome's own indels taken out.** ghfc-ngs (bourgeron-lab/ghfc-ngs#68) no longer tests `read_indels_per_kb` raw: it counts the person's germline indels as well as polymerase slippage, so it flagged African-ancestry genomes `READ_INDEL_EXCESS` for their ancestry. It writes `read_indels_per_kb_adj` in the cohort table and tests that. The DNA and library section shows it in the table, and it is drawn by class with the `READ_INDEL_EXCESS` samples in red. The raw rate is still drawn, without flags, and says it follows ancestry. A cohort table written before the change has no adjusted column, so the column is empty.
 - **Genome QC follows the pipeline's flags and columns again.** ghfc-ngs stopped testing counts, which follow ancestry, and tests shares and compositions instead:

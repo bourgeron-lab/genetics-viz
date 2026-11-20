@@ -1,9 +1,9 @@
 """The Download button of the cohort and family tabs.
 
-One export gives a plain button; several give a menu with one entry per TSV
-plus, optionally, "All tables (.zip)". Each export is built when it is
-clicked, from the tab's state at that moment, off the event loop: a builder
-must not touch ``app.storage`` (resolve the user's role before, at render).
+One export gives a plain button; several give a menu with one entry per file
+(a TSV, or an HTML document) plus, optionally, "All tables (.zip)". Each
+export is built when it is clicked, from the tab's state at that moment, off
+the event loop: a builder must not touch ``app.storage`` (resolve the user's role before, at render).
 
 The content always reaches ``ui.download`` as bytes. NiceGUI's test client
 takes a ``str`` for a URL and fetches it.
@@ -37,6 +37,9 @@ class Download:
     #: The TSV text; ``None``, ``""`` or a header alone when there is nothing
     #: to export.
     build: Callable[[], Optional[str]]
+    #: Another text format (an HTML document): its builder returns ``""`` when
+    #: there is nothing to export.
+    media_type: str = _TSV
 
 
 def _has_rows(text: Optional[str]) -> bool:
@@ -66,7 +69,9 @@ async def _send(download: Download) -> None:
     if not _has_rows(text):
         ui.notify("Nothing to download", type="info")
         return
-    ui.download(text.encode("utf-8"), download.filename(), media_type=_TSV)
+    ui.download(
+        text.encode("utf-8"), download.filename(), media_type=download.media_type
+    )
 
 
 async def _send_zip(downloads: List[Download], filename: Callable[[], str]) -> None:
