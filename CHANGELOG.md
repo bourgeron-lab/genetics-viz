@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.44.0] - 2026-11-20
 
 ### Added
 - **The cohort pedigree can be downloaded** from the cohort's Sample QC tab: "Pedigree (current file)" in the Download menu gives the cohort's `.pedigree.tsv` as it is now, byte for byte, edits included.
