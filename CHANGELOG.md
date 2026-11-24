@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Curators can ask for a ghfc-ngs run of a cohort.** genetics-viz does not start the run. It writes the request into the cohort directory, and the ghfc-ngs dashboard (ghfc-ngs-swiftbar) shows it to the person who runs the pipeline, who starts it, possibly with other steps, or dismisses it with a note. No cluster account or password goes through the app.
+  - **Request a run** on the Workflow tab: the steps to run, among the params file's, or a normal run; `--clean-stale-families`; a reason; the command it becomes. Below it, every request of the last 30 days, with who asked, what was started (Slurm job, steps sent), the run's outcome from the run record, or why it was dismissed.
+  - **Shortcuts**: "Request a QC run" on the cohort Sample QC tab (Sample QC and genome QC); "Request a run of <cohort>" beside a family's "Computed on an older pedigree" note, one per cohort listing the family, with the steps still on the older pedigree; "Request this run" in the Workflow tab's pedigree edits waiting, with `--clean-stale-families` when a family needs it.
+  - **One open request per curator and cohort**: to change it, withdraw it and ask again. An administrator can withdraw anyone's.
+  - The Workflow button counts the requests waiting.
+  - **Curators and administrators only**, and only for a data directory with **Run requests** turned on (Admin → Directories, off by default): only the directories the dashboard polls should have it.
+
 ### Changed
 - **The Workflow tab reads each step from its own last run.** A ghfc-ngs run asked for a few steps (`--steps sampleqc,genomeqc`) became the cohort's last run, so the tab showed every other step as "not in last run" and the pedigree as unchanged for all of them. ghfc-ngs now keeps each step's own last run (`last_run_by_step`, bourgeron-lab/ghfc-ngs#71), and the tab uses it; for a run record written before that, it rebuilds the same from the run history.
   - A step measured by an older run than the last says "as of" its date.

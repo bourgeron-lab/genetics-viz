@@ -18,13 +18,15 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from nicegui import ui
 
+from genetics_viz.components.run_request import render_request_control
 from genetics_viz.components.pedigree_tree import (
     OUTLINED_SEVERITIES,
     tree_html,
     worst_severity,
 )
-from genetics_viz.utils.auth import get_current_user
+from genetics_viz.utils.auth import can_write, get_current_user
 from genetics_viz.utils.cohort_state import pedigree_run_started
+from genetics_viz.utils.run_requests import allowed_steps, requests_enabled
 from genetics_viz.utils.pedigree_edit import (
     ERROR,
     FATHER,
@@ -1408,18 +1410,38 @@ STEP_NAMES = {
 
 def _pedigree_status(
     store: Any, family_id: str
-) -> Tuple[Optional[EditRecord], List[str]]:
-    """Blocking: the family's last edit, and the steps still on an older pedigree."""
+) -> Tuple[Optional[EditRecord], List[str], Set[str]]:
+    """Blocking: the family's last edit, and the steps still on an older
+    pedigree (worded, then as ghfc-ngs names them)."""
     files = family_cohort_files(store, family_id)
     edits = read_family_edits(store.data_dir, family_id)
     steps: List[str] = []
+    found: Set[str] = set()
     if files:
         text = files[0].read_text(encoding="utf-8")
         found = {p.step for p in pending_steps(store.data_dir, family_id, text)}
         # In the tabs' order, then any step this module does not know.
         steps = [STEP_NAMES[s] for s in STEP_NAMES if s in found]
         steps += sorted(found - set(STEP_NAMES))
-    return (edits[-1] if edits else None), steps
+    return (edits[-1] if edits else None), steps, found
+
+
+#: A step whose cohort tables another step merges: asked for together.
+_COHORT_COMPANIONS = {"wombat": "wombat_cohort"}
+
+
+def _request_steps(cohort: Any, pending: Set[str]) -> Optional[List[str]]:
+    """The steps to ask a cohort for, for a family's pending steps: those of
+    its params file, with their cohort merge. ``None`` (a normal run) when
+    the params file has none of them."""
+    allowed = allowed_steps(cohort)
+    wanted = [s for s in allowed if s in pending]
+    wanted += [
+        _COHORT_COMPANIONS[s]
+        for s in wanted
+        if s in _COHORT_COMPANIONS and _COHORT_COMPANIONS[s] in allowed
+    ]
+    return [s for s in allowed if s in wanted] or None
 
 
 def render_pedigree_status(store: Any, family_id: str) -> None:
@@ -1432,7 +1454,9 @@ def render_pedigree_status(store: Any, family_id: str) -> None:
 
     async def load() -> None:
         try:
-            last, steps = await asyncio.to_thread(_pedigree_status, store, family_id)
+            last, steps, pending = await asyncio.to_thread(
+                _pedigree_status, store, family_id
+            )
         except Exception:
             logger.warning(
                 "Failed to read the pedigree status of %s", family_id, exc_info=True
@@ -1455,6 +1479,20 @@ def render_pedigree_status(store: Any, family_id: str) -> None:
                         + ", ".join(steps)
                         + ". These results change at the next ghfc-ngs run."
                     ).classes("text-sm text-amber-900")
+                if can_write() and requests_enabled(store.data_dir):
+                    # One request per cohort listing the family: each runs on its own
+                    for cohort in store.cohorts.values():
+                        if family_id not in cohort.families:
+                            continue
+                        render_request_control(
+                            cohort,
+                            label=f"Request a run of {cohort.name}",
+                            mark=f"pedigree-request-run-{cohort.name}",
+                            steps=_request_steps(cohort, pending),
+                            families=[family_id],
+                            origin=f"family {family_id}, Sample QC tab",
+                            reason=f"Pedigree of {family_id} edited",
+                        )
             if last is not None:
                 date = last.timestamp.replace("T", " ")[:16]
                 label = (
@@ -1607,5 +1645,17 @@ def render_waiting_families(cohort: Any) -> None:
                     + " (--dry-run first lists what it deletes)"
                 )
             ui.label(text + ".").classes("text-xs text-amber-900 font-semibold")
+            if can_write() and requests_enabled(cohort.pedigree_file.parents[2]):
+                fids = [w.family_id for w in waiting]
+                render_request_control(
+                    cohort,
+                    label="Request this run",
+                    mark="workflow-pedigree-request",
+                    steps=None,
+                    clean=bool(clean),
+                    families=fids,
+                    origin="Workflow tab, pedigree edits waiting",
+                    reason="Pedigree edits of " + ", ".join(fids),
+                )
 
     ui.timer(0.05, load, once=True)

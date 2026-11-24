@@ -334,3 +334,22 @@ async def test_cohort_pgs_outliers_follow_the_cut_off(user, monkeypatch, data_di
     with user.client:
         cut.set_value(3.0)
     await user.should_see("1 individual at |z| ≥ 3 for any trait", retries=30)
+
+
+async def test_no_run_requests_unless_the_directory_turns_them_on(
+    user, monkeypatch, data_dir
+):
+    import sys
+    from datetime import datetime
+
+    datagen.add_run_requests(data_dir)
+    docs = sys.modules["genetics_viz.utils.ghfc_ngs_docs"]
+    docs._cached = docs.FetchedDoc(
+        markdown="# Stub reference", error=None, fetched_at=datetime.now()
+    )
+    await login(user, "curator")
+    await user.open("/cohort/DEMO?tab=workflow")
+    await user.should_see("Pipeline status", retries=30)
+    await user.should_not_see(marker="workflow-requests")
+    await user.should_not_see(marker="run-request")
+    await wait_for(lambda: pill_texts(user, "workflow-tab-pills") == [""])

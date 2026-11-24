@@ -76,6 +76,7 @@ src/genetics_viz/
     family_report_dialog.py       # Family report: "See report"/"PDF" buttons, dialog, conclusion, print
     family_status.py              # Family status chip + curator dialog (family pages), status bar and yield
     pedigree_consistency.py       # Pedigrees across cohorts: family banner, cohort/data-directory lists, explain dialog
+    run_request.py                # Run requests: dialog, request button (or the user's open one), Workflow list
   config/                         # YAML config files (loaded at module level)
     ancestry.yaml                 # Ancestry region colors + PGS z-score color scale
     genetrek.yaml                 # GeneTrek refresh period, tier colours, default profile
@@ -191,6 +192,7 @@ src/genetics_viz/
     report_summaries.py           # reports/family_summaries.tsv: curator conclusions (role-guarded)
     family_status.py              # reports/family_status.tsv (role-guarded), reasons to look again, yield
     pedigree_consistency.py       # Cohort pedigrees compared (same FID, aliases by barcode), acks (role-guarded)
+    run_requests.py               # Requests for a ghfc-ngs run (cohorts/<C>/.ghfc-ngs.requests/), role-guarded; outcome from the run record
     ideogram.py                   # Chromosome backbone SVG (bands, Mb grid)
     cnv_coverage.py               # Coverage bigWigs, CNV control panel, fit table, copy number
     cnv_plots.py                  # ECharts builder for the copy-number panel
@@ -610,6 +612,27 @@ Two files may sit in a cohort directory, both written by the ghfc-ngs workflow: 
 - **A step's completion, drift and start come from its own last runs**, not `last_run`: a `--steps sampleqc,genomeqc` run becomes `last_run` and says nothing of the other steps. `CohortState.by_step` is ghfc-ngs's `last_run_by_step` (bourgeron-lab/ghfc-ngs#71: per step, `last` and `last_success`, finished runs that requested and planned it), or `derive_by_step` over the last success and the history for an older file (`by_step_recorded` False). A live run counts for the steps it was asked for (`live_run_for`).
   - `build_step_rows`: each row from its step's run; `latest` False shows "as of <date>". `step_drift`: per step, against its last success.
   - **A pedigree edit waits for every pedigree-reading step** (`PEDIGREE_STEPS`, the steps with an `InputsSnapshot` in ghfc-ngs, among the params' steps): `pedigree_run_started(cohort)` is the earliest of their starts, `None` when one never ran. `family_status.cohort_edits` and the Workflow tab's waiting families pass it to `edit_statuses` / `waiting_families`; never `last_run.started_at`.
+
+### Run Requests
+Curators ask for a ghfc-ngs run; **genetics-viz never starts one**. The VM has no cluster account, and a password or a key per user would put a credential in the app. The request is a file the ghfc-ngs-swiftbar dashboard reads over its own SSH poll, as the person who runs the pipeline (vault: `Workflow run requests`).
+- **Files**, in `cohorts/<C>/.ghfc-ngs.requests/`. Each writer creates only its own and never edits another's:
+  - `<ID>.json`, the request (`schema_version` 1, `steps` or `null` for a normal run, `clean_stale_families`, `reason`, `families`, `origin`, `requested_by`, `requested_at`), and `<ID>.withdrawn.json`, written here;
+  - `<ID>.handled.json`, `started` (`job_id`, `steps_sent`, `clean_sent`, `covered_by`) or `dismissed` (`note`), written by swiftbar.
+
+  `<ID>` is `YYYYMMDDTHHMMSS-<6 of [a-z0-9]>` (`ID_PATTERN`), checked before it goes in a path. Writes go to a temporary file in the folder, then a rename. The folder's `.lock` (`flock`) keeps two clicks from both passing the one-open-request check.
+- **`utils/run_requests.py`**:
+  - `write_request(_async)` checks `can_write()` and refuses a missing reason, a step outside the params file's (`allowed_steps`, which splits `"a,b"` as ghfc-ngs does) and a second open request by the same user on the cohort;
+  - `withdraw_request(_async)`: the author's, or any for `is_admin()`;
+  - `read_requests` gives the state (`open`, `withdrawn`, `dismissed`, `started`) and, for a started one, the outcome: the run record whose `launch.slurm_job_id` (`RunRecord.slurm_job_id`) is the handled `job_id`. A file that is not a request (other schema, bad ID, not JSON) is skipped. Free text is capped.
+- **Opt-in per data directory**: `DataDirectoryConfig.run_requests` (Admin → Directories switch `admin-run-requests-<i>`, saved only when on), `requests_enabled(data_dir)`. Off without a loaded config. Only for a directory swiftbar polls: nothing else reads requests.
+- **Curators and administrators only** (`components/run_request.requests_shown`):
+  - Workflow tab `workflow-requests` (the button and the last 30 days, `recent`);
+  - the Workflow button's count (`request_pills`);
+  - cohort Sample QC `sampleqc-request-run` (sampleqc/genomeqc among the params);
+  - the family Sample QC note's `pedigree-request-run-<cohort>` (one per cohort listing the family; `_request_steps`: the pending steps among the params, `wombat` with `wombat_cohort`, else a normal run);
+  - `workflow-pedigree-request` in the waiting families (a normal run, clean when one needs it).
+- **Markers**: the dialog is `run-request-dialog` (`-mode`, `-step-<step>`, `-clean`, `-reason`, `-command`, `-send`). `render_request_control` shows the button, or the user's open request (`<mark>-open`) with `run-request-withdraw-<id>`; the list's rows are `run-request-<id>`, with `run-request-list-withdraw-<id>`.
+- Test data: `datagen.add_run_requests(data_dir)` (opt-in): DEMO gets an open request by admin, one started with fewer steps (job `RUN_REQUEST_JOB`, also written in the run record) and one dismissed.
 
 ### Cohort Page Tabs
 One row of tabs in captioned groups, without icons (`_TAB_GROUPS` in `cohort.py`: caption, then each tab's label, `tab=` link value, tooltip; drawn through `components/tab_groups.py`): Browse (`Families`, the default, and `Individuals`), Checks (`Sample QC`, `De novo QC`), Variants (`SNVs/Indels`, `SVs`, `STR`, `UPD`), Background (`Ancestry`, `ROH`, `Polygenic Scores`). Up to v0.34.0 the analyses sat in a column beside the table; once the table had nine columns (1,366 px) that column was 138 px wide in a 1,600 px window. The Statistics tab (carriers per geneset) was removed in v0.39.0; `tab=stats` falls back to Individuals.

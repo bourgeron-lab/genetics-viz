@@ -12,6 +12,12 @@ from nicegui import app, ui
 from genetics_viz.components.header import create_header
 from genetics_viz.components.tab_groups import GROUPED_TABS_PROPS, tab_group
 from genetics_viz.components.page_link import PageLink
+from genetics_viz.utils.run_requests import count_open_requests
+from genetics_viz.components.run_request import (
+    request_pills,
+    requests_shown,
+    render_workflow_requests,
+)
 from genetics_viz.components.pedigree_editor import render_waiting_families
 from genetics_viz.components.tab_badge import TabPills
 from genetics_viz.components.tanstack_table import DataTable
@@ -161,7 +167,10 @@ def _render_workflow_tab(cohort: Any) -> None:
 
         render_held_families(cohort)
         if can_write():
-            render_cohort_findings(get_data_store(), cohort.name)
+            store = get_data_store()
+            if requests_shown(store):
+                render_workflow_requests(cohort)
+            render_cohort_findings(store, cohort.name)
             render_waiting_families(cohort)
 
         # flex-wrap so the two panels stack rather than crushing each other on a
@@ -1191,9 +1200,13 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     try:
                         run = await asyncio.to_thread(read_cohort_state, cohort.path)
                         headline = await asyncio.to_thread(status_headline, cohort)
-                        pills["Workflow"].set(
-                            workflow_pills(run, headline.get("caption", ""))
-                        )
+                        badges = workflow_pills(run, headline.get("caption", ""))
+                        if requests_shown(store):
+                            waiting = await asyncio.to_thread(
+                                count_open_requests, cohort.path
+                            )
+                            badges += request_pills(waiting)
+                        pills["Workflow"].set(badges)
                     except Exception:
                         logger.warning("Failed to read the run record", exc_info=True)
                 if state["str_flags"]:
