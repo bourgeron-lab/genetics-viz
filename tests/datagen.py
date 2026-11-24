@@ -1944,6 +1944,63 @@ def add_held_families(data: Path, cohort: str = "DEMO") -> None:
     path.write_text(json.dumps(state))
 
 
+#: DEMO's run requests (``add_run_requests``): id -> (request, withdrawn, handled).
+#: The started one's job is the one ``add_run_requests`` writes in the run record.
+RUN_REQUEST_JOB = "48945575"
+RUN_REQUESTS = {
+    "20261120T090000-open01": (
+        {"steps": ["roh"], "clean_stale_families": False, "reason": "ROH after the new panel",
+         "families": [], "origin": "Workflow tab", "requested_by": "admin",
+         "requested_at": "2026-11-20T09:00:00+01:00"},
+        None, None,
+    ),
+    "20261119T090000-start1": (
+        {"steps": ["ancestry", "roh"], "clean_stale_families": False, "reason": "Pedigree of 1001 edited",
+         "families": ["1001"], "origin": "family 1001, Sample QC tab", "requested_by": "curator",
+         "requested_at": "2026-11-19T09:00:00+01:00"},
+        None,
+        {"status": "started", "user": "fred", "at": "2026-11-19T10:00:00+01:00",
+         "job_id": RUN_REQUEST_JOB, "steps_sent": ["roh"], "clean_sent": False},
+    ),
+    "20261118T090000-dism01": (
+        {"steps": None, "clean_stale_families": False, "reason": "Rerun everything",
+         "families": [], "origin": "Workflow tab", "requested_by": "curator",
+         "requested_at": "2026-11-18T09:00:00+01:00"},
+        None,
+        {"status": "dismissed", "user": "fred", "at": "2026-11-18T10:00:00+01:00",
+         "note": "Nothing out of date"},
+    ),
+}  # fmt: skip
+
+
+def add_run_requests(data: Path, cohort: str = "DEMO") -> None:
+    """:data:`RUN_REQUESTS` in the cohort's request directory, and the started
+    one's Slurm job in its last run. Opt-in: it changes the Workflow badges.
+    Recent dates, so none leaves the Workflow list's 30 days."""
+    from datetime import datetime, timedelta
+
+    folder = data / "cohorts" / cohort / ".ghfc-ngs.requests"
+    folder.mkdir(exist_ok=True)
+    today = datetime.now().astimezone()
+    for i, (rid, (request, withdrawn, handled)) in enumerate(RUN_REQUESTS.items()):
+        moment = (today - timedelta(days=i + 1)).isoformat(timespec="seconds")
+        content = {"schema_version": 1, "id": rid, "cohort": cohort, **request,
+                   "requested_at": moment}  # fmt: skip
+        (folder / f"{rid}.json").write_text(json.dumps(content))
+        if withdrawn:
+            (folder / f"{rid}.withdrawn.json").write_text(json.dumps(withdrawn))
+        if handled:
+            (folder / f"{rid}.handled.json").write_text(
+                json.dumps({**handled, "at": moment})
+            )
+    path = data / "cohorts" / cohort / ".ghfc-ngs.state.json"
+    state = json.loads(path.read_text())
+    for key in ("last_run", "last_successful_run"):
+        state[key]["launch"] = {"dir": "/runs", "slurm_job_id": RUN_REQUEST_JOB}
+    state["history"] = [state["last_run"]]
+    path.write_text(json.dumps(state))
+
+
 def add_gene_case(data: Path) -> None:
     """Cohort OTHER beside DEMO, and curation of the variant they share.
 

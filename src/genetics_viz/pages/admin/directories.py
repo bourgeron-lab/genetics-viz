@@ -70,6 +70,32 @@ def admin_directories_page() -> None:
                                     )
 
                             with ui.row().classes("items-center gap-2"):
+
+                                def make_requests(idx):
+                                    def handler(e):
+                                        cfg = get_config()
+                                        cfg.data_directories[idx].run_requests = bool(
+                                            e.value
+                                        )
+                                        save_config(cfg)
+                                        ui.notify(
+                                            "Run requests "
+                                            + ("on" if e.value else "off"),
+                                            type="positive",
+                                        )
+
+                                    return handler
+
+                                ui.switch(
+                                    "Run requests",
+                                    value=d.run_requests,
+                                    on_change=make_requests(i),
+                                ).props("dense size=sm").classes("text-xs").tooltip(
+                                    "Curators may ask for ghfc-ngs runs of this"
+                                    " directory's cohorts. Only for a directory the"
+                                    " ghfc-ngs-swiftbar dashboard polls: nothing"
+                                    " else picks requests up."
+                                ).mark(f"admin-run-requests-{i}")
                                 if not d.default:
 
                                     def make_set_default(idx):

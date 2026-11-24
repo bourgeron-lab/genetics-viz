@@ -163,6 +163,8 @@ class RunRecord:
     pedigree_individuals: Optional[int] = None
     params_path: Optional[str] = None
     params_sha256: Optional[str] = None
+    #: ``launch.slurm_job_id``: the job that ran Nextflow, for a ``--submit`` run.
+    slurm_job_id: Optional[str] = None
     steps_requested: List[str] = field(default_factory=list)
     completion_measured: str = ""
     outputs_may_be_incomplete: bool = False
@@ -369,6 +371,7 @@ def _parse_record(raw: Any) -> Optional[RunRecord]:
     pipeline = raw.get("pipeline") if isinstance(raw.get("pipeline"), dict) else {}
     pedigree = raw.get("pedigree") if isinstance(raw.get("pedigree"), dict) else {}
     params = raw.get("params_file") if isinstance(raw.get("params_file"), dict) else {}
+    launch = raw.get("launch") if isinstance(raw.get("launch"), dict) else {}
 
     steps_raw = raw.get("steps_requested")
     steps = (
@@ -392,6 +395,7 @@ def _parse_record(raw: Any) -> Optional[RunRecord]:
         pedigree_individuals=_parse_int(pedigree.get("individuals")),
         params_path=_as_str(params.get("path")),
         params_sha256=_as_str(params.get("sha256")),
+        slurm_job_id=_as_str(launch.get("slurm_job_id")),
         steps_requested=steps,
         completion_measured=str(raw.get("completion_measured") or ""),
         outputs_may_be_incomplete=bool(raw.get("outputs_may_be_incomplete")),

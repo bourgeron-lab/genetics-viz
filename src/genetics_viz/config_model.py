@@ -22,6 +22,10 @@ class DataDirectoryConfig:
     path: str
     description: str = ""
     default: bool = False
+    #: Curators may ask for ghfc-ngs runs of this directory's cohorts
+    #: (``utils/run_requests.py``). Only for a directory ghfc-ngs-swiftbar
+    #: polls: a request nothing reads would wait for ever.
+    run_requests: bool = False
 
 
 #: Roles, least rights first, with what each adds. ``student`` is a reader who
@@ -185,6 +189,7 @@ def load_config(config_path: Path) -> AppConfig:
                 path=str(entry.get("path") or ""),
                 description=str(entry.get("description") or ""),
                 default=bool(entry.get("default")),
+                run_requests=entry.get("run_requests") is True,
             )
         )
 
@@ -246,6 +251,7 @@ def save_config(config: AppConfig) -> None:
                     "path": d.path,
                     "description": d.description,
                     "default": d.default if d.default else None,
+                    "run_requests": True if d.run_requests else None,
                 }.items()
                 if v is not None and v != ""
             }

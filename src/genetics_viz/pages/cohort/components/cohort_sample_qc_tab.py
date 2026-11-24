@@ -24,6 +24,9 @@ from urllib.parse import quote, urlencode
 
 from nicegui import ui
 
+from genetics_viz.components.run_request import render_request_control, requests_shown
+from genetics_viz.utils.run_requests import allowed_steps
+
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.components.pedigree_editor import render_merge_candidates
@@ -674,6 +677,17 @@ def render_cohort_sample_qc_tab(
             if len(labels) == 1:
                 ui.label(f"somalier · {labels[0]}").classes("text-xs text-gray-500")
             ui.space()
+            qc_steps = [
+                s for s in allowed_steps(cohort) if s in ("sampleqc", "genomeqc")
+            ]
+            if qc_steps and requests_shown(store):
+                render_request_control(
+                    cohort,
+                    label="Request a QC run",
+                    mark="sampleqc-request-run",
+                    steps=qc_steps,
+                    origin="cohort Sample QC tab",
+                )
 
             def on_include_acked(e: Any) -> None:
                 state["include_acked"] = bool(e.value)
