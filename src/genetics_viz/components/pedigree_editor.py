@@ -24,7 +24,7 @@ from genetics_viz.components.pedigree_tree import (
     worst_severity,
 )
 from genetics_viz.utils.auth import get_current_user
-from genetics_viz.utils.cohort_state import read_cohort_state
+from genetics_viz.utils.cohort_state import pedigree_run_started
 from genetics_viz.utils.pedigree_edit import (
     ERROR,
     FATHER,
@@ -1521,18 +1521,14 @@ def _suggestion_row(
 
 
 def _waiting(cohort: Any) -> Tuple[List[WaitingFamily], List[Orphan]]:
-    """Blocking: the cohort's families edited since its last run started, and
-    the directories of the families merged away from it."""
-    state = read_cohort_state(cohort.pedigree_file.parent)
-    last = state.last_run if state is not None else None
+    """Blocking: the cohort's families edited since every pedigree-reading
+    step last started, and the directories of the families merged away from it."""
     members = {
         fid: [s.sample_id for s in family.samples]
         for fid, family in cohort.families.items()
     }
     data_dir = cohort.pedigree_file.parents[2]
-    waiting = waiting_families(
-        data_dir, members, last.started_at if last is not None else None
-    )
+    waiting = waiting_families(data_dir, members, pedigree_run_started(cohort))
     records = [r for r in read_edit_index(data_dir) if cohort.name in r.cohorts]
     return waiting, orphaned_families(data_dir, records, cohort.families)
 
@@ -1550,7 +1546,7 @@ def _drift_text(w: WaitingFamily) -> str:
 
 def render_waiting_families(cohort: Any) -> None:
     """Curators, on the Workflow tab: families whose pedigree was edited since
-    the last ghfc-ngs run started, and which need ``--clean-stale-families``.
+    every pedigree-reading step last ran, and which need ``--clean-stale-families``.
 
     Read off the event loop (the edit index, then each family's joint-call
     header); nothing is drawn when no family waits.

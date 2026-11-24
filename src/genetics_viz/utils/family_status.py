@@ -615,16 +615,15 @@ def state_map(
 
 def cohort_edits(cohort: Any, data_dir: Path) -> Dict[str, Any]:
     """``FID -> EditStatus``: each family's last pedigree edit, against the
-    cohort's last ghfc-ngs run (``None``: no cohort, so every edit waits)."""
-    from .cohort_state import read_cohort_state
+    moment every pedigree-reading step of the cohort had run again
+    (``None``: no cohort, so every edit waits)."""
+    from .cohort_state import pedigree_run_started
     from .pedigree_edit import edit_statuses, read_edit_index
 
     started = None
     if cohort is not None:
         try:
-            run = read_cohort_state(cohort.pedigree_file.parent)
-            last_run = run.last_run if run is not None else None
-            started = last_run.started_at if last_run is not None else None
+            started = pedigree_run_started(cohort)
         except Exception:
             logger.warning("Failed to read %s's run record", cohort.name, exc_info=True)
     return edit_statuses(read_edit_index(data_dir), started)

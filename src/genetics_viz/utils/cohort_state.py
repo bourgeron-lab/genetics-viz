@@ -24,6 +24,10 @@ Things the schema documentation warns about, honoured here:
   killed run leaves the record behind until the next run closes it out.
 - **The recorded ``path`` fields are compute-cluster paths** and do not resolve
   here, so drift detection hashes the local file instead.
+- **A step's completion and drift come from its own last runs**
+  (``last_run_by_step``), not from ``last_run``: a ``--steps sampleqc,genomeqc``
+  run becomes ``last_run`` and says nothing of the other steps. A file written
+  before the field gets the same from its history (:func:`derive_by_step`).
 """
 
 from __future__ import annotations
@@ -50,6 +54,11 @@ SUPPORTED_SCHEMA_VERSION = 1
 #: How long a ``running`` record may sit untouched before it is called suspect.
 #: There is no heartbeat, so this is a judgement, not a fact.
 STALE_RUNNING_AFTER = timedelta(hours=24)
+
+#: ghfc-ngs steps that keep an inputs snapshot of the family's pedigree rows and
+#: rerun a family when it changes (``InputsSnapshot`` in ``main.nf``). A pedigree
+#: edit waits until each of them, among the cohort's steps, has run since.
+PEDIGREE_STEPS = ("sampleqc", "genomeqc", "expansionhunter", "upd", "wombat", "denovo")
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config" / "pipeline_steps.yaml"
 
@@ -200,6 +209,30 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
+class StepRun:
+    """One run, as it concerns one step (an entry of ``last_run_by_step``)."""
+
+    step: str
+    status: str
+    run_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    completion_measured: str = ""
+    outputs_may_be_incomplete: bool = False
+    pedigree_sha256: Optional[str] = None
+    params_sha256: Optional[str] = None
+    completion: Optional[StepCompletion] = None
+
+
+@dataclass(frozen=True)
+class StepRuns:
+    """A step's last finished run, and its last successful one."""
+
+    last: Optional[StepRun] = None
+    last_success: Optional[StepRun] = None
+
+
+@dataclass(frozen=True)
 class CohortState:
     """The whole state file: the last run, the last success, and the history."""
 
@@ -213,6 +246,11 @@ class CohortState:
     last_successful_run: Optional[RunRecord] = None
     #: Up to 10 terminal records, newest first. A ``running`` record is never here.
     history: List[RunRecord] = field(default_factory=list)
+    #: Per step, its own last runs: ``last_run_by_step`` as written, else
+    #: :func:`derive_by_step` over the last success and the history.
+    by_step: Dict[str, StepRuns] = field(default_factory=dict)
+    #: The file carried ``last_run_by_step`` (False: derived from history).
+    by_step_recorded: bool = False
 
     @property
     def reference_run(self) -> Optional[RunRecord]:
@@ -222,6 +260,47 @@ class CohortState:
         cohort look undocumented; otherwise the last run.
         """
         return self.last_successful_run or self.last_run
+
+    def live_run_for(self, step: str) -> Optional[RunRecord]:
+        """``last_run`` while it is running, not stale, and was asked for ``step``.
+
+        The per-step record holds finished runs only; a run in progress that
+        will redo the step is newer than any of them.
+        """
+        run = self.last_run
+        if (
+            run is not None
+            and run.is_running
+            and not run.is_stale_running
+            and step in run.steps_requested
+        ):
+            return run
+        return None
+
+    def step_started(self, step: str) -> Optional[datetime]:
+        """When the step's newest run started: a live one, else its last finished one."""
+        live = self.live_run_for(step)
+        if live is not None and live.started_at is not None:
+            return live.started_at
+        runs = self.by_step.get(step)
+        return runs.last.started_at if runs is not None and runs.last else None
+
+    def pedigree_steps_started(self, params_steps: List[str]) -> Optional[datetime]:
+        """The moment by which every pedigree-reading step had started again.
+
+        The earliest :meth:`step_started` over :data:`PEDIGREE_STEPS` among the
+        cohort's steps (the params file's, else those with a recorded run).
+        ``None`` when one of them has no run: an edit then waits. With none of
+        them in play, the last run's start, as before per-step records.
+        """
+        pool = params_steps or list(self.by_step)
+        steps = [s for s in PEDIGREE_STEPS if s in pool]
+        if not steps:
+            return self.last_run.started_at if self.last_run is not None else None
+        starts = [self.step_started(s) for s in steps]
+        if any(t is None for t in starts):
+            return None
+        return min(_aware(t) for t in starts if t is not None)
 
 
 # --------------------------------------------------------------------------
@@ -234,6 +313,11 @@ def _now(reference: datetime) -> datetime:
     if reference.tzinfo is None:
         return datetime.now()
     return datetime.now(timezone.utc)
+
+
+def _aware(moment: datetime) -> datetime:
+    """``moment`` with a timezone: a naive one is taken as local time."""
+    return moment if moment.tzinfo else moment.astimezone()
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -316,6 +400,94 @@ def _parse_record(raw: Any) -> Optional[RunRecord]:
         completion=_parse_completion(raw.get("completion")),
         held_families=_parse_held(raw.get("pedigree_conflicts")),
     )
+
+
+def _parse_step_run(raw: Any, step: str) -> Optional[StepRun]:
+    """One entry of ``last_run_by_step``; ``None`` when it is not an object."""
+    if not isinstance(raw, dict):
+        return None
+    completion = _parse_completion({step: raw.get("completion")}).get(step)
+    return StepRun(
+        step=step,
+        status=str(raw.get("status") or ""),
+        run_id=_as_str(raw.get("run_id")),
+        started_at=_parse_timestamp(raw.get("started_at")),
+        finished_at=_parse_timestamp(raw.get("finished_at")),
+        completion_measured=str(raw.get("completion_measured") or ""),
+        outputs_may_be_incomplete=bool(raw.get("outputs_may_be_incomplete")),
+        pedigree_sha256=_as_str(raw.get("pedigree_sha256")),
+        params_sha256=_as_str(raw.get("params_sha256")),
+        completion=completion,
+    )
+
+
+def _parse_by_step(raw: Any) -> Optional[Dict[str, StepRuns]]:
+    """``last_run_by_step``; ``None`` when the file has none (an older writer)."""
+    if not isinstance(raw, dict):
+        return None
+    out: Dict[str, StepRuns] = {}
+    for step, slot in raw.items():
+        if not isinstance(slot, dict):
+            continue
+        name = str(step)
+        runs = StepRuns(
+            last=_parse_step_run(slot.get("last"), name),
+            last_success=_parse_step_run(slot.get("last_success"), name),
+        )
+        if runs.last is not None or runs.last_success is not None:
+            out[name] = runs
+    return out
+
+
+def _step_run_of(record: RunRecord, step: str) -> StepRun:
+    return StepRun(
+        step=step,
+        status=record.status,
+        run_id=record.run_id,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        completion_measured=record.completion_measured,
+        outputs_may_be_incomplete=record.outputs_may_be_incomplete,
+        pedigree_sha256=record.pedigree_sha256,
+        params_sha256=record.params_sha256,
+        completion=record.completion.get(step),
+    )
+
+
+def derive_by_step(
+    last_successful_run: Optional[RunRecord], history: List[RunRecord]
+) -> Dict[str, StepRuns]:
+    """``last_run_by_step`` for a file written before ghfc-ngs kept it.
+
+    The pipeline's own rule (``CohortState.merge``): a ``success`` or ``failed``
+    run counts for each step it requested and planned (a key of its
+    ``completion``); the last success is folded first when it is older than all
+    of the history, then the history oldest first.
+    """
+    out: Dict[str, StepRuns] = {}
+
+    def fold(record: RunRecord) -> None:
+        if record.status not in ("success", "failed") or not record.completion:
+            return
+        for step in dict.fromkeys(record.steps_requested):
+            if step not in record.completion:
+                continue
+            entry = _step_run_of(record, step)
+            previous = out.get(step, StepRuns())
+            out[step] = StepRuns(
+                last=entry,
+                last_success=entry
+                if record.status == "success"
+                else previous.last_success,
+            )
+
+    if last_successful_run is not None and not any(
+        h.run_id == last_successful_run.run_id for h in history
+    ):
+        fold(last_successful_run)
+    for record in reversed(history):
+        fold(record)
+    return out
 
 
 def _parse_held(raw: Any) -> Optional[List["HeldFamily"]]:
@@ -412,17 +584,40 @@ def read_cohort_state(cohort_dir: Path) -> Optional[CohortState]:
         else []
     )
 
+    last_success = _parse_record(raw.get("last_successful_run"))
+    by_step = _parse_by_step(raw.get("last_run_by_step"))
     state = CohortState(
         path=path,
         schema_version=version,
         unsupported=False,
         cohort_name=_as_str(raw.get("cohort_name")),
         last_run=_parse_record(raw.get("last_run")),
-        last_successful_run=_parse_record(raw.get("last_successful_run")),
+        last_successful_run=last_success,
         history=history,
+        by_step=by_step
+        if by_step is not None
+        else derive_by_step(last_success, history),
+        by_step_recorded=by_step is not None,
     )
     _state_cache[key] = state
     return state
+
+
+def pedigree_run_started(cohort: Any) -> Optional[datetime]:
+    """When every pedigree-reading step of ``cohort`` had started again.
+
+    A pedigree edit saved before it is in every step's outputs; one saved
+    after waits. ``None`` (no record, or a step never run): every edit waits.
+    Blocking: reads the run record and the params file.
+    """
+    from .pipeline_params import get_requested_steps, load_params
+
+    state = read_cohort_state(cohort.pedigree_file.parent)
+    if state is None or state.unsupported:
+        return None
+    params_file = getattr(cohort, "params_file", None)
+    steps = get_requested_steps(load_params(params_file)) if params_file else []
+    return state.pedigree_steps_started(steps)
 
 
 def clear_state_cache() -> None:
@@ -501,11 +696,16 @@ class StepRow:
     unit: str
     note: str
     completion: StepCompletion
-    #: In ``last_run.steps_requested``. False means the number, if any, does not
-    #: describe work this run was asked to do.
+    #: A recorded run was asked for the step: its own last run, or the live one.
+    #: False means no number describes it.
     requested: bool
     #: In the params file's ``steps`` array, i.e. what the next run would do.
     in_params: bool
+    #: When the run the number comes from started.
+    run_at: Optional[datetime] = None
+    #: The number comes from ``last_run``. False: an older run, which the last
+    #: one (asked for other steps) left as it was.
+    latest: bool = True
 
     @property
     def measured(self) -> bool:
@@ -566,36 +766,80 @@ def _step_sort_key(step: str) -> Tuple[int, str]:
         return (len(STEP_ORDER), step)
 
 
+def _step_source(
+    state: CohortState, step: str
+) -> Tuple[Optional[StepCompletion], Optional[datetime], bool]:
+    """Where a step's number comes from: the live run, else its own last run.
+
+    Returns the completion (``None``: no run), when that run started, and
+    whether it is ``last_run``.
+    """
+    live = state.live_run_for(step)
+    if live is not None and step in live.completion:
+        return live.completion[step], live.started_at, True
+    runs = state.by_step.get(step)
+    if runs is None or runs.last is None:
+        return None, None, False
+    last = runs.last
+    latest = state.last_run is not None and last.run_id == state.last_run.run_id
+    return (last.completion or StepCompletion(step=step)), last.started_at, latest
+
+
 def build_step_rows(
     state: Optional[CohortState], params_steps: List[str]
 ) -> List[StepRow]:
     """Build the step table for a cohort.
 
-    With a run record, the rows are what that run was asked to do plus anything
-    else it reported. Without one, they are what the params file asks for, all
-    unmeasured -- so the intended pipeline shape is visible before the first
-    recorded run.
+    Each step's number comes from its own last run (``last_run_by_step``, or
+    the history for an older file), or from a live run that was asked for it:
+    a run limited to a few steps leaves the others as they were, not
+    unmeasured. Without a record, the rows are what the params file asks for,
+    all unmeasured -- so the intended pipeline shape is visible before the
+    first recorded run.
     """
-    record = state.last_run if state is not None else None
-    requested = record.steps_requested if record is not None else []
-    completion = record.completion if record is not None else {}
+    sources = {}
+    if state is not None:
+        steps_seen = set(state.by_step)
+        if state.last_run is not None and state.last_run.is_running:
+            steps_seen |= set(state.last_run.steps_requested)
+        sources = {step: _step_source(state, step) for step in steps_seen}
 
-    steps = set(params_steps) | set(requested) | set(completion)
+    steps = set(params_steps) | {s for s, src in sources.items() if src[0] is not None}
     rows: List[StepRow] = []
     for step in sorted(steps, key=_step_sort_key):
         meta = STEP_META.get(step, {})
+        completion, run_at, latest = sources.get(step, (None, None, False))
         rows.append(
             StepRow(
                 step=step,
                 label=meta.get("label", step),
                 unit=meta.get("unit", ""),
                 note=meta.get("note", ""),
-                completion=completion.get(step, StepCompletion(step=step)),
-                requested=step in requested,
+                completion=completion or StepCompletion(step=step),
+                requested=completion is not None,
                 in_params=step in params_steps,
+                run_at=run_at,
+                latest=latest,
             )
         )
     return rows
+
+
+def step_drift(
+    state: CohortState, local_path: Optional[Path], *, params: bool = False
+) -> Dict[str, Drift]:
+    """Per step with a run: has the local pedigree (or params) file changed
+    since the step's last successful run (else its last run) read it?"""
+    out: Dict[str, Drift] = {}
+    for step in sorted(state.by_step, key=_step_sort_key):
+        runs = state.by_step[step]
+        run = runs.last_success or runs.last
+        if run is None:
+            continue
+        out[step] = file_drift(
+            run.params_sha256 if params else run.pedigree_sha256, local_path
+        )
+    return out
 
 
 def summarize_steps(rows: List[StepRow]) -> StatusSummary:
