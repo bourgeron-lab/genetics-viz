@@ -1291,7 +1291,8 @@ class EditStatus:
 
     last: EditRecord
     #: An edit that changes what the steps read (not a phenotype alone) was
-    #: saved after the last run started, or the cohort has no run record.
+    #: saved before every pedigree-reading step ran again
+    #: (``cohort_state.pedigree_run_started``), or the cohort has no run record.
     awaiting_rerun: bool
 
 
@@ -1308,8 +1309,9 @@ def edit_statuses(
 ) -> Dict[str, EditStatus]:
     """Per family: its last edit, and whether one still waits for a run.
 
-    The run record says when the cohort's last ghfc-ngs run started; an edit
-    saved after it (or with no record at all) is not in any step's outputs yet.
+    ``last_run_started`` is when every pedigree-reading step of the cohort
+    had started again (``cohort_state.pedigree_run_started``); an edit
+    saved after it (or with no record at all) is not in every step's outputs yet.
     """
     out: Dict[str, EditStatus] = {}
     for record in records:
@@ -1464,7 +1466,7 @@ def bcf_samples(data_dir: Path, family_id: str) -> Optional[List[str]]:
 
 @dataclass(frozen=True)
 class WaitingFamily:
-    """A family edited since the cohort's last run started."""
+    """A family edited since its cohort's pedigree-reading steps last ran."""
 
     family_id: str
     last: EditRecord
@@ -1489,7 +1491,8 @@ def waiting_families(
     last_run_started: Optional[datetime],
 ) -> List[WaitingFamily]:
     """Blocking: the families of ``members`` (FID -> sequenced members) edited
-    after the last run started, each with what its next run needs.
+    after ``last_run_started`` (every pedigree-reading step run again), each
+    with what its next run needs.
 
     Every edit counts but a phenotype-only one. The joint call's header is read
     for each, so a member moved in or out shows as the drift ghfc-ngs sees.

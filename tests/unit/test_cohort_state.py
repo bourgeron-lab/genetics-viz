@@ -227,3 +227,180 @@ def test_held_families_parse_defensively():
         ("G", ("A",), {"A": ("x",)}),
     ]
     assert held[0].describe() == []
+
+
+# --- per-step record (last_run_by_step) ----------------------------------------------
+
+
+def _record(run_id, status, started, steps, *, ped="p1", par="q1", done=None):
+    """A run record asked for ``steps``, each measured ``done``/10 (``None``: not measured)."""
+    every = [
+        "alignment",
+        "wombat",
+        "sampleqc",
+        "genomeqc",
+        "upd",
+        "denovo",
+        "expansionhunter",
+    ]
+    return {
+        "run_id": run_id, "status": status, "started_at": started,
+        "finished_at": None if status == "running" else started,
+        "steps_requested": steps,
+        "pedigree": {"sha256": ped}, "params_file": {"sha256": par},
+        "completion_measured": "before" if status == "running" else "after",
+        "completion": {s: ({"done": done if done is not None else 10, "total": 10,
+                            "pct": (done if done is not None else 10) * 10.0} if s in steps else None)
+                       for s in every},
+    }  # fmt: skip
+
+
+FULL = [
+    "alignment",
+    "wombat",
+    "sampleqc",
+    "genomeqc",
+    "upd",
+    "denovo",
+    "expansionhunter",
+]
+QC = ["sampleqc", "genomeqc"]
+
+
+def _entry(record, step):
+    keys = ("run_id", "status", "started_at", "finished_at", "completion_measured")
+    return {**{k: record[k] for k in keys}, "outputs_may_be_incomplete": False,
+            "pedigree_sha256": record["pedigree"]["sha256"],
+            "params_sha256": record["params_file"]["sha256"],
+            "completion": record["completion"][step]}  # fmt: skip
+
+
+def _file(full, qc, *, recorded):
+    payload = {"schema_version": 1, "last_run": qc, "last_successful_run": qc,
+               "history": [qc, full]}  # fmt: skip
+    if recorded:
+        payload["last_run_by_step"] = {
+            s: {"last": _entry(qc if s in QC else full, s),
+                "last_success": _entry(qc if s in QC else full, s)}
+            for s in FULL
+        }  # fmt: skip
+    return payload
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_a_qc_only_run_leaves_the_other_steps_their_own_run(tmp_path, recorded):
+    full = _record("r1", "success", "2026-11-19T10:00:00+01:00", FULL, done=9)
+    qc = _record("r2", "success", "2026-11-25T09:00:00+01:00", QC, ped="p2")
+    state = write_state(tmp_path, _file(full, qc, recorded=recorded))
+    assert state.by_step_recorded is recorded
+    rows = {r.step: r for r in cs.build_step_rows(state, FULL)}
+    assert rows["sampleqc"].latest and rows["sampleqc"].detail() == "10/10 samples"
+    wombat = rows["wombat"]
+    assert wombat.requested and not wombat.latest and wombat.completion.done == 9
+    assert wombat.run_at == datetime.fromisoformat("2026-11-19T10:00:00+01:00")
+    assert cs.summarize_steps(list(rows.values())).text == "2/7 steps complete"
+
+
+def test_derived_record_follows_the_pipeline_rules(tmp_path):
+    ok = _record("r1", "success", "2026-11-01T10:00:00+00:00", ["wombat", "upd"])
+    failed = _record("r2", "failed", "2026-11-02T10:00:00+00:00", ["wombat", "bogus"])
+    invalid = {
+        **_record("r3", "failed", "2026-11-03T10:00:00+00:00", ["upd"]),
+        "completion": None,
+    }
+    state = write_state(tmp_path, {"schema_version": 1, "last_run": invalid,
+                                   "last_successful_run": ok, "history": [invalid, failed]})  # fmt: skip
+    # The last success (not in history) first, then the history oldest first;
+    # the validation failure planned nothing, and "bogus" is no step.
+    assert set(state.by_step) == {"wombat", "upd"}
+    assert state.by_step["wombat"].last.run_id == "r2"
+    assert state.by_step["wombat"].last_success.run_id == "r1"
+    assert state.by_step["upd"].last.run_id == "r1"
+
+
+def test_a_live_run_is_newer_than_any_finished_one(tmp_path):
+    full = _record("r1", "success", "2026-11-19T10:00:00+00:00", FULL)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    live = _record("r2", "running", now.isoformat(), QC, done=4)
+    state = write_state(tmp_path, {"schema_version": 1, "last_run": live,
+                                   "last_successful_run": full, "history": [full]})  # fmt: skip
+    assert state.step_started("sampleqc") == now
+    assert state.step_started("wombat") == datetime.fromisoformat(
+        "2026-11-19T10:00:00+00:00"
+    )
+    rows = {r.step: r for r in cs.build_step_rows(state, FULL)}
+    assert rows["sampleqc"].latest and rows["sampleqc"].completion.done == 4
+    assert not rows["wombat"].latest
+
+
+def test_a_pedigree_edit_waits_for_every_pedigree_step(tmp_path):
+    full = _record("r1", "success", "2026-11-19T10:00:00+00:00", FULL)
+    qc = _record("r2", "success", "2026-11-25T09:00:00+00:00", QC)
+    state = write_state(tmp_path, _file(full, qc, recorded=True))
+    # Wombat, UPD, de novo and STR last ran on the 19th: an edit of the 20th waits
+    assert state.pedigree_steps_started(FULL) == datetime.fromisoformat(
+        "2026-11-19T10:00:00+00:00"
+    )
+    # A cohort that runs only the QC steps has had them all since
+    assert state.pedigree_steps_started(["alignment", *QC]) == datetime.fromisoformat(
+        "2026-11-25T09:00:00+00:00"
+    )
+    # A pedigree step that never ran: every edit waits
+    assert (
+        state.pedigree_steps_started([*FULL, "roh"]) is not None
+    )  # roh reads no snapshot
+    assert cs.CohortState(path=tmp_path, by_step={}).pedigree_steps_started(QC) is None
+    # No pedigree step in play: the last run's start, as before
+    assert state.pedigree_steps_started(["alignment"]) == datetime.fromisoformat(
+        "2026-11-25T09:00:00+00:00"
+    )
+
+
+def test_pedigree_run_started_reads_the_params_steps(tmp_path):
+    from types import SimpleNamespace
+
+    full = _record("r1", "success", "2026-11-19T10:00:00+00:00", FULL)
+    qc = _record("r2", "success", "2026-11-25T09:00:00+00:00", QC)
+    write_state(tmp_path, _file(full, qc, recorded=True))
+    params = tmp_path / "C.params.yml"
+    params.write_text("steps: [sampleqc, genomeqc]\n")
+    cohort = SimpleNamespace(
+        pedigree_file=tmp_path / "C.pedigree.tsv", params_file=params
+    )
+    assert cs.pedigree_run_started(cohort) == datetime.fromisoformat(
+        "2026-11-25T09:00:00+00:00"
+    )
+    params.write_text("steps: [sampleqc, genomeqc, wombat]\n")
+    assert cs.pedigree_run_started(cohort) == datetime.fromisoformat(
+        "2026-11-19T10:00:00+00:00"
+    )
+    assert (
+        cs.pedigree_run_started(SimpleNamespace(pedigree_file=tmp_path / "x" / "p"))
+        is None
+    )
+
+
+def test_drift_is_per_step(tmp_path):
+    pedigree = tmp_path / "C.pedigree.tsv"
+    pedigree.write_text("edited\n")
+    new = cs.sha256_file(pedigree)
+    full = _record("r1", "success", "2026-11-19T10:00:00+00:00", FULL, ped="old")
+    qc = _record("r2", "success", "2026-11-25T09:00:00+00:00", QC, ped=new)
+    state = write_state(tmp_path, _file(full, qc, recorded=True))
+    drift = cs.step_drift(state, pedigree)
+    assert drift["sampleqc"] == drift["genomeqc"] == "unchanged"
+    assert {s for s, d in drift.items() if d == "changed"} == set(FULL) - set(QC)
+    assert set(cs.step_drift(state, None).values()) == {"unknown"}
+
+
+def test_by_step_parses_defensively():
+    assert cs._parse_by_step(None) is None and cs._parse_by_step([]) is None
+    parsed = cs._parse_by_step(
+        {
+            "a": "junk",
+            "b": {"last": None},
+            "c": {"last": {"status": "failed", "completion": None}},
+        }
+    )
+    assert list(parsed) == ["c"] and not parsed["c"].last.completion.measured
+    assert parsed["c"].last_success is None

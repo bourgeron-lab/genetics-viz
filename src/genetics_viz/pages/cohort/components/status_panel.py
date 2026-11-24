@@ -24,6 +24,8 @@ from genetics_viz.utils.cohort_state import (
     read_cohort_state,
     record_status_meta,
     status_meta,
+    step_drift,
+    step_label,
     summarize_steps,
 )
 from genetics_viz.utils.pipeline_params import (
@@ -78,17 +80,20 @@ def _render_step_row(row: StepRow, *, compact: bool = False) -> None:
         ):
             with ui.row().classes("items-baseline gap-1.5 no-wrap min-w-0"):
                 ui.label(row.label).classes("text-xs text-gray-700 truncate min-w-0")
-                # A step the last run was not asked to do, or one the params
-                # file has since dropped: the number, if any, does not describe
-                # what the pipeline is currently being asked for. Dropped on the
+                # A step no recorded run was asked for, one measured by an
+                # older run than the last (which was asked for other steps),
+                # or one the params file has since dropped. Dropped on the
                 # compact card, which has no room for it.
                 if not compact:
+                    marker = ""
                     if row.in_params and not row.requested:
-                        ui.label("not in last run").classes(
-                            "text-[10px] text-gray-400 italic truncate min-w-0"
-                        )
+                        marker = "no recorded run"
                     elif row.requested and not row.in_params:
-                        ui.label("no longer requested").classes(
+                        marker = "no longer requested"
+                    elif row.requested and not row.latest:
+                        marker = f"as of {format_timestamp(row.run_at)[:10]}"
+                    if marker:
+                        ui.label(marker).classes(
                             "text-[10px] text-gray-400 italic truncate min-w-0"
                         )
                 if row.note:
@@ -140,32 +145,60 @@ def _note(text: str, *, tone: str = "gray", icon: Optional[str] = None) -> None:
         ui.label(text).classes(f"text-xs {colors[tone]} min-w-0 flex-1")
 
 
-def _render_drift(cohort: Any, record: RunRecord) -> None:
-    """Flag inputs edited since the run that produced these outputs.
+def _render_drift(cohort: Any, state: CohortState) -> None:
+    """Flag inputs edited since the runs that produced these outputs.
 
-    Hashes the local files: the paths inside the record are compute-cluster
-    paths and do not resolve here.
+    Per step, against its own last successful run: a run limited to a few
+    steps read the edited pedigree for those alone. Hashes the local files: the
+    paths inside the record are compute-cluster paths and do not resolve here.
     """
-    pedigree = file_drift(
-        record.pedigree_sha256, getattr(cohort, "pedigree_file", None)
-    )
-    params = file_drift(record.params_sha256, getattr(cohort, "params_file", None))
+    pedigree_file = getattr(cohort, "pedigree_file", None)
+    params_file = getattr(cohort, "params_file", None)
+    if not state.by_step:
+        if state.last_run is None:
+            return
+        pedigree = {"": file_drift(state.last_run.pedigree_sha256, pedigree_file)}
+        params = {"": file_drift(state.last_run.params_sha256, params_file)}
+    else:
+        pedigree = step_drift(state, pedigree_file)
+        params = step_drift(state, params_file, params=True)
 
-    if pedigree == "changed":
+    def changed(drift: Dict[str, str]) -> List[str]:
+        return [step_label(s) for s, d in drift.items() if d == "changed"]
+
+    ped_changed, par_changed = changed(pedigree), changed(params)
+    every = len(ped_changed) == len(pedigree)
+    if ped_changed:
         _note(
-            "The pedigree has been edited since this run — the counts below "
-            "describe a different pedigree.",
+            "The pedigree has been edited since the last run"
+            + (
+                " — the counts below describe a different pedigree."
+                if every
+                else " of: " + ", ".join(ped_changed) + ". Their outputs and"
+                " counts describe the previous pedigree."
+            ),
             tone="amber",
             icon="warning",
         )
-    if params == "changed":
+    if par_changed:
         _note(
-            "The parameters file has been edited since this run.",
+            "The parameters file has been edited since the last run"
+            + (
+                "."
+                if len(par_changed) == len(params)
+                else " of: " + ", ".join(par_changed) + "."
+            ),
             tone="amber",
             icon="warning",
         )
-    if pedigree == "unchanged" and params in ("unchanged", "unknown"):
-        _note("Pedigree unchanged since this run.", tone="green", icon="check")
+    if not ped_changed and "unchanged" in pedigree.values() and not par_changed:
+        _note(
+            "Pedigree unchanged since this run."
+            if not state.by_step
+            else "Pedigree unchanged since each step's last run.",
+            tone="green",
+            icon="check",
+        )
 
 
 def _render_run_header(state: CohortState) -> None:
@@ -346,8 +379,7 @@ def render_status_panel(
                 _note(_NO_RECORD_NOTE)
             else:
                 _render_run_header(state)
-                if state.last_run is not None:
-                    _render_drift(cohort, state.last_run)
+                _render_drift(cohort, state)
 
             ui.separator()
             _render_step_rows(build_step_rows(state, _params_steps(cohort)))

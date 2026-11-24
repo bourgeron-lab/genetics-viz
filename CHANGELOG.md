@@ -5,6 +5,14 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The Workflow tab reads each step from its own last run.** A ghfc-ngs run asked for a few steps (`--steps sampleqc,genomeqc`) became the cohort's last run, so the tab showed every other step as "not in last run" and the pedigree as unchanged for all of them. ghfc-ngs now keeps each step's own last run (`last_run_by_step`, bourgeron-lab/ghfc-ngs#71), and the tab uses it; for a run record written before that, it rebuilds the same from the run history.
+  - A step measured by an older run than the last says "as of" its date.
+  - "The pedigree has been edited" names the steps whose last successful run read an earlier pedigree, and only those.
+  - **A pedigree edit waits until every step that reads the pedigree has run again** (Sample QC, genome QC, STR, UPD, Wombat, de novo, among the cohort's steps): the Families tab's amber Pedigree badge, "To rerun", the Workflow tab's waiting families and the family status's "Reopened" no longer clear after a QC-only run. A run in progress counts for the steps it was asked for.
+
 ## [0.44.0] - 2026-11-20
 
 ### Added
