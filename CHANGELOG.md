@@ -5,7 +5,7 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.45.0] - 2026-11-24
 
 ### Added
 - **Curators can ask for a ghfc-ngs run of a cohort.** genetics-viz does not start the run. It writes the request into the cohort directory, and the ghfc-ngs dashboard (ghfc-ngs-swiftbar) shows it to the person who runs the pipeline, who starts it, possibly with other steps, or dismisses it with a note. No cluster account or password goes through the app.
