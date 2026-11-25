@@ -33,6 +33,7 @@ default_sets:
   autism_combined_v7: show
   sysndd_definitive: show
   haploinsufficient: show
+  triplosensitive: show
   panelapp_aus_all: show
   panelapp_eng_all: show
 

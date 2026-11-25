@@ -11,17 +11,17 @@ filled. Dummies (never sequenced, :func:`models.is_dummy_id`) have a dashed
 outline (pypedigree's ``not_sampled`` column), as has the missing parent of a
 member with one parent (pypedigree's phantom).
 
-Things pypedigree 0.5.2 does not do, worked around here:
-- **The text parser, not ``PedigreeBuilder``.** The builder leaves a child
-  with one declared parent unconnected; the parser gives it a phantom
-  second parent (bourgeron-lab/pypedigree#40).
+Three choices that began as workarounds of pypedigree 0.5.2 (its #40 and #41
+are fixed since 0.6) and are kept:
+- **The text parser, not ``PedigreeBuilder``**: the PED text carries the
+  dashed outline, the note and the classes as columns.
 - **A parent named but absent from the list is written as a dashed row**,
   rather than left to the parser, which would draw the same phantom but warn,
   and ``warnings.catch_warnings`` is not thread-safe (the report is built in
   ``asyncio.to_thread``).
-- **The spacing follows the longest label.** The layout spaces symbols, not
-  labels, so ``DUMMY_<barcode>_MF`` beside its partner's overlapped
-  (bourgeron-lab/pypedigree#41).
+- **More room between labels than pypedigree keeps** (half an em): with it
+  alone, ``DUMMY_<barcode>_MF`` and its partner's label nearly touch, with the
+  couple's line between them. The report is printed, so it keeps the air.
 
 Pure and fast (about 1 ms for a trio); ``import pypedigree`` does not load
 matplotlib.
@@ -142,7 +142,8 @@ def pedigree_text(family_id: str, people: Sequence[PedigreePerson]) -> str:
 
 
 def _style(people: Sequence[PedigreePerson]) -> "pypedigree.PedigreeStyle":
-    """pypedigree's style, spaced so the longest label clears its neighbours."""
+    """pypedigree's style, spaced so the longest label clears its neighbours by
+    :data:`_LABEL_GAP`."""
     style = pypedigree.PedigreeStyle()
     style.font_size = FONT_SIZE
     longest = max(len(_cell(p.iid)) for p in people)

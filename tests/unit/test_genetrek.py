@@ -34,6 +34,9 @@ def test_catalog_membership_and_info(snapshot):
     info = snapshot.info["SHANK3"]
     assert dict(info.values)["EAGLE"] == "Definitive"
     assert dict(info.values)["LOEUF"] == "0.36"
+    assert dict(info.values)["Autism OR"] == "24.4"
+    assert dict(info.values)["Brain TPM"] == "61.3"
+    assert "Autism OR" not in dict(snapshot.info["BLTP1"].values)  # null: left out
     assert [f.name for f in snapshot.inheritance_fields] == [
         "inheritance",
         "inheritance_panelapp_t",

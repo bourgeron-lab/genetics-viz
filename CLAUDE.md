@@ -52,7 +52,13 @@ src/genetics_viz/
     gene_prefs_editor.py          # Profile card: GeneTrek tiers per geneset, live preview
     header.py                     # Page header: menus, data dir dropdown, gene lookup, Help, user menu
     validation_loader.py          # Validation TSV loading and badge logic
+    diagnostic_loader.py          # Diagnostic TSV loading, saving (role-guarded), ignore toggle, family diagnostics
+    notes_loader.py               # Family notes: load, save, delete (role-guarded)
+    waves_loader.py               # WAVES validations: load, save (role-guarded), score colours
+    icons.py                      # Validation and diagnostic status icons
     variant_dialog.py             # IGV variant inspection dialog
+    sample_dialog.py              # Sample dialog: IGV.js bedgraph and CRAM tracks for one sample
+    search_stats.py               # Search page Stats dialog: chromosomes, consequences, validations, ideogram
     cell_line_note.py             # The caveat on a cell-line sample's UPD, CNV, de novo and diagnostic reviews
     sv_dialog.py                  # SV inspection dialog: orchestrates the panels below (SVViewState)
     sv_details.py                 # SV dialog: details card, suggested curated coordinates
@@ -99,6 +105,9 @@ src/genetics_viz/
     continuous_scores.yaml        # Continuous score color ranges
     pipeline_steps.yaml           # ghfc-ngs step labels/order + run status chips
     vep_consequences.yaml         # VEP consequence terms, impacts, colors
+    wisecondorx_thresholds.yaml   # WisecondorX call thresholds (robust, permissive; loss and gain)
+    validation_badges.yaml        # Validation status and inheritance badge colours and labels
+    diagnostic_badges.yaml        # Diagnostic verdict badge colours and labels
     view_presets.yaml             # Column visibility presets
   pages/
     login.py                      # Login page (no auth required)
@@ -115,6 +124,7 @@ src/genetics_viz/
       home.py                     # Home page with cohort cards
       cohort.py                   # Cohort overview page
       family.py                   # Family detail page with tabs
+      standalone_family.py        # /family/<FID>: the family page outside any cohort
       components/
         ancestry_tab.py           # Ancestry PCA tab (per-family)
         pgs_tab.py                # Polygenic scores tab (per-family)
@@ -140,15 +150,13 @@ src/genetics_viz/
         wombat_rows.py            # Wombat tab data: result files, table rows, columns
         wombat_filters.py         # Wombat tab filters: WombatFilters, panel, apply_filters
         wombat_stats.py           # Wombat tab Stats dialog
-        dnm_tab.py                # DNM analysis tab (per-family)
         svs_tab.py                # SV analysis tab (per-family): WisecondorX + Vedette sub-tabs
         vedette_tab.py            # SVs tab, Vedette sub-tab: carrier rows, presets, filters
     validation/
       file.py                     # Per-file validation page
       all.py                      # Aggregated validation page
       statistics.py               # Validation statistics page
-      waves.py                    # WAVES validation page
-      wave.py                     # Individual wave validation page
+      waves.py                    # WAVES validation page (one dialog per sample)
     diagnostic/
       all.py                      # Aggregated diagnostic page
       statistics.py               # Diagnostic statistics page
@@ -207,6 +215,10 @@ src/genetics_viz/
     clinvar.py                    # ClinVar color/display utilities (from YAML)
     cohort_state.py               # .ghfc-ngs.state.json parsing, drift, step rows
     cytobands.py                  # Cytoband, chromosome, ideogram constants
+    wisecondorx.py                # WisecondorX BED parsing, CNV type and class, thresholds (past_permissive), gene overlap
+    locus.py                      # Locus query parsing (chr:start-end, genes) and frame filters
+    change_monitor.py             # Background polling of the data directories for changes (live refresh)
+    data_availability.py          # Which files a sample or family has (CRAM, bedgraph, ...)
     data.py                       # Multi-store registry, per-user data dir selection
     gene_scoring.py               # Per-user tier scorer + the shared gene badge builders
     genesets.py                   # Geneset filter sources (tiers, GeneTrek, local TSVs) + matchers
@@ -218,6 +230,9 @@ src/genetics_viz/
     score_colors.py               # Continuous score color ranges
     vep.py                        # VEP consequence utilities (from YAML)
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
+    pedigree.py                   # Per-family pedigree TSV parser (standalone family page)
+    validation_badges.py          # Validation badge colours and labels (from YAML)
+    diagnostic_badges.py          # Diagnostic badge colours and labels (from YAML)
     sharding.py                   # Two-level sharded directory path resolution
     tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels (step), inputs_step, append_tsv_row(s), rewrite_tsv_rows, set_ignore, collect_streaming
     wombat.py                     # aggregate_by_variant (Wombat tab, search); family result files, DENOVO_CONFIG
@@ -685,7 +700,7 @@ GeneTrek (`genetrek_url` in the app config, default the dev instance) is the lab
 - **Build badges with `build_gene_badges` / `gene_badge_html`** (`utils/gene_scoring.py`), never by hand: they carry `href` (GeneTrek `?search=SYMBOL`), `textColor` and the multi-line tooltip, and cap a cell at six with a "+N genes" badge linking to GeneTrek's table (`search_url`, a `#search=` fragment so patient gene lists and loci stay out of server logs). SV regions (`chr:start-end`, the `curated_locus` cell) link the same way through a row's `_genetrek_url`; the ROH genes table and the STR `Locus` columns (`str_eh.add_locus_badges`, the locus coloured as its gene) use gene badges too.
 - **Multi-line table tooltips** use `data-gene-tip`, shown by the floating tooltip in `data_table.js`; the CSS `data-tooltip` is one clipped line. `badge_list` cells switch automatically when a tooltip has a newline.
 - **Preferences live in `<config stem>.preferences.yaml`, not the config file.** `save_config` rewrites the config whole from memory and truncates before locking; profile saves there would race with admin saves. `user_preferences.py` locks a `.lock` file, re-reads, changes one entry and `os.replace`s. Saving checks the user itself; the default is admin-only.
-- **MOI flag** (`utils/inheritance.py`, `config/inheritance.yaml`): a gene's modes are pooled from every GeneTrek field in category `Inheritance`, because the combined `inheritance` holds one mode. Recessive second hits are looked for only among the rows of the same table (`annotate_moi`), and the tooltip says so. A male's chrX call outside PAR is hemizygous whatever the GT says. The DNM tab is not wired: `render_dnm_tab` has no caller.
+- **MOI flag** (`utils/inheritance.py`, `config/inheritance.yaml`): a gene's modes are pooled from every GeneTrek field in category `Inheritance`, because the combined `inheritance` holds one mode. Recessive second hits are looked for only among the rows of the same table (`annotate_moi`), and the tooltip says so. A male's chrX call outside PAR is hemizygous whatever the GT says.
 
 ### Variants Per Sample (family Stats dialogs)
 The Wombat and WisecondorX Stats dialogs chart each selected member's count in the current table view, then place each member on the cohort's per-sample distribution (`utils/sample_counts.py`, drawn by `components/sample_counts.py`).
