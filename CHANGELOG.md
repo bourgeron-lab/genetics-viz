@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Gene tooltips show two more GeneTrek values**: the autism odds ratio of Rolland et al. 2023 (`Autism OR`) and the gene's highest median expression over the GTEx v11 brain regions (`Brain TPM`), beside LOEUF, s-het and EAGLE. **Triplosensitive** joins Haploinsufficient in the default profile's "Also in" sets; a saved profile keeps its own choice.
 
 ### Changed
+- **Failed and refused logins are logged** (WARNING, with the username and the client address the app sees). Behind the F5 and Caddy that address is probably the F5's for every user, which would make the login backoff's 20 failures per address apply to everyone at once; the log line confirms it.
 - **pypedigree 0.10** (was 0.5.2). Its fixes for pypedigree#40 and #41 are in; the drawings keep their own label spacing, which leaves more room than pypedigree's half an em on long dummy IDs.
 - README: the features, the pages and the data directory layout follow what the app reads today.
 

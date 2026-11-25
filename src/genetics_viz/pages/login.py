@@ -1,6 +1,7 @@
 """Login page for genetics-viz."""
 
 import functools
+import logging
 import math
 import secrets
 
@@ -23,6 +24,8 @@ from genetics_viz.utils.data import dirs_for, get_all_data_stores
 
 _NO_DIRECTORY = "No data directory is open to this account. Ask an administrator."
 
+logger = logging.getLogger(__name__)
+
 
 @functools.cache
 def _dummy_hash() -> str:
@@ -41,6 +44,9 @@ def login_page(request: Request) -> None:
         ui.navigate.to(destination)
         return
 
+    # The address the backoff counts: what uvicorn makes of the proxies'
+    # X-Forwarded-For (it trusts FORWARDED_ALLOW_IPS, 127.0.0.1 by default).
+    # The failures below log it, so the logs show which address that is.
     address = request.client.host if request.client else "unknown"
 
     with ui.column().classes("absolute-center items-center gap-4"):
@@ -73,6 +79,12 @@ def login_page(request: Request) -> None:
 
                 wait = login_throttle.retry_after(address, username)
                 if wait > 0:
+                    logger.warning(
+                        "Login refused for %r from %s: backing off, %d s left",
+                        username,
+                        address,
+                        math.ceil(wait),
+                    )
                     error_label.text = (
                         f"Too many failed attempts. Try again in {math.ceil(wait)} s."
                     )
@@ -121,6 +133,7 @@ def login_page(request: Request) -> None:
                     return
 
                 login_throttle.record_failure(address, username)
+                logger.warning("Failed login for %r from %s", username, address)
                 error_label.text = "Invalid username or password"
                 error_label.classes(remove="hidden")
                 password_input.value = ""
