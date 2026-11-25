@@ -2,31 +2,39 @@
 
 import csv
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from genetics_viz.components.validation_loader import (
     curated_sv_key,
     load_validation_map,
     merge_validation_maps,
 )
+from genetics_viz.utils import acmg
 from genetics_viz.utils.auth import can_write
-from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
+from genetics_viz.utils.diagnostic_badges import (
+    CONFLICTING,
+    VERDICTS,
+    build_diagnostic_badge,
+)
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.diagnostic_snapshot import SNAPSHOT_COLUMNS, snapshot_values
 from genetics_viz.utils.tsv import append_tsv_row, append_tsv_rows, set_ignore
 from genetics_viz.utils.validation_files import validation_path
 
 # Verdict used when curators disagree on the same variant for the same sample.
-CONFLICTING_DIAGNOSTIC = "conflicting"
+CONFLICTING_DIAGNOSTIC = CONFLICTING
 
 # TSV header for diagnostics files: the record, then the variant's details as
-# the table row showed them when it was saved (utils/diagnostic_snapshot.py).
-# A file written before the details existed has its header extended on the
-# next save (tsv.append_tsv_rows); its older records have no details.
+# the table row showed them when it was saved (utils/diagnostic_snapshot.py),
+# then the ACMG criteria applied, their points and the rules (utils/acmg.py).
+# A file written before a group existed has its header extended on the next
+# save (tsv.append_tsv_rows); its older records leave those fields empty.
+ACMG_COLUMNS = ["Criteria", "Points", "Ruleset"]
 DIAGNOSTIC_HEADER = [
     "FID", "Variant", "Gene", "Impact", "Sample",
     "User", "Timestamp", "Comment", "Ignore", "Diagnostic",
     *SNAPSHOT_COLUMNS,
+    *ACMG_COLUMNS,
 ]  # fmt: skip
 
 
@@ -133,23 +141,30 @@ def save_diagnostic_entry(
     comment: str,
     diagnostic: str,
     details: Optional[Mapping[str, Any]] = None,
+    criteria: Sequence[acmg.Applied] = (),
 ) -> None:
     """Append a diagnostic entry to the TSV file with file locking.
 
     ``details`` is the variant's snapshot (:mod:`diagnostic_snapshot`), keyed
     by :data:`SNAPSHOT_COLUMNS`; ``None`` leaves those fields empty.
+    ``criteria`` are the ACMG criteria the curator applied: their points and
+    the ruleset are written with them. ``diagnostic`` must be one of
+    :data:`VERDICTS`, whatever the criteria give (a curator may override).
 
     Raises ``PermissionError`` for a reader: the dialog hides its save button
     from them, and this is the backend half of that guard.
     """
     if not can_write():
         raise PermissionError("Only curators and administrators record diagnostics.")
+    if diagnostic not in VERDICTS:
+        raise ValueError(f"Unknown diagnostic verdict: {diagnostic!r}")
     append_tsv_row(
         diagnostic_file,
         DIAGNOSTIC_HEADER,
         [family_id, variant_key, gene, impact, sample]
         + [user, timestamp, comment, "0", diagnostic]
-        + snapshot_values(details),
+        + snapshot_values(details)
+        + acmg.evidence_columns(criteria),
     )
 
 

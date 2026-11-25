@@ -78,6 +78,7 @@ from genetics_viz.components.pedigree_consistency import (
     render_held_families,
 )
 from genetics_viz.utils import family_status as fs
+from genetics_viz.utils.diagnostic_badges import verdict_color, verdict_rank
 from genetics_viz.utils.family_rows import (
     DIAG_ORDER,
     FamilyFacts,
@@ -125,9 +126,6 @@ _QC_ANY = "Any issue"
 _QC_NONE = "No issue"
 _QC_UNCHECKED = "Not checked"
 _QC_ACKED = "Acknowledged"
-
-# Diagnostic priority: higher value wins
-_DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
 
 
 def _loading(message: str) -> None:
@@ -606,13 +604,11 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                     if not sid or not diag:
                         continue
                     current = sample_diag[sid]
-                    if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
+                    if verdict_rank(diag) > verdict_rank(current):
                         sample_diag[sid] = diag
                     variants = family_diag[row.get("FID") or ""]
                     key = (dtype, row.get("Variant") or "")
-                    if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(
-                        variants.get(key, ""), 0
-                    ):
+                    if verdict_rank(diag) > verdict_rank(variants.get(key, "")):
                         variants[key] = diag
 
         def diagnostics_of(fid: str) -> Tuple[int, str]:
@@ -738,12 +734,9 @@ def cohort_page(cohort_name: str, request: Request) -> None:
                         "_father_badges": dummy_badges(sample.father_id),
                         "_mother_badges": dummy_badges(sample.mother_id),
                         "Diagnostic": sample_diag.get(sample.sample_id, ""),
-                        "_diag_color": {
-                            "pathogenic": "#dc2626",
-                            "uncertain": "#f59e0b",
-                            "benign": "#16a34a",
-                            "conflicting": "#f59e0b",
-                        }.get(sample_diag.get(sample.sample_id, ""), ""),
+                        "_diag_color": verdict_color(
+                            sample_diag.get(sample.sample_id, ""), ""
+                        ),
                         **qc_fields(sample.family_id, sample.sample_id),
                         **upd_fields(sample.family_id, sample.sample_id),
                     }

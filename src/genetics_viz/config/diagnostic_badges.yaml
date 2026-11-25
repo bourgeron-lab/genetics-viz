@@ -1,27 +1,70 @@
-# Diagnostic badge configuration
-# Controls how diagnostic status is displayed as badges in DataTables
-
+# Diagnostic verdicts: the ACMG/AMP five tiers (#44), strongest first, then
+# "conflicting", which is computed when curators disagree and never saved.
+# This file is the only list of them (utils/diagnostic_badges.py): the dialog,
+# the badges, filters, counts, the Diagnostics panel and the statistics read it.
+#
+# Files written before v0.46 hold pathogenic / uncertain / benign, which are
+# the P, VUS and B tiers: they read unchanged.
+#
+#   label:  the word shown (dialog, history, filters, report)
+#   symbol: the badge in tables (coloured `color` on `bg`)
+#   icon, quasar: Material icon and Quasar colour (dialog history, filters)
+#   hex:    chart and table-cell colour (statistics, cohort tables)
 status:
   pathogenic:
+    label: "Pathogenic"
     symbol: "P"
-    color: "#d32f2f"
+    color: "#b71c1c"
     bg: "#ffebee"
     text_color: "#b71c1c"
+    icon: "dangerous"
+    quasar: "red-9"
+    hex: "#c62828"
+  likely pathogenic:
+    label: "Likely pathogenic"
+    symbol: "LP"
+    color: "#e53935"
+    bg: "#fff1f0"
+    text_color: "#c62828"
+    icon: "error"
+    quasar: "red-5"
+    hex: "#ef5350"
   uncertain:
-    symbol: "?"
-    color: "#ff9800"
+    label: "Uncertain significance"
+    symbol: "VUS"
+    color: "#e65100"
     bg: "#fff3e0"
     text_color: "#e65100"
+    icon: "help"
+    quasar: "orange"
+    hex: "#ff9800"
+  likely benign:
+    label: "Likely benign"
+    symbol: "LB"
+    color: "#43a047"
+    bg: "#f1f8e9"
+    text_color: "#2e7d32"
+    icon: "check_circle_outline"
+    quasar: "green-5"
+    hex: "#81c784"
   benign:
+    label: "Benign"
     symbol: "B"
-    color: "#4caf50"
+    color: "#1b5e20"
     bg: "#e8f5e9"
     text_color: "#1b5e20"
+    icon: "check_circle"
+    quasar: "green-9"
+    hex: "#2e7d32"
   conflicting:
+    label: "Curators disagree"
     symbol: "!"
-    color: "#ff8f00"
+    color: "#ff6f00"
     bg: "#fff8e1"
     text_color: "#ff6f00"
+    icon: "bolt"
+    quasar: "amber-9"
+    hex: "#ffb300"
 
 # Default badge style when no diagnostic status matches
 default:

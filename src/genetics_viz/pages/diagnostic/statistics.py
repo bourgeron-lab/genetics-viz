@@ -11,12 +11,22 @@ from nicegui import ui
 from genetics_viz.components.header import create_header
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
+from genetics_viz.utils.diagnostic_badges import (
+    ALL_STATUSES,
+    verdict_color,
+    verdict_label,
+)
 from genetics_viz.utils.diagnostic_files import (
     DIAGNOSTIC_TYPES,
     TYPE_COLORS,
     diagnostic_paths,
 )
 from genetics_viz.utils.gene_scoring import get_gene_scorer
+
+
+def _status_order(status: str) -> int:
+    """Pie slices in verdict order, unknown values last."""
+    return ALL_STATUSES.index(status) if status in ALL_STATUSES else len(ALL_STATUSES)
 
 
 @ui.page("/diagnostic/statistics")
@@ -253,18 +263,20 @@ async def diagnostic_statistics_page() -> None:
                                                 "radius": "70%",
                                                 "data": [
                                                     {
-                                                        "name": status,
+                                                        "name": verdict_label(status),
                                                         "value": count,
                                                         "itemStyle": {
-                                                            "color": {
-                                                                "pathogenic": "#d32f2f",
-                                                                "uncertain": "#ff9800",
-                                                                "benign": "#4caf50",
-                                                                "conflicting": "#ff8f00",
-                                                            }.get(status, "#6b7280")
+                                                            "color": verdict_color(
+                                                                status, "#6b7280"
+                                                            )
                                                         },
                                                     }
-                                                    for status, count in status_counts.items()
+                                                    for status, count in sorted(
+                                                        status_counts.items(),
+                                                        key=lambda kv: _status_order(
+                                                            kv[0]
+                                                        ),
+                                                    )
                                                 ],
                                                 "label": {"formatter": "{b}: {c}"},
                                             }

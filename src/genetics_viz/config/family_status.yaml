@@ -53,9 +53,11 @@ statuses:
       control family): left out of the yield.
 
 # Diagnostic verdicts that solve a family: a solved or partially solved
-# family should have one standing, and a family that is not should not.
+# family should have one standing, and a family that is not should not. Only
+# a reason to look again: the status itself is always a curator's.
 solving_verdicts:
   - pathogenic
+  - likely pathogenic
 
 # Why a family should be looked at again. The status never changes by itself:
 # these are shown beside it until a curator saves a status again (the ones
@@ -76,10 +78,14 @@ reasons:
     text: A diagnostic was recorded after the status.
   solved_without_diagnostic:
     label: No pathogenic diagnostic
-    text: The family is marked solved, but no pathogenic diagnostic stands.
+    text: >-
+      The family is marked solved, but no pathogenic or likely pathogenic
+      diagnostic stands.
   diagnostic_not_solved:
     label: Pathogenic diagnostic
-    text: A pathogenic diagnostic stands, but the family is not marked solved.
+    text: >-
+      A pathogenic or likely pathogenic diagnostic stands, but the family is
+      not marked solved.
   qc_after:
     label: New QC flag
     text: >-
