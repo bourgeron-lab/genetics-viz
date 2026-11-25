@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-25
+
 ### Added
 - **Diagnostics are classified on the ACMG/AMP five tiers** (#44): pathogenic, likely pathogenic, uncertain significance, likely benign, benign. "Likely pathogenic", what clinicians act on, could not be recorded before.
   - **Every kind gets the five tiers**: SNV, SV, STR, UPD and aneuploidy diagnostics. Records saved before keep their pathogenic, uncertain or benign: they are the P, VUS and B tiers and read unchanged.
