@@ -10,11 +10,8 @@ import pytest
 
 from genetics_viz.models import DataStore
 from genetics_viz.utils import report_summaries
-from genetics_viz.utils.family_report import (
-    build_family_report,
-    consequence_text,
-    whole_chromosome_events,
-)
+from genetics_viz.utils.aneuploidy import whole_chromosome_events
+from genetics_viz.utils.family_report import build_family_report, consequence_text
 from genetics_viz.utils.report_html import render_report_html
 from genetics_viz.utils.report_svg import Marker, ordinal, pca_svg, percentile
 from genetics_viz.utils.report_svg import pgs_distribution_svg

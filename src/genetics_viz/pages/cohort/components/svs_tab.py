@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
+from genetics_viz.components.aneuploidy_dialog import render_aneuploidy_card
 from genetics_viz.components.cell_line_note import (
     family_cell_lines,
     render_cell_line_note,
@@ -83,6 +84,8 @@ def render_svs_tab(
     selected_members: Dict[str, List[str]],
     data_table_refreshers: List[Callable[[], None]],
     link: Optional[PageLink] = None,
+    on_acks_changed: Optional[Callable[[], None]] = None,
+    review_listeners: Optional[List[Callable[[], None]]] = None,
 ) -> None:
     """Render the SVs tab panel content.
 
@@ -94,6 +97,10 @@ def render_svs_tab(
         data_table_refreshers: List to append refresh functions to
         link: The page link: the sub-tab (``svtab``), the WisecondorX call
             types shown (``svcalls``) and the Vedette filters (``v…``)
+        on_acks_changed: Called after an aneuploidy review saved something:
+            a karyotype flag's acknowledgement follows
+        review_listeners: The page's listeners of curation saves; the
+            Aneuploidy card adds its reload
     """
     svs_dir = get_family_path(store.data_dir, family_id) / "svs"
 
@@ -128,6 +135,17 @@ def render_svs_tab(
 
         cell_line_note()
         data_table_refreshers.append(cell_line_note.refresh)
+
+    # Whole-chromosome events and atypical sex chromosomes, reviewed here.
+    render_aneuploidy_card(
+        store,
+        family_id,
+        cohort_name,
+        selected_members,
+        data_table_refreshers,
+        on_saved=on_acks_changed,
+        listeners=review_listeners,
+    )
 
     # Create subtabs for different SV callers
     with ui.tabs().classes("w-full").mark("svs-subtabs") as svs_subtabs:

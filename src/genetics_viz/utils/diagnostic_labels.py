@@ -1,4 +1,4 @@
-"""What the family Diagnostics panel says about an STR or UPD diagnostic.
+"""What the family Diagnostics panel says about an STR, UPD or aneuploidy diagnostic.
 
 A diagnostic stores its record's key, which is unreadable on its own for these
 kinds (``chr19:45770204-45770264:DMPK``, ``chr8:UPD``). The panel shows the
@@ -9,7 +9,9 @@ kind and what was found instead:
   one, else ExpansionHunter's longer allele (``~``) from the family genotype
   table of the newest catalog;
 - a UPD reads ``UPD`` ``chr8 · maternal``, the origin from its standing
-  validation.
+  validation;
+- an aneuploidy reads ``Aneuploidy`` ``47,XY,+21``, the karyotype its
+  standing validation records, else the chromosome.
 
 The panel draws the kind as a tag; :func:`describe_str` and
 :func:`describe_upd` return the text after it and the tooltip.
@@ -191,3 +193,55 @@ def _upd_kind(row: Dict[str, str]) -> str:
     if span:
         parts.append(span_text(*span))
     return " ".join(p for p in parts if p)
+
+
+def describe_aneuploidy(
+    data_dir: Path, family_id: str, entry: Dict[str, Any], show_detail: bool = True
+) -> Tuple[str, str]:
+    """``("47,XY,+21", tooltip)`` for a merged diagnostic row.
+
+    The text is the standing validations' karyotypes, else the chromosome
+    (``chr21``, ``sex chromosomes``). Without ``show_detail`` (readers), the
+    sex chromosomes' karyotype is left out, as Sample QC leaves it out.
+    """
+    from .aneuploidy import (
+        chrom_label,
+        chrom_of_key,
+        latest_validation as latest_aneuploidy,
+        read_aneuploidy_validations,
+    )
+
+    key = entry.get("Variant", "")
+    chrom = chrom_of_key(key)
+    samples = [s.strip() for s in (entry.get("Sample") or "").split(",") if s.strip()]
+    validations = read_aneuploidy_validations(data_dir, family_id, key)
+    hide = not show_detail and chrom == "XY"
+    karyotypes: List[str] = []
+    lines = [f"Aneuploidy of {chrom_label(chrom)}"]
+    for sample in samples:
+        latest = latest_aneuploidy(validations, sample)
+        if latest is None:
+            lines.append(f"{sample}: not validated")
+            continue
+        karyotype = "" if hide else latest.get("Karyotype") or ""
+        if karyotype:
+            karyotypes.append(karyotype)
+        details = [
+            p
+            for p in (
+                karyotype,
+                "mosaic" if latest.get("Mosaic") == "yes" else "",
+                latest.get("Inheritance")
+                if latest.get("Inheritance") not in ("", "unknown", None)
+                else "",
+            )
+            if p
+        ]
+        lines.append(
+            f"{sample}: validated {latest.get('Validation', '')}"
+            + (f", {', '.join(details)}" if details else "")
+        )
+    if entry.get("Impact"):
+        lines.append(f"Found by: {entry['Impact']}")
+    text = "/".join(dict.fromkeys(karyotypes)) or chrom_label(chrom)
+    return text, "\n".join(lines)

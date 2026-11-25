@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from nicegui import ui
 
+from genetics_viz.components.aneuploidy_dialog import show_aneuploidy_dialog
 from genetics_viz.components.download_button import Download, download_button
 from genetics_viz.components.pedigree_editor import (
     open_pedigree_editor,
@@ -98,6 +99,7 @@ from genetics_viz.utils.sample_qc_acks import (
     split_acknowledged,
     withdraw_flag_ack,
 )
+from genetics_viz.utils.aneuploidy import SEX_CHROMS, is_karyotype_flag, member_sexes
 from genetics_viz.utils.upd import (
     child_of,
     chrom_from_evidence,
@@ -1165,6 +1167,19 @@ def render_sample_qc_tab(
                     on_saved=acks_saved,
                 )
                 return
+        if is_karyotype_flag(flag):
+            # Reviewed by validating the sex chromosomes, as in the SVs tab's
+            # Aneuploidy card: the validation acknowledges the flag.
+            show_aneuploidy_dialog(
+                dialog_anchor,
+                store.data_dir,
+                family_id,
+                flag.sample_a,
+                SEX_CHROMS,
+                member_sexes(store, family_id, cohort_name),
+                on_saved=acks_saved,
+            )
+            return
         acks = load_acks(store.data_dir)
         _open_ack_dialog(
             dialog_anchor,

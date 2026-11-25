@@ -25,6 +25,10 @@ A ``UPD_CANDIDATE`` flag is also acknowledged by a UPD validation
 and the chromosome but not the parent the flag names, so it cannot be an
 :data:`AckKey`; :class:`Acks` matches it to the flag instead. Look flags up
 through :class:`Acks` (``acks.get(flag)``, ``flag in acks``), never by key.
+
+So is a ``KARYOTYPE_<k>`` flag, by the sample's validation of its sex
+chromosomes (``validations/aneuploidies.tsv``, ``chrXY:ANEUPLOIDY``,
+:mod:`genetics_viz.utils.aneuploidy`), with the same two statuses.
 """
 
 import csv
@@ -34,7 +38,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
-from . import sample_qc, upd
+from . import aneuploidy, sample_qc, upd
 from .auth import can_write
 from .sample_qc import FlagRow, flag_badges, flag_title
 from .tsv import append_tsv_row
@@ -209,23 +213,63 @@ def read_upd_acks(data_dir: Path) -> Dict[UpdKey, Dict[str, Ack]]:
     return out
 
 
+#: ``(FID, sample) -> Ack`` from each standing validation of the sex chromosomes.
+SampleKey = Tuple[str, str]
+
+
+def read_aneuploidy_acks(data_dir: Path) -> Dict[SampleKey, Ack]:
+    """``(FID, sample) -> Ack`` from each standing ``chrXY`` aneuploidy validation."""
+    key = aneuploidy.aneuploidy_key(aneuploidy.SEX_CHROMS)
+    latest: Dict[SampleKey, Dict[str, str]] = {}
+    for row in aneuploidy.read_aneuploidy_validations(data_dir, key=key):
+        if row.get("Ignore", "0") == "1":
+            continue
+        sample_key = (row.get("FID") or "", row.get("Sample") or "")
+        if all(sample_key):
+            latest[sample_key] = row
+    out: Dict[SampleKey, Ack] = {}
+    for sample_key, row in latest.items():
+        validation = row.get("Validation") or ""
+        status = _UPD_STATUS.get(validation)
+        if status is None:
+            continue
+        karyotype = row.get("Karyotype") or ""
+        note = f"Sex chromosomes validated {validation}" + (
+            f" ({karyotype})" if karyotype else ""
+        )
+        if row.get("Comment"):
+            note += f": {row['Comment']}"
+        out[sample_key] = Ack(
+            status=status,
+            note=note,
+            user=row.get("User") or "",
+            timestamp=row.get("Timestamp") or "",
+            source="aneuploidy",
+        )
+    return out
+
+
 class Acks:
     """The standing acknowledgements, looked up by flag.
 
     ``by_key`` holds the rows of ``sampleqc.tsv``; ``upd`` the acknowledgements
     UPD validations give ``UPD_CANDIDATE`` flags, matched on the family, the
     child (``sample_b``) and the chromosome the evidence names. A flag whose
-    evidence names none matches any validated chromosome of the child. When a
-    flag has both, the newer one stands.
+    evidence names none matches any validated chromosome of the child.
+    ``aneuploidy`` holds the acknowledgements validations of the sex
+    chromosomes give a sample's ``KARYOTYPE_<k>`` flag. When a flag has both
+    its own and a derived one, the newer one stands.
     """
 
     def __init__(
         self,
         by_key: Optional[Dict[AckKey, Ack]] = None,
         upd_acks: Optional[Dict[UpdKey, Dict[str, Ack]]] = None,
+        aneuploidy_acks: Optional[Dict[SampleKey, Ack]] = None,
     ) -> None:
         self.by_key: Dict[AckKey, Ack] = by_key or {}
         self.upd: Dict[UpdKey, Dict[str, Ack]] = upd_acks or {}
+        self.aneuploidy: Dict[SampleKey, Ack] = aneuploidy_acks or {}
 
     def _from_upd(self, flag: FlagRow) -> Optional[Ack]:
         if not self.upd or not upd.is_upd_flag(flag):
@@ -238,9 +282,14 @@ class Acks:
             return by_chrom.get(chrom)
         return max(by_chrom.values(), key=lambda a: a.timestamp)
 
+    def _from_aneuploidy(self, flag: FlagRow) -> Optional[Ack]:
+        if not self.aneuploidy or not aneuploidy.is_karyotype_flag(flag):
+            return None
+        return self.aneuploidy.get((flag.family_id, flag.sample_a))
+
     def get(self, flag: FlagRow) -> Optional[Ack]:
         own = self.by_key.get(flag.ack_key)
-        derived = self._from_upd(flag)
+        derived = self._from_upd(flag) or self._from_aneuploidy(flag)
         if own is None or derived is None:
             return own or derived
         return derived if derived.timestamp > own.timestamp else own
@@ -258,10 +307,14 @@ class Acks:
         return iter(self.by_key)
 
     def __len__(self) -> int:
-        return len(self.by_key) + sum(len(v) for v in self.upd.values())
+        return (
+            len(self.by_key)
+            + sum(len(v) for v in self.upd.values())
+            + len(self.aneuploidy)
+        )
 
 
-#: ``(sampleqc.tsv stat, upds.tsv stat)`` -> acknowledgements. A save appends,
+#: ``(sampleqc.tsv stat, upds.tsv stat, aneuploidies.tsv stat)`` -> acknowledgements. A save appends,
 #: so it changes the size and the next read picks it up.
 _ack_cache: Dict[Tuple[Tuple[str, float, int], ...], Acks] = {}
 
@@ -275,15 +328,24 @@ def _stat_key(path: Path) -> Tuple[str, float, int]:
 
 
 def load_acks(data_dir: Path) -> Acks:
-    """:func:`read_acks` and :func:`read_upd_acks`, cached on the files' stat. Never raises."""
-    key = (_stat_key(ack_file(data_dir)), _stat_key(upd.upd_validation_file(data_dir)))
-    if key[0][2] < 0 and key[1][2] < 0:
+    """:func:`read_acks`, :func:`read_upd_acks` and :func:`read_aneuploidy_acks`,
+    cached on the files' stat. Never raises."""
+    key = (
+        _stat_key(ack_file(data_dir)),
+        _stat_key(upd.upd_validation_file(data_dir)),
+        _stat_key(aneuploidy.aneuploidy_validation_file(data_dir)),
+    )
+    if all(part[2] < 0 for part in key):
         return Acks()
     if key not in _ack_cache:
         for old in [k for k in _ack_cache if k[0][0] == key[0][0]]:
             del _ack_cache[old]
         try:
-            _ack_cache[key] = Acks(read_acks(data_dir), read_upd_acks(data_dir))
+            _ack_cache[key] = Acks(
+                read_acks(data_dir),
+                read_upd_acks(data_dir),
+                read_aneuploidy_acks(data_dir),
+            )
         except Exception:
             logger.warning("Failed to read the acknowledgements", exc_info=True)
             return Acks()

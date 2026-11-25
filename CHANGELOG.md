@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Aneuploidies can be validated and recorded as diagnostics.** The family report already found whole-chromosome gains and losses (WisecondorX) and atypical sex chromosomes (Sample QC karyotype), but nothing could be recorded about them.
+  - **An Aneuploidy card at the top of the family SVs tab** lists them per member and chromosome (+21, XXY…), with their validation and diagnostic. Review opens the evidence (the share of the chromosome the calls cover, the WisecondorX segments, the X and Y copy numbers, the flag), a validation (present, absent or uncertain; gain or loss; mosaic; the ISCN karyotype, prefilled such as `47,XY,+21`; the origin) and the diagnostic.
+  - **A Sample QC karyotype flag opens the same review**, and validating the sex chromosomes present or absent acknowledges the flag: it leaves the header badge, icons and counts.
+  - The family report's aneuploidy section shows each curator validation, and a chromosome validated absent is no longer reported as found. Aneuploidy diagnostics appear in the report, the Diagnostics panel and the Diagnostic pages; the validations in the validation pages; the cohort SVs tab's whole-chromosome table gains a validation column.
+  - X and Y are one record (`chrXY:ANEUPLOIDY`). Readers see "Sex chromosome anomaly", never the karyotype, as in Sample QC.
 - **Gene tooltips show two more GeneTrek values**: the autism odds ratio of Rolland et al. 2023 (`Autism OR`) and the gene's highest median expression over the GTEx v11 brain regions (`Brain TPM`), beside LOEUF, s-het and EAGLE. **Triplosensitive** joins Haploinsufficient in the default profile's "Also in" sets; a saved profile keeps its own choice.
 
 ### Changed

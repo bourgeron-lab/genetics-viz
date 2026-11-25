@@ -569,6 +569,11 @@ async def validation_all_page() -> None:
                                 ui.navigate.to(
                                     f"/cohort/{cohort_name}/family/{family_id}"
                                 )
+                            elif variant_type == "Aneuploidy":
+                                # Reviewed from the SVs tab's Aneuploidy card.
+                                ui.navigate.to(
+                                    f"/cohort/{cohort_name}/family/{family_id}?tab=svs"
+                                )
                             elif variant_type == "Vedette":
                                 # So does a Vedette call (the site's genotypes).
                                 ui.navigate.to(

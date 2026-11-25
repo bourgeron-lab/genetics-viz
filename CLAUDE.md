@@ -77,6 +77,7 @@ src/genetics_viz/
     diagnostic_dialog.py          # Diagnostic review dialog
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
     upd_dialog.py                 # UPD review: evidence, chromosome view, validation, diagnostic (UPD, ROH, Sample QC tabs)
+    aneuploidy_dialog.py          # Aneuploidy review: SVs tab card, dialog (evidence, validation, diagnostic), also from a KARYOTYPE flag
     pedigree_tree.py              # Member card's Tree view: pypedigree drawing, selection faded, QC outline, Enlarge
     pedigree_editor.py            # Pedigree editor dialog (Sample QC tab, curators): trees now/after, rows, changes, history; status note; cohort chooser when cohorts differ
     family_report_dialog.py       # Family report: "See report"/"PDF" buttons, dialog, conclusion, print
@@ -183,6 +184,7 @@ src/genetics_viz/
     denovo.py                     # denovo step: discovery, reading, evidence on Wombat rows, strict/flag filter, curation check, cohort summaries
     denovo_plots.py               # ECharts builders for the cohort De novo tab
     upd.py                        # validations/upds.tsv (role-guarded), UPD key, evidence, candidates merged from every source
+    aneuploidy.py                 # Whole-chromosome events (WisecondorX), karyotypes, validations/aneuploidies.tsv (role-guarded), candidates
     upd_calls.py                  # upd step tables: discovery (newest label), reading, windows, wording, exports
     upd_plots.py                  # UPD chromosome view (ECharts), genome overview (SVG), cohort chart
     review_counts.py              # What the family and cohort tabs' badges count (QC, de novo, STR, UPD, filter, run)
@@ -418,6 +420,17 @@ Config files (YAML) are loaded once at module level.
 - **Imprinting is the step's `imprinting` column, as written** (per region in trios and duos, per chromosome in solo mode). GeneTrek's imprinting regions are on the roadmap.
 - Test data: `datagen.add_upd_case(data_dir)` gives 1001's S3 a chr2 UPD (ROH and flag, family and cohort files). `datagen.add_upd_calls(data_dir)` writes the step's tables for 1001 and DEMO under `upd_v3` (no windows, dated a day earlier) and `upd_v4` (windows): S3 trio paternal iso chr2 0.1–39.7 Mb `high` (the flag's span), S3 chr16 `low` (recurrent at cohort level), S2 solo chr15 `medium` with the Prader-Willi/Angelman text. Both are opt-in: they change flag counts and report sections.
 
+### Aneuploidy
+Whole-chromosome gains and losses, and atypical sex chromosomes, validated and diagnosed like any variant. `utils/aneuploidy.py` is the model, `components/aneuploidy_dialog.py` the card and dialog.
+- **Two sources, no pipeline step**: WisecondorX calls past the permissive thresholds summed per sample and chromosome (`family_calls` → `chromosome_events`, `whole_chromosome_events` its text; the report and the cohort SVs tab read them there), and the Sample QC karyotype (atypical, or not the declared sex's) with its `KARYOTYPE_<k>` flag. `aneuploidy_min_fraction` comes from `report.yaml` (`DEFAULT_MIN_FRACTION`).
+- **One record per sample and chromosome**: `Variant` is `chr21:ANEUPLOIDY`; X and Y are one record, `chrXY:ANEUPLOIDY` (`record_chrom`), since XXY is about both. `validations/aneuploidies.tsv` and `diagnostics/aneuploidies.tsv` (kind `Aneuploidy` in both registries). The validation file has the SNV/SV header plus `Direction Mosaic Karyotype` (ISCN, prefilled by `suggested_karyotype`: `47,XY,+21`, `47,XXY`, `45,X`); `Inheritance` is the origin (`de novo`, `maternal`, `paternal`, `unknown`). `save_aneuploidy_validation` checks `can_write()` itself.
+- **`family_candidates`** gives one row per member and chromosome from both sources, plus a standing validation's chromosome; `count_to_review` = not validated present or absent. `load_family_review` adds the calls and QC rows (`segments` for the dialog).
+- **Where**: a card above the SVs tab's sub-tabs (`aneuploidy-card`, rows `aneuploidy-row-<sample>-<chrom>`, `aneuploidy-review-<sample>-<chrom>`, `aneuploidy-to-review` for curators), drawn only when the family has a candidate and following the member selection; the Sample QC Issues action on a `KARYOTYPE_<k>` flag opens the same dialog (`aneuploidy-dialog`, `aneuploidy-validation`, `-direction`, `-mosaic`, `-karyotype`, `-origin`, `-validation-save`, `-diagnostic-open`). The SVs tab is enabled only with SV files, so a family with a karyotype flag alone is reviewed from Sample QC. A save runs the page's `on_acks_changed`; the card's reload is in `upd_listeners`.
+- **A standing `present`/`absent` `chrXY` validation acknowledges the sample's `KARYOTYPE_<k>` flag** (`confirmed`/`explained`, `Acks.aneuploidy`, `read_aneuploidy_acks`; the ack cache key covers the file).
+- **Readers never see a sex-chromosome karyotype**: the card, dialog and Diagnostics panel say `Sex chromosome anomaly` (the flag's `reader_label`) and leave the karyotype out (`describe_aneuploidy(show_detail=)`), as Sample QC does.
+- Elsewhere: the Diagnostics panel (`Aneuploidy` tag, the validated karyotype), the report's diagnostics, the Diagnostic pages, the validation pages (a row opens the family's SVs tab), and the cohort SVs tab's whole-chromosome table and download (`validation` per event, `cohort_svs.aneuploidy_validations`).
+- Test data: AU-X-1's S5 reads XXY with `KARYOTYPE_XXY` (default data); `datagen.add_report_case` gives 1001's S3 a chr21 gain.
+
 ### De Novo Step (SNVs and indels)
 - **The ghfc-ngs `denovo` step** reads the Wombat de novo table (the `#wombat_config` line of its inputs, `de_novo_mutations` by default) and writes `families/…/denovo/<FID>.<label>.{dnm,qc,inputs}.tsv` and `cohorts/<NAME>/denovo/<NAME>.<label>.{dnm,qc,inputs}.tsv`. The labels are `tsv.find_labels(…, "dnm")`, newest first. The contract is `modules/denovo/scripts/denovo_tables` in ghfc-ngs; the vault note is `ghfc-ngs/De novo step.md`.
 - **One dnm row per Wombat row**: the family table joins the aggregated Wombat de novo rows 1:1 on `(chrom:pos:ref:alt, child)` (checked on CANDY_mpx_ghent: 510 of 510). `denovo.add_evidence` sets the `dnm_*` fields on the Wombat rows and keeps the dnm row as `_dnm` for the variant dialog. A Wombat row with no dnm row gets the app's own `NOT_ASSESSED` flag and stays in Strict view.
@@ -453,7 +466,7 @@ Curators send it to the referring clinician of each centre, who decides whether 
 
   The report sizes it in mm from the `viewBox` (`pedigree_drawing` in `report.yaml`) through `Plot.width`, and writes the observed karyotype under an ID when atypical or not the declared sex's. Tests check structure (`data-id`, `Not sampled`, prefixes), never pixels: figures change between pypedigree minors.
 - **Order is the one asked for:** pedigree, ancestry, Sample QC, ROH, PGS, aneuploidy, UPD, diagnostics, with the curator conclusion and "Results at a glance" (`Section.glance`, else `note`) under the pedigree. Each `Section` is available with rows, or missing with a reason.
-- **Aneuploidy** is two sources: the QC karyotype for sex chromosomes; for autosomes, same-direction WisecondorX segments covering `aneuploidy_min_fraction` of a chromosome's assessable span (the q arm of an acrocentric one). The pipeline has no aneuploidy step.
+- **Aneuploidy** is two sources: the QC karyotype for sex chromosomes; for autosomes, same-direction WisecondorX segments covering `aneuploidy_min_fraction` of a chromosome's assessable span (the q arm of an acrocentric one). The pipeline has no aneuploidy step. Both are read through `utils/aneuploidy.py` (see Aneuploidy), and the section adds each candidate's curator validation; a chromosome validated absent is not reported as found.
   - **Only calls past the permissive thresholds count** (`wisecondorx.past_permissive()`: log2 ratio *and* z-score). `whole_chromosome_events` sums whatever it is given, and a chromosome-long segment reaches |z| ≈ 5 with a log2 ratio of ±0.01: before v0.41.2, 88021200005 read +14 (C0XYE8K) and −21 (C0XYE8L) from two such segments. Filter before calling it.
 - **PGS percentile = Φ(z)**: the pipeline's z is already ancestry-matched (k-NN SD in PC space). The traits shown are `pgs_traits` in `report.yaml`.
 - **Diagnostics** keep `diagnostic_verdicts` (pathogenic, uncertain, conflicting) and add the standing validation and inheritance per sample.

@@ -43,6 +43,7 @@ from genetics_viz.components.validation_loader import (
     merge_validation_maps,
 )
 
+from . import aneuploidy as aneuploidy_utils
 from . import genome_qc
 from . import roh as roh_utils
 from . import sample_qc as qc_utils
@@ -58,8 +59,8 @@ from .ancestry import (
 )
 from .ancestry_plots import zoom_window
 from .cohort_state import read_cohort_state
-from .cytobands import CHROM_ORDER, CYTOBANDS, get_cytoband_range, norm_chrom
-from .diagnostic_labels import describe_str, describe_upd
+from .cytobands import get_cytoband_range
+from .diagnostic_labels import describe_aneuploidy, describe_str, describe_upd
 from .diagnostic_snapshot import has_snapshot
 from .export import person
 from .pedigree_labels import PHENO_COLORS, normalize_pheno, normalize_sex
@@ -69,11 +70,9 @@ from .family_status import StatusRecord, family_statuses, status_label
 from .report_summaries import FamilySummary, latest_family_summary
 from .report_svg import Marker, ordinal, pca_svg, percentile, pgs_distribution_svg
 from .sample_qc_acks import ack_summary, load_acks, split_acknowledged
-from .sharding import get_family_path
 from .str_eh import find_eh_labels, get_family_eh_dir
-from .validation_files import validation_path
+from .validation_files import VALIDATION_TYPES, validation_path
 from .vep import get_consequence_impact, get_consequence_priority
-from .wisecondorx import parse_wisecondorx_bed, past_permissive
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +99,6 @@ DUMMY_REPORT_FOOTNOTE = (
 _PHENO_TEXT = {"2": "Affected", "1": "Unaffected", "-9": "Unknown"}
 
 #: Acrocentric chromosomes: their p arm holds no assessable sequence.
-_ACROCENTRIC = {"13", "14", "15", "21", "22"}
 
 
 # ---------------------------------------------------------------------------
@@ -761,57 +759,22 @@ def _pgs(
     )
 
 
-def _assessable_span(chrom: str) -> Optional[Tuple[float, float]]:
-    """``(start, end)`` in Mb of what read depth can assess: the q arm of an
-    acrocentric chromosome, the whole chromosome otherwise."""
-    bands = CYTOBANDS.get(chrom) or []
-    if not bands:
-        return None
-    end = max(b["end"] for b in bands)
-    start = 0.0
-    if chrom in _ACROCENTRIC:
-        start = max((b["end"] for b in bands if b["stain"] == "acen"), default=0.0)
-    return start, end
-
-
-def whole_chromosome_events(
-    calls: Optional[pl.DataFrame], min_fraction: float
-) -> Dict[str, List[str]]:
-    """``sample -> ["+21", "−18"]``: gains/losses covering most of a chromosome.
-
-    Same-direction segments (gain for a positive log2 ratio) are summed per
-    sample and chromosome, against the chromosome's assessable length.
-    """
-    out: Dict[str, List[str]] = {}
-    if calls is None or len(calls) == 0:
-        return out
-    needed = {"chr", "start", "end", "ratio", "sample"}
-    if not needed <= set(calls.columns):
-        return out
-    covered: Dict[Tuple[str, str, str], float] = {}
-    for r in calls.to_dicts():
-        ratio, start, end = _float(r["ratio"]), _float(r["start"]), _float(r["end"])
-        if ratio is None or start is None or end is None or ratio == 0:
-            continue
-        chrom = norm_chrom(r["chr"])
-        span = _assessable_span(chrom)
-        if span is None:
-            continue
-        overlap = min(end / 1e6, span[1]) - max(start / 1e6, span[0])
-        if overlap > 0:
-            key = (str(r["sample"]), chrom, "gain" if ratio > 0 else "loss")
-            covered[key] = covered.get(key, 0.0) + overlap
-    order = {c: i for i, c in enumerate(CHROM_ORDER)}
-    for (sample, chrom, kind), mb in sorted(
-        covered.items(), key=lambda kv: (kv[0][0], order.get(kv[0][1], 99))
-    ):
-        span = _assessable_span(chrom)
-        length = span[1] - span[0] if span else 0.0
-        if length > 0 and mb / length >= min_fraction:
-            out.setdefault(sample, []).append(
-                f"{'+' if kind == 'gain' else '−'}{chrom} ({mb / length * 100:.0f}%)"
-            )
-    return out
+def _validation_text(c: "aneuploidy_utils.AneuploidyCandidate") -> str:
+    """``+21: present (47,XY,+21, mosaic)``; ``XXY: not reviewed``."""
+    validation = c.validation or {}
+    details = [
+        p
+        for p in (
+            validation.get("Karyotype") or "",
+            "mosaic" if validation.get("Mosaic") == "yes" else "",
+            validation.get("Inheritance")
+            if validation.get("Inheritance") not in ("", "unknown", None)
+            else "",
+        )
+        if p
+    ]
+    status = c.status or "not reviewed"
+    return f"{c.label}: {status}" + (f" ({', '.join(details)})" if details else "")
 
 
 def _aneuploidy(
@@ -821,32 +784,38 @@ def _aneuploidy(
     family_qc: Optional[qc_utils.QcData],
 ) -> Section:
     title = "Aneuploidy"
-    wcx = get_family_path(data_dir, family_id) / "svs" / "wisecondorx"
-    wcx_file = wcx / f"{family_id}_aberrations.annotated.bed"
-    calls = None
-    if wcx_file.exists():
-        try:
-            calls = parse_wisecondorx_bed(wcx_file)
-            # The calls the SVs tabs show: a segment below threshold can span
-            # a chromosome with no copy-number change (log2 ratio 0.005).
-            if calls is not None and {"ratio", "zscore"} <= set(calls.columns):
-                calls = calls.filter(past_permissive())
-        except Exception:
-            logger.warning("Failed to read %s", wcx_file, exc_info=True)
-    if family_qc is None and not wcx_file.exists():
+    has_wcx = aneuploidy_utils.wcx_file(data_dir, family_id).exists()
+    if family_qc is None and not has_wcx:
         return Section.missing(
             "aneuploidy", title, "No copy-number or sample QC results for this family."
         )
+    # The calls the SVs tabs show: a segment below threshold can span a
+    # chromosome with no copy-number change (log2 ratio 0.005).
+    calls = aneuploidy_utils.family_calls(data_dir, family_id)
     min_fraction = float(CONFIG.get("aneuploidy_min_fraction", 0.75))
-    events = whole_chromosome_events(calls, min_fraction)
-    qc_rows = {
-        r.get("sample"): r for r in (family_qc.sample_rows() if family_qc else [])
-    }
+    chrom_events = aneuploidy_utils.chromosome_events(calls, min_fraction)
+    qc_rows = family_qc.sample_rows() if family_qc else []
+    by_sample = {r.get("sample"): r for r in qc_rows}
+    candidates = aneuploidy_utils.family_candidates(
+        data_dir,
+        family_id,
+        [(m.iid, m.sex) for m in members],
+        qc_rows,
+        family_qc.flags if family_qc else [],
+        calls,
+        min_fraction,
+    )
+    per_member: Dict[str, List[aneuploidy_utils.AneuploidyCandidate]] = {}
+    for c in candidates:
+        per_member.setdefault(c.sample, []).append(c)
     rows = []
     #: One "S5: XXY, +21" per individual with something to report.
     glance = []
     for m in members:
-        q = qc_rows.get(m.iid)
+        q = by_sample.get(m.iid)
+        mine = per_member.get(m.iid, [])
+        # A chromosome a curator validated absent is not reported as found.
+        absent = {c.chrom for c in mine if c.status == "absent"}
         found_here = []
         if q is None:
             sex_chroms = "not assessed"
@@ -857,16 +826,26 @@ def _aneuploidy(
                 f"{karyotype} (X {_fmt(q.get('x_copies'), 2)},"
                 f" Y {_fmt(q.get('y_copies'), 2)})"
             )
+            found = ""
             if not qc_utils.is_typical_karyotype(karyotype):
-                found_here.append(karyotype)
+                found = karyotype
             elif expected and karyotype != expected:
                 sex_chroms += f" — declared {_SEX_TEXT[m.sex].lower()}"
-                found_here.append(f"{karyotype}, declared {_SEX_TEXT[m.sex].lower()}")
-        if not wcx_file.exists():
+                found = f"{karyotype}, declared {_SEX_TEXT[m.sex].lower()}"
+            if found and aneuploidy_utils.SEX_CHROMS not in absent:
+                found_here.append(found)
+        if not has_wcx:
             autosomes = "not assessed"
         else:
-            autosomes = ", ".join(events.get(m.iid, [])) or "none detected"
-            found_here += events.get(m.iid, [])
+            autosomes = (
+                ", ".join(e.text for e in chrom_events.get(m.iid, []))
+                or "none detected"
+            )
+            found_here += [
+                e.text
+                for e in chrom_events.get(m.iid, [])
+                if aneuploidy_utils.record_chrom(e.chrom) not in absent
+            ]
         if found_here:
             glance.append(f"{m.iid}: {', '.join(found_here)}")
         rows.append(
@@ -874,6 +853,7 @@ def _aneuploidy(
                 "iid": m.iid,
                 "sex_chroms": sex_chroms,
                 "autosomes": autosomes,
+                "validation": "; ".join(_validation_text(c) for c in mine) or "—",
                 "_attention": bool(found_here),
             }
         )
@@ -886,6 +866,7 @@ def _aneuploidy(
             ("iid", "Individual"),
             ("sex_chroms", "Sex chromosomes (copies)"),
             ("autosomes", "Whole-chromosome gains / losses"),
+            ("validation", "Curator validation"),
         ],
         rows=rows,
         footnotes=[CONFIG.get("aneuploidy_note", "")],
@@ -1164,7 +1145,9 @@ def _diagnostics(
     rows = []
     for e in kept:
         source = e.get("_source", "")
-        kind = source.upper()
+        # The type label of the source's validation file (``aneuploidy`` ->
+        # ``Aneuploidy``, not ``ANEUPLOIDY``).
+        kind = {t.lower(): t for t in VALIDATION_TYPES}.get(source, source.upper())
         variant = e.get("Variant", "")
         if source == "str":
             text, _ = describe_str(data_dir, family_id, e)
@@ -1173,6 +1156,8 @@ def _diagnostics(
             )
         elif source == "upd":
             finding = f"UPD {describe_upd(data_dir, family_id, e)[0]}"
+        elif source == "aneuploidy":
+            finding = f"Aneuploidy {describe_aneuploidy(data_dir, family_id, e)[0]}"
         elif source == "sv":
             finding = _sv_text(e.get("_shown_variant") or variant)
         else:
