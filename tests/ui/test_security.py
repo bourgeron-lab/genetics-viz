@@ -150,6 +150,24 @@ async def _fail(user, username):
     user.find(kind=ui.button, content="Sign in").click()
 
 
+async def test_failed_logins_log_the_address(user, caplog):
+    """The logs say which address the backoff counts: behind proxies, it is
+    whatever uvicorn makes of X-Forwarded-For."""
+    await user.open("/login")
+    await _fail(user, "reader")
+    await user.should_see("Invalid username or password")
+    failed = [r.getMessage() for r in caplog.records if r.name.endswith(".login")]
+    assert failed and failed[-1].startswith("Failed login for 'reader' from ")
+    # The free failures are used up; the next attempt is refused.
+    for _ in range(login_throttle.FREE_FAILURES_USER):
+        await _fail(user, "reader")
+    await _fail(user, "reader")
+    await user.should_see("Too many failed attempts")
+    refused = [r.getMessage() for r in caplog.records if r.name.endswith(".login")]
+    assert refused[-1].startswith("Login refused for 'reader' from ")
+    assert "backing off" in refused[-1]
+
+
 async def test_repeated_failures_back_off(user):
     await user.open("/login")
     for _ in range(login_throttle.FREE_FAILURES_USER + 1):
