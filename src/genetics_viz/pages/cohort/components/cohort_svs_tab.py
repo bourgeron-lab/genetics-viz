@@ -34,7 +34,7 @@ _CALL_EXPORT = [
     "FID", "sample", "locus", "size_mb", "call", "ratio", "zscore", "exonic_symbol",
     "Validation",
 ]  # fmt: skip
-_ANEUPLOIDY_EXPORT = ["FID", "sample", "events"]
+_ANEUPLOIDY_EXPORT = ["FID", "sample", "events", "validation"]
 _REGION_EXPORT = [
     "region", "direction", "size_mb", "n_families", "n_samples", "families",
     "exonic_symbol",
@@ -71,7 +71,11 @@ def _load(store: Any, cohort: Any, scorer: Any) -> Dict[str, Any]:
     )
     for r in rows:
         r["exonic_symbol_badges"] = build_gene_badges(r["_genes"], scorer)
-    return {"rows": rows, "file": path.name}
+    return {
+        "rows": rows,
+        "file": path.name,
+        "aneuploidy_validations": cohort_svs.aneuploidy_validations(store.data_dir),
+    }
 
 
 def _call_columns(cohort: Any) -> List[Dict[str, Any]]:
@@ -143,7 +147,12 @@ def render_cohort_svs_tab(
         regions = cohort_svs.recurrent_regions(calls)
         for g in regions:
             g["exonic_symbol_badges"] = build_gene_badges(g["_genes"], scorer)
-        return calls, cohort_svs.aneuploidy_rows(calls, min_fraction), regions
+        validations = (state["loaded"] or {}).get("aneuploidy_validations") or {}
+        return (
+            calls,
+            cohort_svs.aneuploidy_rows(calls, min_fraction, validations),
+            regions,
+        )
 
     async def load() -> None:
         try:
@@ -246,6 +255,7 @@ def render_cohort_svs_tab(
                         },
                         {"id": "sample", "header": "Sample", "sortable": True},
                         {"id": "events", "header": "Gains / losses"},
+                        {"id": "validation", "header": "Curator validation"},
                     ],
                     rows=aneuploidies,
                     row_key="_key",

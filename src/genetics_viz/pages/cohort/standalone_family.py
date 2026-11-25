@@ -501,6 +501,8 @@ async def standalone_family_page(family_id: str, request: Request) -> None:
                                 selected_members=selected_members,
                                 data_table_refreshers=data_table_refreshers,
                                 link=link,
+                                on_acks_changed=on_acks_changed,
+                                review_listeners=upd_listeners,
                             )
                         else:
                             with ui.column().classes(

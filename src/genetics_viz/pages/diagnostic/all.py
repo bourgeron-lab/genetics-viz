@@ -189,10 +189,10 @@ async def diagnostic_all_page() -> None:
                             row["ImpactBadges"] = [
                                 {"label": info["label"], "color": info["color"]}
                             ]
-                        elif row_type == "UPD":
-                            # UPD: which pipeline step pointed at it
+                        elif row_type in ("UPD", "Aneuploidy"):
+                            # UPD, aneuploidy: which pipeline step pointed at it
                             row["ImpactBadges"] = [
-                                {"label": impact_str, "color": TYPE_COLORS["UPD"]}
+                                {"label": impact_str, "color": TYPE_COLORS[row_type]}
                             ]
                         else:
                             # SNV: VEP consequence badges

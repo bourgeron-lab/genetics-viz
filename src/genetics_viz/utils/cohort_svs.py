@@ -8,7 +8,7 @@ permissive thresholds and the smallest size offered are collected. From those:
 
 - the calls of the individuals shown, filtered by strength and size;
 - whole-chromosome gains and losses, by the family report's rule
-  (``family_report.whole_chromosome_events``), so the two always agree;
+  (``aneuploidy.whole_chromosome_events``), so the two always agree;
 - regions where same-direction calls of two or more families overlap.
 
 Vedette has no cohort table yet, so it is not here.
@@ -204,13 +204,20 @@ def filter_calls(
     return out
 
 
-def aneuploidy_rows(rows: List[Dict[str, Any]], min_fraction: float) -> List[Dict]:
+def aneuploidy_rows(
+    rows: List[Dict[str, Any]],
+    min_fraction: float,
+    validations: Optional[Dict[Tuple[str, str, str], str]] = None,
+) -> List[Dict]:
     """Whole-chromosome gains and losses of the calls in ``rows``.
 
     The family report's rule, on the calls shown: same-direction calls summed
     per individual and chromosome against its assessable span.
+    ``validations`` is ``(FID, sample, chrom) -> standing validation``
+    (:func:`aneuploidy_validations`); each row's ``validation`` words it per
+    event.
     """
-    from .family_report import whole_chromosome_events
+    from .aneuploidy import chromosome_events, record_chrom
 
     if not rows:
         return []
@@ -224,10 +231,24 @@ def aneuploidy_rows(rows: List[Dict[str, Any]], min_fraction: float) -> List[Dic
         }
     )
     out = []
-    for key, events in whole_chromosome_events(frame, min_fraction).items():
+    validations = validations or {}
+    for key, events in chromosome_events(frame, min_fraction).items():
         fid, sample = key.split("\t", 1)
         out.append(
-            {"_key": key, "FID": fid, "sample": sample, "events": ", ".join(events)}
+            {
+                "_key": key,
+                "FID": fid,
+                "sample": sample,
+                "events": ", ".join(e.text for e in events),
+                "validation": "; ".join(
+                    f"{e.text.split(' ')[0]}: "
+                    + (
+                        validations.get((fid, sample, record_chrom(e.chrom)))
+                        or "not reviewed"
+                    )
+                    for e in events
+                ),
+            }
         )
     out.sort(key=lambda r: (r["FID"], r["sample"]))
     return out
@@ -289,3 +310,21 @@ def recurrent_regions(
         )
     )
     return regions
+
+
+def aneuploidy_validations(data_dir: Path) -> Dict[Tuple[str, str, str], str]:
+    """``(FID, sample, chrom) -> standing validation`` of every family."""
+    from .aneuploidy import chrom_of_key, read_aneuploidy_validations
+
+    out: Dict[Tuple[str, str, str], str] = {}
+    for row in read_aneuploidy_validations(data_dir):
+        if row.get("Ignore", "0") == "1":
+            continue
+        key = (
+            row.get("FID") or "",
+            row.get("Sample") or "",
+            chrom_of_key(row.get("Variant") or ""),
+        )
+        if all(key):
+            out[key] = row.get("Validation") or ""
+    return out

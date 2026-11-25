@@ -14,9 +14,14 @@ from genetics_viz.components.diagnostic_loader import (
     format_diagnostic_contributors,
     load_family_diagnostics,
 )
+from genetics_viz.utils.auth import can_write
 from genetics_viz.utils.cytobands import get_cytoband_range
 from genetics_viz.utils.diagnostic_files import TYPE_COLORS
-from genetics_viz.utils.diagnostic_labels import describe_str, describe_upd
+from genetics_viz.utils.diagnostic_labels import (
+    describe_aneuploidy,
+    describe_str,
+    describe_upd,
+)
 from genetics_viz.utils.gene_scoring import (
     GeneScorer,
     build_gene_badges,
@@ -112,6 +117,12 @@ def render_family_diagnostics(
             elif source == "upd":
                 text, tooltip = describe_upd(data_dir, family_id, entry)
                 _kind_tag("UPD").tooltip(tooltip)
+                ui.label(text).classes("text-xs font-medium").tooltip(tooltip)
+            elif source == "aneuploidy":
+                text, tooltip = describe_aneuploidy(
+                    data_dir, family_id, entry, show_detail=can_write()
+                )
+                _kind_tag("Aneuploidy").tooltip(tooltip)
                 ui.label(text).classes("text-xs font-medium").tooltip(tooltip)
             else:
                 shown = entry.get("_shown_variant") or variant
