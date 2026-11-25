@@ -21,10 +21,13 @@ disclaimer: >-
   use or for returning to the family must first be confirmed by an accredited
   laboratory (ISO 15189) on a new sample.
 
-# Diagnostics listed in the report, by curator verdict. "conflicting" is
-# computed when curators disagree and is listed so it is not lost.
+# Diagnostics listed in the report, by curator verdict (the ACMG/AMP tiers,
+# config/diagnostic_badges.yaml; likely and benign ones are left out).
+# "conflicting" is computed when curators disagree and is listed so it is
+# not lost.
 diagnostic_verdicts:
   pathogenic: { label: "Pathogenic", color: "#c62828" }
+  likely pathogenic: { label: "Likely pathogenic", color: "#e53935" }
   uncertain: { label: "Uncertain significance", color: "#ef6c00" }
   conflicting: { label: "Curators disagree", color: "#f9a825" }
 
@@ -43,6 +46,12 @@ diagnostic_details:
     either: "both parents carry it"
   # Under an SV whose bounds come from the curators' validation, not the call.
   curated_breakpoints: "Breakpoints curated on the reads"
+  # Footnote when a finding lists the ACMG criteria its curator applied.
+  criteria_note: >-
+    Under a classification: the ACMG/AMP criteria the curator applied
+    (Richards et al. 2015; a suffix gives a strength other than the
+    criterion's own) and their points (Tavtigian et al. 2020: pathogenic
+    from 10, likely pathogenic 6 to 9, uncertain 0 to 5).
   # A diagnostic saved before the details were recorded with it.
   missing: "Not recorded (saved before v0.28.0)."
   note: >-
@@ -112,7 +121,7 @@ none:
   sample_qc: "No sample quality issue was found."
   aneuploidy: "No whole-chromosome aneuploidy was detected."
   upd: "No uniparental disomy candidate was found."
-  diagnostics: "No pathogenic or uncertain finding has been recorded by the curators."
+  diagnostics: "No pathogenic, likely pathogenic or uncertain finding has been recorded by the curators."
 
 methods_source: "ghfc-ngs 9b821d8 (2026-11-10); genome QC fdd774f (2026-11-14)"
 

@@ -9,11 +9,24 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from nicegui import ui
 
+from genetics_viz.components.acmg_checklist import AcmgChecklist
 from genetics_viz.components.diagnostic_loader import (
     save_diagnostic_entry,
     update_diagnostic_ignore_status,
 )
+from genetics_viz.utils import acmg
+from genetics_viz.utils.diagnostic_badges import (
+    UNCERTAIN,
+    VERDICTS,
+    verdict_icon,
+    verdict_label,
+)
 from genetics_viz.utils.diagnostic_snapshot import SNAPSHOT_COLUMNS
+
+#: Kinds whose dialog offers the ACMG criteria checklist: sequence variants,
+#: and SVs for intragenic CNVs (the PVS1 tree). Whole-gene CNVs have their own
+#: points (Riggs 2020), not covered yet; STR, UPD and aneuploidy have none.
+ACMG_KINDS = ("snv", "sv")
 
 
 def show_diagnostic_dialog(
@@ -36,7 +49,8 @@ def show_diagnostic_dialog(
         gene: Gene symbol(s)
         impact: VEP consequence, SV call type (GAIN/LOSS) or STR status
         sample: Sample ID
-        variant_type: "snv", "sv" or "str"
+        variant_type: "snv", "sv", "str", "upd" or "aneuploidy"; "snv" and
+            "sv" get the ACMG criteria checklist
         diagnostic_file: Path to the diagnostics TSV file
         on_save_callback: Optional callback invoked after save or ignore toggle
         details: The variant's snapshot from the table row
@@ -99,13 +113,15 @@ def show_diagnostic_dialog(
 
                     diagnostic_select = (
                         ui.select(
-                            ["pathogenic", "uncertain", "benign"],
+                            {v: verdict_label(v) for v in VERDICTS},
                             label="Diagnostic",
+                            value=UNCERTAIN,
+                            on_change=lambda: override_note.refresh(),
                         )
                         .props("outlined dense")
-                        .classes("w-40")
+                        .classes("w-56")
+                        .mark("diagnostic-verdict")
                     )
-                    diagnostic_select.value = "uncertain"
 
                     comment_input = (
                         ui.input("Comment")
@@ -123,6 +139,33 @@ def show_diagnostic_dialog(
                         ui.label("Read-only access").classes(
                             "text-sm text-gray-400 italic"
                         )
+
+                checklist: Optional[AcmgChecklist] = None
+                if variant_type.lower() in ACMG_KINDS and can_write():
+
+                    def follow_criteria(computed: str) -> None:
+                        # The class the points give, until the curator picks
+                        # another: then it is an override, said below.
+                        if computed:
+                            diagnostic_select.value = computed
+                        override_note.refresh()
+
+                    checklist = AcmgChecklist(on_change=follow_criteria)
+                    checklist.render()
+
+                @ui.refreshable
+                def override_note() -> None:
+                    if checklist is None or not checklist.applied:
+                        return
+                    computed = checklist.computed
+                    if computed and computed != diagnostic_select.value:
+                        ui.label(
+                            f"The criteria give {verdict_label(computed).lower()}:"
+                            f" saving {verdict_label(diagnostic_select.value).lower()}"
+                            " records a curator override."
+                        ).classes("text-xs text-amber-800").mark("acmg-override")
+
+                override_note()
 
             # ---- History ----
             history_container = ui.column().classes("w-full")
@@ -161,7 +204,8 @@ def show_diagnostic_dialog(
                                 comment = entry.get("Comment", "")
                                 is_ignored = entry.get("Ignore", "0") == "1"
 
-                                color, icon = _diag_style(diag)
+                                icon, color = verdict_icon(diag)
+                                icon = icon or "help_outline"
 
                                 row_cls = "items-center gap-2 w-full px-2 py-1"
                                 if is_ignored:
@@ -169,7 +213,7 @@ def show_diagnostic_dialog(
 
                                 with ui.row().classes(row_cls):
                                     ui.icon(icon).classes(f"text-{color} text-lg")
-                                    ui.label(diag).classes(
+                                    ui.label(verdict_label(diag)).classes(
                                         f"font-semibold text-{color} text-sm"
                                     )
                                     ui.label(f"by {user}").classes(
@@ -179,6 +223,10 @@ def show_diagnostic_dialog(
                                         ui.label(f"— {comment}").classes(
                                             "text-gray-500 text-xs italic"
                                         )
+                                    if criteria := acmg.summary(entry, verdict_label):
+                                        ui.label(criteria).classes(
+                                            "text-xs text-gray-600 font-mono"
+                                        ).mark("diagnostic-history-criteria")
                                     ui.space()
                                     ui.label(_format_timestamp(ts)).classes(
                                         "text-gray-400 text-xs"
@@ -258,8 +306,12 @@ def show_diagnostic_dialog(
                         comment=comment,
                         diagnostic=diag_value,
                         details=details,
+                        criteria=checklist.applied if checklist else (),
                     )
-                    ui.notify(f"Diagnostic saved: {diag_value}", type="positive")
+                    ui.notify(
+                        f"Diagnostic saved: {verdict_label(diag_value)}",
+                        type="positive",
+                    )
                     dialog.close()
                     if on_save_callback:
                         on_save_callback(diag_value)
@@ -277,19 +329,6 @@ def _summary_field(label: str, value: str) -> None:
     with ui.column().classes("gap-0"):
         ui.label(label).classes("text-xs text-gray-500 uppercase")
         ui.label(value).classes("text-sm font-medium")
-
-
-def _diag_style(diagnostic: str) -> tuple[str, str]:
-    """Return (tailwind_color, material_icon) for a diagnostic value."""
-    if diagnostic == "pathogenic":
-        return "red", "error"
-    elif diagnostic == "benign":
-        return "green", "check_circle"
-    elif diagnostic == "uncertain":
-        return "orange", "help"
-    elif diagnostic == "conflicting":
-        return "amber", "warning"
-    return "grey", "help_outline"
 
 
 def _format_timestamp(ts: str) -> str:

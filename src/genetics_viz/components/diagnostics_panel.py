@@ -22,6 +22,11 @@ from genetics_viz.utils.diagnostic_labels import (
     describe_str,
     describe_upd,
 )
+from genetics_viz.utils.diagnostic_badges import (
+    verdict_icon,
+    verdict_label,
+    verdict_symbol,
+)
 from genetics_viz.utils.gene_scoring import (
     GeneScorer,
     build_gene_badges,
@@ -29,13 +34,6 @@ from genetics_viz.utils.gene_scoring import (
     get_gene_scorer,
     split_genes,
 )
-
-_DIAG_COLORS: Dict[str, str] = {
-    "pathogenic": "red",
-    "uncertain": "orange",
-    "benign": "green",
-    "conflicting": "amber",
-}
 
 
 def parse_sv_cytoband(variant: str) -> str:
@@ -102,9 +100,9 @@ def render_family_diagnostics(
             .mark(f"diagnostic-entry diagnostic-{source}")
         ):
             ui.badge(
-                diag.upper()[:3] if diag else "?",
-                color=_DIAG_COLORS.get(diag, "grey"),
-            ).classes("text-xs")
+                verdict_symbol(diag) or (diag.upper()[:3] if diag else "?"),
+                color=verdict_icon(diag)[1],
+            ).classes("text-xs").tooltip(verdict_label(diag))
 
             if source == "str":
                 # The gene first, then what was found: the key itself says little.

@@ -13,7 +13,11 @@ from genetics_viz.components.icons import get_diagnostic_icon
 from genetics_viz.components.tanstack_table import DataTable
 from genetics_viz.utils.auth import check_auth
 from genetics_viz.utils.data import get_data_store
-from genetics_viz.utils.diagnostic_badges import build_diagnostic_badge
+from genetics_viz.utils.diagnostic_badges import (
+    ALL_STATUSES,
+    CONFLICTING,
+    build_diagnostic_badge,
+)
 from genetics_viz.utils.diagnostic_files import (
     DIAGNOSTIC_TYPES,
     TYPE_COLORS,
@@ -122,7 +126,7 @@ async def diagnostic_all_page() -> None:
 
                     # Determine final diagnostic status
                     if len(unique_diags) > 1:
-                        final_diagnostic = "conflicting"
+                        final_diagnostic = CONFLICTING
                     else:
                         final_diagnostic = diag_values[0]
 
@@ -237,12 +241,7 @@ async def diagnostic_all_page() -> None:
             )
 
             # Filter state
-            all_diagnostic_statuses = [
-                "pathogenic",
-                "uncertain",
-                "benign",
-                "conflicting",
-            ]
+            all_diagnostic_statuses = list(ALL_STATUSES)
             filter_diagnostics: Dict[str, List[str]] = {
                 "value": list(all_diagnostic_statuses)
             }

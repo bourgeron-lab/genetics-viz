@@ -2,6 +2,7 @@
 
 from typing import Dict, Tuple
 
+from genetics_viz.utils.diagnostic_badges import ALL_STATUSES, verdict_icon
 from genetics_viz.utils.validation_status import STATUS_ICONS
 
 # Map validation status to (icon_name, color)
@@ -20,12 +21,9 @@ def get_validation_icon(status: str) -> Tuple[str, str]:
     return VALIDATION_STATUS_ICONS.get(status, ("", "grey"))
 
 
-# Map diagnostic status to (icon_name, color)
+# Map diagnostic status to (icon_name, color), from config/diagnostic_badges.yaml
 DIAGNOSTIC_STATUS_ICONS: Dict[str, Tuple[str, str]] = {
-    "pathogenic": ("dangerous", "red"),
-    "uncertain": ("help", "orange"),
-    "benign": ("check_circle", "green"),
-    "conflicting": ("bolt", "amber-9"),
+    status: verdict_icon(status) for status in ALL_STATUSES
 }
 
 

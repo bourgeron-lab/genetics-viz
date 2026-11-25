@@ -24,6 +24,12 @@ from genetics_viz.utils.data_availability import (
     check_family_availability,
     check_sample_availability,
 )
+from genetics_viz.utils.diagnostic_badges import (
+    LIKELY_PATHOGENIC,
+    PATHOGENIC,
+    UNCERTAIN,
+    verdict_rank,
+)
 from genetics_viz.utils.diagnostic_files import diagnostic_paths
 from genetics_viz.utils.family_status import StatusCounts, cohort_status_counts
 from genetics_viz.utils.pedigree import load_family_pedigree
@@ -37,10 +43,11 @@ from genetics_viz.utils.pedigree_labels import (
 )
 from genetics_viz.utils.sharding import get_family_path, get_sample_path
 
-# Diagnostic priority for "highest" resolution
 logger = logging.getLogger(__name__)
 
-_DIAG_PRIORITY = {"pathogenic": 3, "uncertain": 2, "benign": 1}
+#: Verdicts counted as "pathogenic" on the cohort card: P and LP, as the
+#: family statuses count them (config/family_status.yaml solving_verdicts).
+_CARD_PATHOGENIC = frozenset({PATHOGENIC, LIKELY_PATHOGENIC})
 
 # Cohort card geometry. Three separate things were eating the card's width:
 #
@@ -69,7 +76,8 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
     """Compute per-phenotype counts and diagnostic breakdown for a cohort.
 
     Returns dict with:
-        per_pheno: {pheno_key: {"n": int, "pathogenic": int, "uncertain": int}}
+        per_pheno: {pheno_key: {"n": int, "pathogenic": int, "uncertain": int}},
+        where "pathogenic" counts pathogenic and likely pathogenic samples
     """
     # Build sample_id -> normalized phenotype map
     sample_pheno: Dict[str, str] = {}
@@ -92,7 +100,7 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
                 if sample not in sample_pheno or not diag:
                     continue
                 current = sample_diag[sample]
-                if _DIAG_PRIORITY.get(diag, 0) > _DIAG_PRIORITY.get(current, 0):
+                if verdict_rank(diag) > verdict_rank(current):
                     sample_diag[sample] = diag
 
     # Bucket by phenotype
@@ -103,9 +111,9 @@ def _compute_cohort_stats(cohort: Cohort, data_dir: Path) -> Dict[str, Any]:
         bucket = per_pheno[pheno]
         bucket["n"] += 1
         diag = sample_diag.get(sample_id, "")
-        if diag == "pathogenic":
+        if diag in _CARD_PATHOGENIC:
             bucket["pathogenic"] += 1
-        elif diag == "uncertain":
+        elif diag == UNCERTAIN:
             bucket["uncertain"] += 1
 
     return {"per_pheno": per_pheno}
@@ -643,8 +651,12 @@ async def home_page() -> None:
                                         )
                                         ui.label("Pheno").classes(_hdr)
                                         ui.label("N").classes(_hdr + " text-right")
-                                        ui.label("Pat/Unc").classes(
+                                        ui.label("P·LP/VUS").classes(
                                             _hdr + " text-right"
+                                        ).tooltip(
+                                            "Individuals whose strongest diagnostic"
+                                            " is pathogenic or likely pathogenic /"
+                                            " of uncertain significance"
                                         )
                                         ui.label("%").classes(_hdr + " text-right")
                                         # Data rows

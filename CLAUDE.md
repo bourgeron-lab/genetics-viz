@@ -74,7 +74,8 @@ src/genetics_viz/
     denovo_evidence.py            # Variant dialog: the denovo step's evidence card for one candidate
     tab_badge.py                  # Counts on tabs: the family page's review badges (TabBadge), the cohort page's (TabPills)
     page_link.py                  # Shareable links: tab and filter state in the URL query (PageLink)
-    diagnostic_dialog.py          # Diagnostic review dialog
+    diagnostic_dialog.py          # Diagnostic review dialog: five tiers, ACMG checklist (SNV, SV), history
+    acmg_checklist.py             # The dialog's ACMG criteria toggles, strengths, live points and class
     diagnostics_panel.py          # Family Diagnostics panel (cohort + standalone family pages)
     upd_dialog.py                 # UPD review: evidence, chromosome view, validation, diagnostic (UPD, ROH, Sample QC tabs)
     aneuploidy_dialog.py          # Aneuploidy review: SVs tab card, dialog (evidence, validation, diagnostic), also from a KARYOTYPE flag
@@ -108,7 +109,8 @@ src/genetics_viz/
     vep_consequences.yaml         # VEP consequence terms, impacts, colors
     wisecondorx_thresholds.yaml   # WisecondorX call thresholds (robust, permissive; loss and gain)
     validation_badges.yaml        # Validation status and inheritance badge colours and labels
-    diagnostic_badges.yaml        # Diagnostic verdict badge colours and labels
+    diagnostic_badges.yaml        # Diagnostic verdicts (the ACMG five tiers + conflicting): label, symbol, colours, icon
+    acmg.yaml                     # ACMG criteria (Richards 2015), strengths and points, classes (Tavtigian 2020), ruleset
     view_presets.yaml             # Column visibility presets
   pages/
     login.py                      # Login page (no auth required)
@@ -234,7 +236,8 @@ src/genetics_viz/
     pedigree_labels.py            # Sex/phenotype code normalisation and labels
     pedigree.py                   # Per-family pedigree TSV parser (standalone family page)
     validation_badges.py          # Validation badge colours and labels (from YAML)
-    diagnostic_badges.py          # Diagnostic badge colours and labels (from YAML)
+    diagnostic_badges.py          # Diagnostic verdicts (VERDICTS, rank, label, symbol, colours) and badges (from YAML)
+    acmg.py                       # ACMG criteria: parse/format, points, class, override, the record's Criteria/Points/Ruleset
     sharding.py                   # Two-level sharded directory path resolution
     tsv.py                        # read_tsv_or_none (string_columns), clean_tsv_field, find_labels (step), inputs_step, append_tsv_row(s), rewrite_tsv_rows, set_ignore, collect_streaming
     wombat.py                     # aggregate_by_variant (Wombat tab, search); family result files, DENOVO_CONFIG
@@ -469,7 +472,7 @@ Curators send it to the referring clinician of each centre, who decides whether 
 - **Aneuploidy** is two sources: the QC karyotype for sex chromosomes; for autosomes, same-direction WisecondorX segments covering `aneuploidy_min_fraction` of a chromosome's assessable span (the q arm of an acrocentric one). The pipeline has no aneuploidy step. Both are read through `utils/aneuploidy.py` (see Aneuploidy), and the section adds each candidate's curator validation; a chromosome validated absent is not reported as found.
   - **Only calls past the permissive thresholds count** (`wisecondorx.past_permissive()`: log2 ratio *and* z-score). `whole_chromosome_events` sums whatever it is given, and a chromosome-long segment reaches |z| ≈ 5 with a log2 ratio of ±0.01: before v0.41.2, 88021200005 read +14 (C0XYE8K) and −21 (C0XYE8L) from two such segments. Filter before calling it.
 - **PGS percentile = Φ(z)**: the pipeline's z is already ancestry-matched (k-NN SD in PC space). The traits shown are `pgs_traits` in `report.yaml`.
-- **Diagnostics** keep `diagnostic_verdicts` (pathogenic, uncertain, conflicting) and add the standing validation and inheritance per sample.
+- **Diagnostics** keep `diagnostic_verdicts` (pathogenic, likely pathogenic, uncertain, conflicting) and add the standing validation and inheritance per sample. The criteria and points of the newest record go under the classification (`_verdict_note`, `acmg.summary`), with a footnote; a P or LP finding draws attention (`SOLVING_VERDICTS`).
 - **Diagnostic details are a snapshot, not a lookup** (`utils/diagnostic_snapshot.py`): the table row's HGVS, zygosity, segregation, carriers, ClinVar, gnomAD, MOI (worded, from the badge tooltip), SV gene overlap and copy number are written with the diagnostic (`SNAPSHOT_COLUMNS`, after the ten old columns), and the report never re-reads Wombat or SV tables. `Source` is always set on a snapshot, so an empty `Source` means a record saved before v0.28.0 ("Not recorded"). Each call site passes `details=` to `show_diagnostic_dialog`, built from the Python row (the row sent back by the table may lack hidden fields).
 - **The MANE HGVS is picked before Wombat rows are merged** (`wombat.PICKED_HGVS_COLUMNS`: `_hgvs_transcript`, `_hgvs_mane`, `_hgvsc`, `_hgvsp`): after `aggregate_by_variant` each column joins its values on its own, and which `VEP_HGVSc` belongs to the MANE transcript is lost. Columns starting with `_` are kept out of the Wombat and Search column lists.
 - **Methods text and tool versions are in `report.yaml`, hand-copied from ghfc-ngs** (`methods_source` names the commit). The run's own version and commit come from the run record. Update both when the pipeline changes a tool.
@@ -483,7 +486,7 @@ Where each family stands in its review (vault note: Roadmap, "Structured family 
 - **The status never changes by itself.** `family_state` works out *reasons* to look again, shown as an amber "Reopened" (a pedigree edit) or "Check" badge with the text in the tooltip:
   - `pedigree_waiting` / `pedigree_ready`: the family's last pedigree edit (`edit_statuses`, against the cohort's last run) is after the status. Phenotype edits count: they rerun nothing in ghfc-ngs but change who is affected;
   - `diagnostic_after`: a standing diagnostic's `Timestamp` is after the status;
-  - `solved_without_diagnostic` / `diagnostic_not_solved`: a `solving_verdicts` diagnostic stands or not, against the status, whatever the dates (an Ignore toggle keeps its timestamp, so it is caught here). No reason for `in_review` or `not_analysable`;
+  - `solved_without_diagnostic` / `diagnostic_not_solved`: a `solving_verdicts` diagnostic (pathogenic or likely pathogenic) stands or not, against the status, whatever the dates (an Ignore toggle keeps its timestamp, so it is caught here). No reason for `in_review` or `not_analysable`;
   - `qc_after`: an unacknowledged high flag in QC tables (Sample QC, genome QC) written after the status (file mtime: flags carry no date);
   - `results_after`: a `*.inputs.tsv` of the family written after the status (`step_outputs`, which walks the family directory). **Family pages only**: across a cohort that is one walk per family over SMB.
 
@@ -769,6 +772,8 @@ A dummy is an individual who was never sequenced and exists only to link real me
 
 - **Validation statuses are defined once**, in `utils/validation_status.py`: `UNVALIDATED` (`"TODO"`, a row nobody validated), `FILTER_STATUSES` (menu order), their icons and chart colours, `consensus()` (several curators' validations → one status and inheritance) and `status_selected` / `filter_by_status` (an empty selection filters nothing; `in phase MNV` counts as `present`). Never spell `"TODO"` or the status list in a page.
 - **Wombat rows are badged and filtered through `utils/variant_rows.py`** (Wombat tab, Search, per-file validation page), with `create_consequence_filter_menu` for the Impacts menu. An empty consequence selection filters nothing, like the validation filter.
+- **Diagnostic verdicts are defined once**, in `config/diagnostic_badges.yaml` read by `utils/diagnostic_badges.py`: the ACMG/AMP five tiers strongest first (`VERDICTS`: `pathogenic`, `likely pathogenic`, `uncertain`, `likely benign`, `benign`), then `CONFLICTING` (computed, never saved; `ALL_STATUSES`). Use `verdict_rank` / `strongest` where one verdict stands for several records, and `verdict_label`, `verdict_symbol` (`P` `LP` `VUS` `LB` `B` `!`), `verdict_icon`, `verdict_color` for display. Never spell a verdict list in a page. Files before v0.46 hold only P, VUS and B, which read unchanged. `save_diagnostic_entry` refuses a value outside `VERDICTS`.
+- **ACMG criteria are optional on a diagnostic** (`utils/acmg.py`, `config/acmg.yaml`, the dialog's `components/acmg_checklist.py`, SNV and SV only; marks `acmg-criteria`, `acmg-<code>`, `acmg-<code>-strength`, `acmg-points`, `acmg-clear`, `acmg-override`, `diagnostic-verdict`). The diagnostic files end with `Criteria Points Ruleset` (`ACMG_COLUMNS`): `PVS1;PS2;PM2_Supporting` (a suffix is a strength other than the criterion's own; `:computed` marks one from the pipeline, none the curator), the Tavtigian 2020 sum, and `RULESET`. The checklist sets the class from the points; the curator may record another, and `acmg.override(record)` tells it from the record (no column). BA1 is stand-alone. `record_evidence` reads an unknown criterion as no criteria, never an error. Whole-gene CNVs (Riggs 2020) and the pywombat-computed criteria are later phases (vault: `ACMG variant classification - synthesis`).
 - **Validation kinds are listed once**, in `utils/validation_files.py`. The All validations and Statistics pages loop over it, so a new kind is one entry there plus its writer.
 - **Diagnostic kinds are listed once**, in `utils/diagnostic_files.py`. The following loop over it: the Diagnostic All and Statistics pages, the cohort and home summaries, and `load_family_diagnostics`. The per-kind table callers (wombat, svs, search, validation/file) name their own file. `save_diagnostic_entry` and `update_diagnostic_ignore_status` check `can_write()` themselves.
 - Utility code shared across pages lives in `utils/`, not duplicated in page components.

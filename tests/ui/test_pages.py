@@ -439,7 +439,7 @@ async def test_curator_saves_an_str_diagnostic(user, monkeypatch, data_dir):
         "1001", "chr4:3074876-3074933:HTT", "HTT", "pathogenic", "S3"
     ]  # fmt: skip
     assert fields[9] == "uncertain"
-    assert fields[10:] == [""] * 14  # an STR has no snapshot
+    assert fields[10:] == [""] * 17  # an STR has no snapshot, no criteria
     # The section refreshes in place; the family table waits for the close.
     await user.should_see("uncertain", retries=30)
     assert len(tables) == built
@@ -451,7 +451,7 @@ async def test_curator_saves_an_str_diagnostic(user, monkeypatch, data_dir):
             break
         await asyncio.sleep(0.05)
     htt = next(r for r in tables[-1]["rows"] if r["locus"] == "HTT")
-    assert htt["m2_badges"][-1]["label"] == "Dx ?"
+    assert htt["m2_badges"][-1]["label"] == "Dx VUS"
 
 
 async def test_reader_cannot_save_an_str_diagnostic(user, monkeypatch):

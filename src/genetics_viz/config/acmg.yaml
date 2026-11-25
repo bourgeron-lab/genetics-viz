@@ -1,0 +1,63 @@
+# ACMG/AMP criteria for the diagnostic dialog's checklist (utils/acmg.py).
+#
+# Criteria are Richards et al. 2015; each is applied at a strength, and the
+# strengths add up as points (Tavtigian et al. 2020): the class is computed
+# from the sum. A criterion applied at another strength than its own is
+# written with the strength as a suffix, as ClinGen does: PM2_Supporting,
+# PVS1_Strong, BP4_Moderate. The literature review is the vault note
+# "ACMG variant classification - synthesis".
+#
+# The ruleset is written with every diagnostic that records criteria, so a
+# change of rules (SVC v4) changes this file, not the records.
+ruleset: "richards2015+tavtigian2020"
+
+# Points per strength; benign criteria count negative.
+strengths:
+  Supporting: 1
+  Moderate: 2
+  Strong: 4
+  VeryStrong: 8
+
+# Class from the points (Tavtigian 2020): the first `min` the sum reaches.
+classes:
+  - { verdict: "pathogenic", min: 10 }
+  - { verdict: "likely pathogenic", min: 6 }
+  - { verdict: "uncertain", min: 0 }
+  - { verdict: "likely benign", min: -6 }
+  - { verdict: "benign", min: -1000 }
+
+# BA1 is stand-alone: the variant is benign whatever else applies.
+stand_alone: ["BA1"]
+
+# code: [direction, strength, text]. The strength is the criterion's own
+# (Richards 2015), except where `default` says what the dialog proposes
+# when it is ticked.
+criteria:
+  PVS1: { direction: pathogenic, strength: VeryStrong, text: "Null variant (nonsense, frameshift, canonical splice, start loss, exon deletion) in a gene where loss of function is a known mechanism of disease" }
+  PS1: { direction: pathogenic, strength: Strong, text: "Same amino-acid change as an established pathogenic variant" }
+  PS2: { direction: pathogenic, strength: Strong, text: "De novo, both parents confirmed, in a patient with the disease and no family history" }
+  PS3: { direction: pathogenic, strength: Strong, text: "Well-established functional studies show a damaging effect" }
+  PS4: { direction: pathogenic, strength: Strong, text: "Prevalence in affected individuals significantly increased over controls" }
+  PM1: { direction: pathogenic, strength: Moderate, text: "In a mutational hot spot or a well-established functional domain without benign variation" }
+  PM2: { direction: pathogenic, strength: Moderate, default: Supporting, text: "Absent from controls, or at extremely low frequency if recessive (gnomAD). ClinGen SVI (2020): Supporting by default" }
+  PM3: { direction: pathogenic, strength: Moderate, text: "For recessive disorders, detected in trans with a pathogenic variant" }
+  PM4: { direction: pathogenic, strength: Moderate, text: "Protein length change: in-frame indel in a non-repeat region, or stop loss" }
+  PM5: { direction: pathogenic, strength: Moderate, text: "Novel missense change at a residue where a different pathogenic missense change has been seen" }
+  PM6: { direction: pathogenic, strength: Moderate, text: "Assumed de novo, without confirmation of paternity and maternity" }
+  PP1: { direction: pathogenic, strength: Supporting, text: "Cosegregation with disease in several affected family members, in a gene known to cause it" }
+  PP2: { direction: pathogenic, strength: Supporting, text: "Missense variant in a gene with a low rate of benign missense variation, where missense variants are a common mechanism of disease" }
+  PP3: { direction: pathogenic, strength: Supporting, text: "Computational evidence supports a deleterious effect (one predictor, at calibrated thresholds)" }
+  PP4: { direction: pathogenic, strength: Supporting, text: "Phenotype or family history highly specific for a disease with a single genetic cause" }
+  PP5: { direction: pathogenic, strength: Supporting, text: "A reputable source reports it pathogenic, without the evidence. ClinGen SVI (2018) advises against it" }
+  BA1: { direction: benign, strength: StandAlone, text: "Allele frequency above 5% in a gnomAD population (stand-alone)" }
+  BS1: { direction: benign, strength: Strong, text: "Allele frequency greater than expected for the disorder" }
+  BS2: { direction: benign, strength: Strong, text: "Observed in a healthy adult where full penetrance is expected at an early age" }
+  BS3: { direction: benign, strength: Strong, text: "Well-established functional studies show no damaging effect" }
+  BS4: { direction: benign, strength: Strong, text: "Lack of segregation in affected members of a family" }
+  BP1: { direction: benign, strength: Supporting, text: "Missense variant in a gene where only truncating variants cause disease" }
+  BP2: { direction: benign, strength: Supporting, text: "In trans with a pathogenic variant for a fully penetrant dominant disorder, or in cis with a pathogenic variant" }
+  BP3: { direction: benign, strength: Supporting, text: "In-frame indel in a repetitive region without known function" }
+  BP4: { direction: benign, strength: Supporting, text: "Computational evidence suggests no impact (one predictor, at calibrated thresholds)" }
+  BP5: { direction: benign, strength: Supporting, text: "Found in a case with another molecular basis for the disease" }
+  BP6: { direction: benign, strength: Supporting, text: "A reputable source reports it benign, without the evidence. ClinGen SVI (2018) advises against it" }
+  BP7: { direction: benign, strength: Supporting, text: "Synonymous (silent) variant with no predicted splice impact, at a position not highly conserved" }

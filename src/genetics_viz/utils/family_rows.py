@@ -17,6 +17,7 @@ import polars as pl
 from . import denovo
 from . import family_status as fs
 from .ancestry import ID_COLUMNS, NULL_VALUES, find_cohort_ancestry_files
+from .diagnostic_badges import VERDICTS, verdict_color, verdict_label, verdict_symbol
 from .pedigree_edit import EditStatus
 from .pedigree_labels import normalize_pheno
 from .report_summaries import FamilySummary, read_family_summaries
@@ -253,9 +254,8 @@ STRUCTURES = ("Singleton", "Duo", "Trio", "Quartet", "Extended", "No parents")
 #: The filter options of a column with no value for a family.
 NOT_ASSESSED = "Not assessed"
 NO_DIAGNOSTIC = "None"
-#: Diagnostic verdicts, strongest first, and their colours (the individuals').
-DIAG_ORDER = ("pathogenic", "uncertain", "benign")
-DIAG_COLORS = {"pathogenic": "#dc2626", "uncertain": "#f59e0b", "benign": "#16a34a"}
+#: Diagnostic verdicts, strongest first (config/diagnostic_badges.yaml).
+DIAG_ORDER = VERDICTS
 #: De novo QC verdicts, worst first.
 DN_ORDER = ("high", "low", "no_callable", "ok")
 
@@ -408,12 +408,12 @@ def family_row(
         row["Diagnostics"] = ""
         row["Diagnostics_badges"] = [
             {
-                "label": f"{strongest.capitalize()} · {n_diag}"
+                "label": f"{verdict_symbol(strongest) or strongest} · {n_diag}"
                 if n_diag > 1
-                else strongest.capitalize(),
-                "color": DIAG_COLORS.get(strongest, "#9e9e9e"),
+                else verdict_symbol(strongest) or strongest,
+                "color": verdict_color(strongest),
                 "tooltip": f"{_plural(n_diag, 'diagnostic', 'diagnostics')};"
-                f" the strongest verdict is {strongest}",
+                f" the strongest verdict is {verdict_label(strongest).lower()}",
             }
         ]
         row["_diag_rank"] = len(DIAG_ORDER) - (

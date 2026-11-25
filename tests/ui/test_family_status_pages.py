@@ -82,7 +82,7 @@ async def test_a_pedigree_edit_after_the_status_reopens_the_family(
     # A phenotype edit reruns nothing: ready to review again.
     await user.should_see("ready to be reviewed again")
     # Solved with no pathogenic diagnostic standing.
-    await user.should_see("no pathogenic diagnostic stands")
+    await user.should_see("no pathogenic or likely pathogenic")
 
 
 async def test_the_families_tab_status_column_and_filter(user, data_dir, monkeypatch):

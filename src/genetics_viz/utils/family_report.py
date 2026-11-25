@@ -60,13 +60,20 @@ from .ancestry import (
 from .ancestry_plots import zoom_window
 from .cohort_state import read_cohort_state
 from .cytobands import get_cytoband_range
+from . import acmg
+from .diagnostic_badges import CONFLICTING, verdict_label
 from .diagnostic_labels import describe_aneuploidy, describe_str, describe_upd
 from .diagnostic_snapshot import has_snapshot
 from .export import person
 from .pedigree_labels import PHENO_COLORS, normalize_pheno, normalize_sex
 from .pedigree_svg import PedigreePerson, pedigree_svg
 from .pipeline_params import load_params
-from .family_status import StatusRecord, family_statuses, status_label
+from .family_status import (
+    SOLVING_VERDICTS,
+    StatusRecord,
+    family_statuses,
+    status_label,
+)
 from .report_summaries import FamilySummary, latest_family_summary
 from .report_svg import Marker, ordinal, pca_svg, percentile, pgs_distribution_svg
 from .sample_qc_acks import ack_summary, load_acks, split_acknowledged
@@ -1217,7 +1224,12 @@ def _diagnostics(
             {
                 "verdict": verdicts[verdict].get("label", verdict),
                 "_verdict_color": verdicts[verdict].get("color", "#757575"),
+                # The ACMG criteria of the newest record, and an override.
+                "_verdict_note": acmg.summary(e, verdict_label)
+                if verdict != CONFLICTING
+                else "",
                 "_rank": list(verdicts).index(verdict),
+                "_verdict": verdict,
                 "kind": kind,
                 "finding": finding,
                 # Under the finding: HGVS, then the consequences. An SV's
@@ -1256,12 +1268,15 @@ def _diagnostics(
             ("comment", "Curator comment"),
         ],
         rows=rows,
-        footnotes=(
-            [str((CONFIG.get("diagnostic_details") or {}).get("note", ""))]
-            if any(r["details"] for r in rows)
-            else []
-        ),
-        attention=any(r["_rank"] == 0 for r in rows),
+        footnotes=[
+            str((CONFIG.get("diagnostic_details") or {}).get(key, ""))
+            for key, shown in (
+                ("note", any(r["details"] for r in rows)),
+                ("criteria_note", any(r["_verdict_note"] for r in rows)),
+            )
+            if shown
+        ],
+        attention=any(r["_verdict"] in SOLVING_VERDICTS for r in rows),
         glance=" · ".join(
             f"{n} {label.lower()}"
             for label in dict.fromkeys(r["verdict"] for r in rows)

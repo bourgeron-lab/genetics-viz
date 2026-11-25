@@ -42,7 +42,7 @@ def test_row_reads_the_cohort_tables(data_dir):
     assert row["Affected"] == "1 / 3" and row["_affected"] == 1
     # S3's verdict in the DEMO tables is low.
     assert row["DenovoQC_badges"][0]["label"] == fr.denovo.qc_info("low")["label"]
-    assert row["Diagnostics_badges"][0]["label"] == "Pathogenic · 2"
+    assert row["Diagnostics_badges"][0]["label"] == "P · 2"
     # SHANK3 is strict and not validated; PLAIN is flagged, so not strict.
     labels = [b["label"] for b in row["Review_badges"]]
     assert labels == ["De novo 1", "UPD 2", "STR 1"] and row["_review_n"] == 4
