@@ -61,8 +61,18 @@ _USER_AGENT = "genetics-viz"
 _PREV_COLUMN = "hgnc_prev_symbol"
 _ALIAS_COLUMN = "hgnc_alias_symbol"
 _NAME_COLUMN = "hgnc_name"
-#: Per-gene values shown in the badge tooltip, when the table has them.
-_INFO_COLUMNS = {"loeuf": "LOEUF", "shet_mean": "s-het", "eagle_score": "EAGLE"}
+#: Per-gene values shown in the badge tooltip, when the table has them: the
+#: autism odds ratio is Rolland et al. 2023's (PMID 37365347, a hidden GeneTrek
+#: field still in the download), the brain TPM GTEx v11's highest median over
+#: the brain regions. Dosage sensitivity (pHaplo, pTriplo) is a pair of GeneTrek
+#: sets, listed through the profile (`default_sets` in genetrek.yaml).
+_INFO_COLUMNS = {
+    "loeuf": "LOEUF",
+    "shet_mean": "s-het",
+    "eagle_score": "EAGLE",
+    "37365347_autism_or": "Autism OR",
+    "gtex_v11_brain_max_tpm": "Brain TPM",
+}
 #: GeneTrek's category for mode-of-inheritance fields.
 INHERITANCE_CATEGORY = "Inheritance"
 

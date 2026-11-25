@@ -6,19 +6,23 @@ A web-based visualization tool for genetics cohort data, providing interactive a
 
 ### Core Features
 
-- 📊 **Multi-Cohort Management** - Browse and analyze multiple cohorts from a single data directory
-- 👨‍👩‍👧‍👦 **Family Structure Visualization** - View pedigree information and family relationships
-- 🧬 **Variant Analysis** - Interactive TanStack-powered tables for DNM (de novo mutations) and WOMBAT analysis
+- 📊 **Multi-Cohort Management** - Browse and analyze multiple cohorts from a single data directory, with a Families tab, an Individuals tab and a cohort view per analysis
+- 👨‍👩‍👧‍👦 **Family Structure Visualization** - Pedigree table or drawn tree (pypedigree), dummy members, and a pedigree editor for curators
+- 🧬 **SNVs and Indels** - Interactive TanStack tables of the Wombat results, with the ghfc-ngs de novo step's flags, evidence and per-child QC
+- 🧱 **Structural Variants** - WisecondorX and Vedette calls, copy number against a control panel, read evidence and suggested breakpoints
+- 🔁 **STRs and UPD** - ExpansionHunter genotypes with REViewer images, and uniparental disomy candidates from the upd step, ROH and Sample QC
+- 🧪 **Sample and Genome QC** - somalier relatedness, sex and contamination checks, DNA source and library (cell lines, read length, PCR), with curator acknowledgements
+- 🌍 **Ancestry, ROH and Polygenic Scores** - PCA against a versioned reference panel, runs of homozygosity against reference groups, ancestry-matched PGS z-scores
 - 🔍 **Cohort-Wide Search** - Search variants across all samples with filters on locus, genesets, impact, individuals (sex, phenotype, parental status), and validation status
 - 🧭 **Gene and Variant Pages** - "Have we seen this before?": every SNV, SV, STR genotype, ROH segment, validation and diagnostic of a gene or a variant, across all cohorts and data directories
-- 📈 **Variant Statistics** - Interactive charts (chromosome distribution, consequence/validation pie charts) and ideogram visualization with cytoband rendering
-- ✅ **Variant Validation** - Track and validate genetic variants with inheritance patterns
+- 🏷️ **GeneTrek Gene Badges** - Genes coloured by the user's geneset tiers, with constraint, expression and modes of inheritance in the tooltip
+- ✅ **Curation** - Validations and diagnostics for SNVs, SVs, STRs and UPDs, family statuses and conclusions, and a printable family report for the referring clinician
 - 🔬 **IGV Integration** - Built-in IGV.js browser for sequence visualization (CRAM files)
 - 🌊 **WAVES Validation** - Specialized validation workflow for bedGraph/coverage analysis
+- ⚙️ **Workflow** - The ghfc-ngs run status, parameters and reference, and run requests from curators
 - 🔐 **Authentication & Authorization** - YAML-configured user accounts with role-based access (student, reader, curator, administrator) and data directories granted per user
 - 📂 **Multi-Data-Directory** - Switch between multiple data directories per user session via YAML config
 - 🛠️ **Admin Pages** - Manage users and data directories from the web interface
-- 🎨 **Modern UI** - Clean, responsive interface built with NiceGUI
 
 ### Validation Features
 
@@ -200,9 +204,9 @@ Once started, open your browser to `http://localhost:8080` (or the specified por
 
 The interface provides:
 
-- **Home Page** - List of available cohorts
-- **Cohort View** - Family list and overview
-- **Family View** - DNM, WOMBAT, and SV analysis tabs with TanStack tables
+- **Home Page** - Cohort cards with counts, QC and review status
+- **Cohort View** - Families and Individuals tabs, then a tab per check, variant type and background analysis, and the Workflow panel
+- **Family View** - Sample QC, SNVs/Indels, SVs, STR, UPD, Ancestry, ROH and Polygenic Scores tabs, the family status, diagnostics and report
 - **Search Page** - Cohort-wide variant search with tabbed filters (Variants and Individuals)
 - **Gene and Variant Pages** - Type a gene symbol or a variant (`chr22:50674000:G:A`) in the header box: `/gene/<symbol>` and `/variant/<variant>` gather it from every cohort of every data directory
 - **Variant Statistics** - Charts and ideogram views for search results
@@ -214,40 +218,49 @@ The interface provides:
 
 ## Data Directory Structure
 
-The tool expects the following directory structure:
+The tool reads the layout the [ghfc-ngs](https://github.com/bourgeron-lab/ghfc-ngs) workflow
+writes. Every part but the cohort pedigree is optional: a tab without its files is disabled.
 
 ```
 data_directory/
 ├── cohorts/
-│   ├── cohort1/
-│   │   ├── cohort1.pedigree.tsv
-│   │   ├── cohort1.params.yml (optional: ghfc-ngs workflow parameters)
-│   │   ├── .ghfc-ngs.state.json (optional: written by the workflow, run record)
-│   │   ├── wombat/
-│   │   │   └── cohort1.rare.*.*.results.tsv (cohort-wide search files)
-│   │   └── families/
-│   │       ├── FAM001/
-│   │       │   ├── FAM001.wombat.*.tsv (WOMBAT analysis files)
-│   │       │   └── FAM001.dnm.*.tsv (DNM analysis files)
-│   │       └── FAM002/
-│   │           └── ...
-│   └── cohort2/
-│       └── ...
-├── params/
-│   └── genesets/
-│       └── *.tsv (gene set files for search filtering)
-├── samples/
-│   ├── SAMPLE001/
-│   │   └── sequences/
-│   │       ├── SAMPLE001.GRCh38_GIABv3.cram
-│   │       ├── SAMPLE001.GRCh38_GIABv3.cram.crai
-│   │       └── SAMPLE001.GRCh38.bedGraph.gz (for WAVES)
-│   └── SAMPLE002/
-│       └── ...
-└── validations/
-    ├── snvs.tsv (variant validations)
-    └── waves.tsv (WAVES validations)
+│   └── COHORT/
+│       ├── COHORT.pedigree.tsv          (required)
+│       ├── COHORT.params.yml            (ghfc-ngs parameters: Workflow panel)
+│       ├── .ghfc-ngs.state.json         (ghfc-ngs run record)
+│       ├── .ghfc-ngs.requests/          (run requests, when enabled)
+│       ├── wombat/   COHORT.rare.<vep>[.annotated].<config>.results.tsv
+│       ├── denovo/   COHORT.<label>.{dnm,qc,inputs}.tsv
+│       ├── qc/       COHORT.<label>.{samples,pairs,flags,inputs}.tsv (sampleqc, genomeqc)
+│       ├── ancestry/ COHORT.apgs_b<bundle>_<filters>.{pcs,ancestry,pgs_zscore,Q}.tsv
+│       ├── roh/      COHORT.apgs_b<bundle>_<filters>.{froh,roh,roh_genes,kinship,roh_windows}.tsv
+│       ├── str/expansionhunter/  COHORT.<catalog>.{genotypes,loci,flags}.tsv
+│       ├── upd/      COHORT.<label>.{events,segments,members,inputs}.tsv
+│       ├── svs/wisecondorx/      COHORT_aberrations[.annotated].bed
+│       ├── coverage/ COHORT.<tag>.panel_v<version>.fit.tsv
+│       └── cnv_panel/v<version>/ (a controls cohort's copy-number panel)
+├── families/<shards>/FID/               (same subdirectories, per family, plus:)
+│   ├── FID.pedigree.tsv
+│   ├── wombat/   FID.rare.<vep>[.annotated].<config>.tsv
+│   ├── svs/vedette/      FID.vedette.{tsv,parquet,qc.tsv,json}
+│   ├── svs/wisecondorx/  FID_aberrations.annotated.bed
+│   └── pedigree_edits/   (pedigree edits made in the app)
+├── samples/<shards>/ID/
+│   ├── sequences/  ID.GRCh38_GIABv3.cram(.crai), ID.by1000.bedgraph.gz(.tbi) (WAVES)
+│   ├── coverage/   ID.cov_b<bin>q<mapq>.{bw,json}
+│   ├── str/expansionhunter/  ID.<catalog>.{vcf,json}, reviewer/
+│   ├── qc/genomeqc/          ID.<label>.{tsv,stats.txt}
+│   └── svs/vedette/          ID.filtered.vcf.gz
+├── params/genesets/*.tsv     (local gene sets for the geneset filters)
+├── validations/              (snvs, svs, strs, upds, vedette, waves, sampleqc, pedigree edits)
+├── diagnostics/              (snvs, svs, strs, upds)
+├── notes/notes.tsv
+└── reports/                  (family conclusions and statuses)
 ```
+
+`samples/` and `families/` may be sharded two levels deep (`samples/1/S/S1/`): the last and
+second-to-last characters of the ID, with `-`, `.` and `_` removed. This is detected per data
+directory.
 
 ### Required Files
 
@@ -258,9 +271,9 @@ place.
 
 #### Optional Workflow Files
 
-`cohort1.params.yml` is the parameter file the [ghfc-ngs](https://github.com/bourgeron-lab/ghfc-ngs)
-workflow was launched with. When it is present, the cohort page gains two tabs: **Parameters**,
-which shows the file verbatim, and **Status**, which shows per-step pipeline progress. The home
+`COHORT.params.yml` is the parameter file the [ghfc-ngs](https://github.com/bourgeron-lab/ghfc-ngs)
+workflow was launched with. When it is present, the cohort page gains a **Workflow** button:
+the run status per step, the parameters verbatim and the workflow's parameter reference. The home
 page card gains a foldable **Status** item with the same per-step breakdown.
 
 `.ghfc-ngs.state.json` is the workflow's own run record (see `COHORT_STATE.md` in the ghfc-ngs
@@ -309,13 +322,13 @@ Missing/unknown values for parent IDs are `0`, `-9`, or empty. These values are 
 
 #### BedGraph Files (for WAVES validation)
 
-- Format: `SAMPLE_ID.GRCh38.bedGraph.gz`
+- Format: `SAMPLE_ID.by1000.bedgraph.gz`, with its tabix index (`.tbi`)
 - Location: `samples/SAMPLE_ID/sequences/`
 
 #### Analysis Files
 
-- **DNM files**: `FAMILY_ID.dnm.*.tsv` (must contain `chr:pos:ref:alt` column)
-- **WOMBAT files**: `FAMILY_ID.wombat.*.tsv` (must contain `#CHROM`, `POS`, `REF`, `ALT` columns)
+- **Wombat files**: `families/.../FAMILY_ID/wombat/FAMILY_ID.rare.<vep>[.annotated].<config>.tsv` (must contain `#CHROM`, `POS`, `REF`, `ALT` columns). De novo calls are a Wombat config (`de_novo_mutations` by default), checked by the ghfc-ngs `denovo` step when its tables exist
+- **Locations**: `families/` and `samples/` may be sharded; see the tree above
 
 ## GHFC Lab Usage
 
@@ -401,7 +414,7 @@ Then access via: `http://YOUR_MACHINE_IP:8080`
 
 ### SNV Validation
 
-1. Navigate to a variant table (DNM or WOMBAT tabs, or Validation pages)
+1. Navigate to a variant table (the family SNVs/Indels tab, Search, or the Validation pages)
 2. Click "View in IGV" button for a variant
 3. In the dialog:
    - Review variant details with collapsible sections

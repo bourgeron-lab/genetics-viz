@@ -5,6 +5,19 @@ All notable changes to genetics-viz will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Gene tooltips show two more GeneTrek values**: the autism odds ratio of Rolland et al. 2023 (`Autism OR`) and the gene's highest median expression over the GTEx v11 brain regions (`Brain TPM`), beside LOEUF, s-het and EAGLE. **Triplosensitive** joins Haploinsufficient in the default profile's "Also in" sets; a saved profile keeps its own choice.
+
+### Changed
+- **pypedigree 0.10** (was 0.5.2). Its fixes for pypedigree#40 and #41 are in; the drawings keep their own label spacing, which leaves more room than pypedigree's half an em on long dummy IDs.
+- README: the features, the pages and the data directory layout follow what the app reads today.
+
+### Removed
+- **`/validation/wave/<sample>`** (#59). Nothing linked to it since the Waves page opens each sample in a dialog.
+- The unused per-family DNM tab (`dnm_tab.py`, no caller since the De novo sub-tab) and an empty `components/tables.py`.
+
 ## [0.45.0] - 2026-11-24
 
 ### Added

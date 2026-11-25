@@ -662,6 +662,9 @@ GENETREK_FIELDS: List[Dict] = [
     {"name": "ensg", "category": "Gene identity", "value_type": "string", "id_type": "ensg"},
     {"name": "loeuf", "category": "Constraint", "value_type": "float"},
     {"name": "eagle_score", "category": "Gene lists", "value_type": "categorical"},
+    {"name": "37365347_autism_or", "category": "Publications", "visibility": "hidden",
+     "value_type": "float"},
+    {"name": "gtex_v11_brain_max_tpm", "category": "Expression", "value_type": "float"},
     {"name": "hc_ndd_v7", "fullname": "High-confidence NDD v7", "category": "Gene lists",
      "subcategory": "GeneTrek", "visibility": "primary", "value_type": "boolean",
      "aliases": ["hc_ndd"], "n_genes": 3, "description": "High-confidence NDD genes"},
@@ -710,8 +713,15 @@ def genetrek_frame():
         "syngo", "inheritance", "inheritance_panelapp_t",
     ]  # fmt: skip
     df = pl.DataFrame([list(g) for g in GENETREK_GENES], schema=names, orient="row")
+    shank3 = pl.col("hgnc_symbol") == "SHANK3"
     return df.with_columns(
         pl.col("loeuf").cast(pl.Float32),
+        # Values only GeneTrek's table holds, for SHANK3 alone.
+        pl.when(shank3).then(pl.lit(24.4)).otherwise(None).alias("37365347_autism_or"),
+        pl.when(shank3)
+        .then(pl.lit(61.27))
+        .otherwise(None)
+        .alias("gtex_v11_brain_max_tpm"),
         pl.col("eagle_score", "inheritance", "inheritance_panelapp_t").cast(
             pl.Categorical
         ),

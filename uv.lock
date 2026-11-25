@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 
 [[package]]
@@ -554,7 +554,7 @@ requires-dist = [
     { name = "plotly", specifier = ">=5.0.0" },
     { name = "polars", specifier = ">=1.17,<3" },
     { name = "pybigtools", specifier = ">=0.3.0" },
-    { name = "pypedigree", specifier = ">=0.5.2,<0.9" },
+    { name = "pypedigree", specifier = ">=0.10.0,<0.11" },
     { name = "pysam", specifier = ">=0.24.1" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "typer", specifier = ">=0.12.0" },
@@ -1652,16 +1652,16 @@ wheels = [
 
 [[package]]
 name = "pypedigree"
-version = "0.8.1"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "matplotlib" },
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e5/fc/3037567da2d54bc884ceb0bbd88c78bc3641525ba931d536452828d428fc/pypedigree-0.8.1.tar.gz", hash = "sha256:5d179de8d756aa9ff11492e604a824642e7de82c292608b511ab10ff41086155", size = 1203750, upload-time = "2026-11-19T20:07:15.144Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/2e/b6782734570e1c203d2fbf214cabc449c2362917f5e48a235e7633c84b57/pypedigree-0.10.0.tar.gz", hash = "sha256:b5b4d6e3a95738ead1a221be28086ed168f915f943dfc3268c64fb48518c3b79", size = 1443880, upload-time = "2026-11-23T11:37:12.677Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/f6/5e8ecd94f9c9fd466f2b2edd7d10c6d359aebd13596736dbfaebd1791389/pypedigree-0.8.1-py3-none-any.whl", hash = "sha256:41e05ecc4da59b90c415bb89697dd27ab9bcdd4af268b35c0db7d4766a60d1ea", size = 154889, upload-time = "2026-11-19T20:07:13.656Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/5a/59c5d3c9ea4d9682f1254af7957c3a10baa35a87a392dfad11b064c7d522/pypedigree-0.10.0-py3-none-any.whl", hash = "sha256:2b2ead41e5ee0540030eff888a8bf10d6d46bf3079d1131df59d15e0df6a6e26", size = 194066, upload-time = "2026-11-23T11:37:10.583Z" },
 ]
 
 [[package]]
